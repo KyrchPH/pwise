@@ -2,15 +2,23 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
-// Load the shared root .env regardless of the workspace CWD.
+// Load the shared root .env before any config module reads process.env.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '../.env') });
 
 const { createApp } = await import('./src/app.js');
+const { env, validateEnv } = await import('./src/config/env.js');
+const { pingDb } = await import('./src/config/db.js');
 
-const PORT = process.env.PORT || 5000;
+validateEnv();
 const app = createApp();
 
-app.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`);
+app.listen(env.port, async () => {
+  console.log(`[server] listening on http://localhost:${env.port}`);
+  try {
+    await pingDb();
+    console.log('[server] MySQL connection OK');
+  } catch (err) {
+    console.warn(`[server] MySQL not reachable: ${err.message}`);
+  }
 });

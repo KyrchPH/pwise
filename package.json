@@ -2,7 +2,7 @@
   "name": "auto-post-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Automated social-media post scheduler. Monorepo: client (Vite + React), server (Express + PostgreSQL + S3), scripts (automation/cron worker).",
+  "description": "Automated social-media post scheduler. Monorepo: client (Vite + React), server (Express + MySQL + S3), scripts (automation/cron worker).",
   "workspaces": [
     "client",
     "server",
@@ -15,7 +15,11 @@
     "build": "npm run build -w client",
     "start": "npm run start -w server",
     "start:scripts": "npm run start -w scripts",
-    "scheduler": "npm run start -w scripts"
+    "scheduler": "npm run start -w scripts",
+    "db:migrate": "npm run db:migrate -w scripts",
+    "db:reset": "npm run db:reset -w scripts",
+    "db:seed": "npm run db:seed -w scripts",
+    "db:setup": "npm run db:setup -w scripts"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
