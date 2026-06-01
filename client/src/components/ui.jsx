@@ -97,7 +97,7 @@ export function Logo({ height = 40, className = '' }) {
   }
   return (
     <img
-      src="/logo.png"
+      src="/logo.jpg"
       alt="Wise Cleaner Shop"
       className={`logo-img ${className}`}
       style={{ height }}
