@@ -1,31 +1,34 @@
-import { useEffect, useState } from 'react';
-import api from './services/api.js';
-
-const PAGES = ['Login', 'Dashboard', 'PostPool', 'UploadPost', 'Settings', 'Logs'];
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from './components/ProtectedRoute.jsx';
+import AppLayout from './components/AppLayout.jsx';
+import LoginPage from './pages/Login/LoginPage.jsx';
+import DashboardPage from './pages/Dashboard/DashboardPage.jsx';
+import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
+import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
+import SettingsPage from './pages/Settings/SettingsPage.jsx';
+import LogsPage from './pages/Logs/LogsPage.jsx';
 
 export default function App() {
-  const [health, setHealth] = useState('checking…');
-
-  useEffect(() => {
-    api
-      .get('/health') // -> /api/health, proxied to the Express server in dev
-      .then((res) => setHealth(res.data?.status ?? 'ok'))
-      .catch(() => setHealth('server offline'));
-  }, []);
-
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 640, margin: '4rem auto', padding: '0 1rem' }}>
-      <h1>Auto Post Agent</h1>
-      <p>Monorepo scaffold is up. Server health: <strong>{health}</strong></p>
-      <h2>Planned pages</h2>
-      <ul>
-        {PAGES.map((p) => (
-          <li key={p}>{p}</li>
-        ))}
-      </ul>
-      <p style={{ color: '#666', fontSize: '0.9rem' }}>
-        This placeholder is replaced by real pages in the frontend phase.
-      </p>
-    </main>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+
+      <Route
+        element={
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/post-pool" element={<PostPoolPage />} />
+        <Route path="/upload" element={<UploadPostPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/logs" element={<LogsPage />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
   );
 }

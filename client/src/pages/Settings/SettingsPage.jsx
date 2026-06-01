@@ -1,0 +1,163 @@
+import { useEffect, useState } from 'react';
+import * as settingsService from '../../services/settings.service.js';
+import { apiError } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
+import { Card, Button, Field, Toggle, Spinner } from '../../components/ui.jsx';
+
+const TIMEZONES = [
+  'Asia/Manila',
+  'UTC',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Asia/Kolkata',
+  'Europe/London',
+  'Europe/Berlin',
+  'America/New_York',
+  'America/Los_Angeles',
+  'Australia/Sydney',
+];
+
+const hhmm = (t) => (t ? String(t).slice(0, 5) : '');
+
+export default function SettingsPage() {
+  const toast = useToast();
+  const [form, setForm] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    settingsService
+      .get()
+      .then((s) =>
+        setForm({
+          is_enabled: !!s.is_enabled,
+          posting_interval_minutes: s.posting_interval_minutes,
+          allowed_start_time: hhmm(s.allowed_start_time),
+          allowed_end_time: hhmm(s.allowed_end_time),
+          timezone: s.timezone,
+          low_pool_alert_threshold: s.low_pool_alert_threshold,
+          owner_email: s.owner_email || '',
+        }),
+      )
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await settingsService.update({
+        is_enabled: form.is_enabled,
+        posting_interval_minutes: Number(form.posting_interval_minutes) || 0,
+        allowed_start_time: form.allowed_start_time,
+        allowed_end_time: form.allowed_end_time,
+        timezone: form.timezone,
+        low_pool_alert_threshold: Number(form.low_pool_alert_threshold) || 0,
+        owner_email: form.owner_email,
+      });
+      toast.success('Settings saved');
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <Spinner label="Loading settings…" />;
+  if (!form) return null;
+
+  const tzOptions = TIMEZONES.includes(form.timezone) ? TIMEZONES : [form.timezone, ...TIMEZONES];
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1 className="page-head__title">Settings</h1>
+          <div className="page-head__sub">Control when and how the agent posts.</div>
+        </div>
+      </div>
+
+      <form onSubmit={save} style={{ maxWidth: 640 }}>
+        <Card className="card--pad" style={{ marginBottom: 16 }}>
+          <div className="row row--between">
+            <div>
+              <div style={{ fontWeight: 600 }}>Auto-posting</div>
+              <div className="text-sm text-muted">Master switch for the automation agent.</div>
+            </div>
+            <Toggle checked={form.is_enabled} onChange={(v) => set('is_enabled', v)} />
+          </div>
+        </Card>
+
+        <Card className="card--pad" style={{ marginBottom: 16 }}>
+          <div className="grid-2">
+            <Field label="Posting interval (minutes)" hint="e.g. 360 = every 6 hours">
+              <input
+                className="input"
+                type="number"
+                min="1"
+                value={form.posting_interval_minutes}
+                onChange={(e) => set('posting_interval_minutes', e.target.value)}
+              />
+            </Field>
+            <Field label="Timezone">
+              <select className="select" value={form.timezone} onChange={(e) => set('timezone', e.target.value)}>
+                {tzOptions.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Allowed start time">
+              <input
+                className="input"
+                type="time"
+                value={form.allowed_start_time}
+                onChange={(e) => set('allowed_start_time', e.target.value)}
+              />
+            </Field>
+            <Field label="Allowed end time">
+              <input
+                className="input"
+                type="time"
+                value={form.allowed_end_time}
+                onChange={(e) => set('allowed_end_time', e.target.value)}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        <Card className="card--pad" style={{ marginBottom: 16 }}>
+          <div className="grid-2">
+            <Field label="Low-pool alert threshold" hint="Email when ready posts ≤ this">
+              <input
+                className="input"
+                type="number"
+                min="0"
+                value={form.low_pool_alert_threshold}
+                onChange={(e) => set('low_pool_alert_threshold', e.target.value)}
+              />
+            </Field>
+            <Field label="Owner email" hint="Where low-pool alerts are sent">
+              <input
+                className="input"
+                type="email"
+                value={form.owner_email}
+                onChange={(e) => set('owner_email', e.target.value)}
+                placeholder="owner@example.com"
+              />
+            </Field>
+          </div>
+        </Card>
+
+        <Button type="submit" size="lg" disabled={saving}>
+          {saving ? 'Saving…' : 'Save settings'}
+        </Button>
+      </form>
+    </>
+  );
+}
