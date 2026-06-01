@@ -27,9 +27,8 @@ export default function AppLayout() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand__mark">p</span>
-          <span className="brand__name">pwise</span>
+        <div className="sidebar__logo">
+          <Logo height={54} />
         </div>
         <nav className="nav">
           {NAV.map((n) => (
