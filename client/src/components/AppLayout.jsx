@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Button } from './ui.jsx';
+import { Button, Logo } from './ui.jsx';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '▦' },

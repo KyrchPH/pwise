@@ -351,6 +351,73 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .text-center { text-align: center; }
 .error-text { color: var(--red-700); font-size: 0.84rem; margin-top: 8px; }
 
+/* --- File dropzone --- */
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; min-height: 172px; padding: 26px;
+  border: 2px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: var(--surface-2); color: var(--muted);
+  cursor: pointer; text-align: center; outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--blue); background: #eaf5fe; }
+.dropzone:focus-visible { box-shadow: var(--ring); }
+.dropzone__icon { color: var(--blue); display: grid; place-items: center; margin-bottom: 4px; }
+.dropzone__label { font-family: var(--font-display); font-weight: 700; font-size: 1rem; color: var(--text); word-break: break-word; }
+.dropzone__hint { font-size: 0.8rem; color: var(--muted); }
+
+/* --- Full-window drag overlay --- */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 200; pointer-events: none;
+  display: grid; place-items: center; padding: 28px;
+  background: rgba(31, 155, 230, 0.9);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  animation: fade 0.12s ease;
+}
+.drop-overlay__box {
+  width: 100%; max-width: 720px; min-height: 320px;
+  border: 3px dashed rgba(255, 255, 255, 0.9); border-radius: var(--r-lg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  color: #fff; text-align: center; padding: 40px;
+}
+.drop-overlay__icon { color: #fff; }
+.drop-overlay__text { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; }
+
+/* --- Scheduled indicator on post cards --- */
+.post-card__sched {
+  display: inline-flex; align-items: center; gap: 6px;
+  align-self: flex-start; font-size: 0.78rem; font-weight: 600;
+  color: var(--blue-700); background: rgba(31, 155, 230, 0.1);
+  border: 1px solid rgba(31, 155, 230, 0.25); border-radius: 999px; padding: 3px 10px;
+}
+
+/* --- Calendar --- */
+.calendar__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.calendar__title { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem; }
+.calendar__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.calendar__dow { margin-bottom: 6px; }
+.calendar__dowcell { text-align: center; font-size: 0.72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.calendar__cell {
+  position: relative; min-height: 56px; aspect-ratio: 1 / 1;
+  border: 1.5px solid var(--border); border-radius: 10px; padding: 6px;
+  display: flex; flex-direction: column; justify-content: space-between; background: var(--surface);
+}
+.calendar__cell--blank { border: none; background: transparent; }
+.calendar__day { font-size: 0.8rem; font-weight: 600; color: var(--text); }
+.calendar__cell.is-past { opacity: 0.5; }
+.calendar__cell.is-today { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+.calendar__cell.is-open { background: #fff7e6; border-color: rgba(245, 166, 35, 0.55); border-style: dashed; }
+.calendar__count {
+  align-self: flex-end; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  background: linear-gradient(180deg, #45b0f2, var(--blue)); color: #fff;
+  font-size: 0.74rem; font-weight: 700; display: grid; place-items: center;
+}
+.calendar__open { align-self: flex-end; color: var(--yellow-700); font-weight: 800; font-size: 1.1rem; line-height: 1; }
+.calendar__legend { display: flex; gap: 18px; margin-top: 14px; font-size: 0.78rem; color: var(--muted); }
+.calendar__legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.dot--count { background: var(--blue); }
+.dot--open { background: var(--yellow); }
+
 /* --- Responsive --- */
 @media (max-width: 820px) {
   .app-shell { flex-direction: column; }

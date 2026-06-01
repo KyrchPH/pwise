@@ -1,12 +1,17 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as upload from '../../services/upload.service.js';
 import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Card, Button, Field } from '../../components/ui.jsx';
+import { Card, Button, Field, Modal } from '../../components/ui.jsx';
+import MediaDropzone from '../../components/MediaDropzone.jsx';
 
-const PLATFORMS = ['facebook', 'instagram', 'twitter', 'linkedin', 'tiktok'];
+const todayStr = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
 
 export default function UploadPostPage() {
   const toast = useToast();
@@ -14,24 +19,41 @@ export default function UploadPostPage() {
 
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [form, setForm] = useState({ caption: '', target_platform: 'facebook', priority: 0, status: 'draft' });
+  const [caption, setCaption] = useState('');
+  const [schedule, setSchedule] = useState({ date: '', time: '' });
   const [busy, setBusy] = useState(false);
+  const [errorDialog, setErrorDialog] = useState(null);
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const setSched = (key) => (e) => setSchedule((s) => ({ ...s, [key]: e.target.value }));
 
-  const onFile = (e) => {
-    const f = e.target.files?.[0] || null;
-    if (preview) URL.revokeObjectURL(preview);
-    setFile(f);
-    setPreview(f ? URL.createObjectURL(f) : null);
-  };
+  const handleFile = useCallback(
+    (f) => {
+      if (!f) return;
+      if (!/^(image|video)\//.test(f.type)) {
+        toast.error('Please choose an image or video file');
+        return;
+      }
+      setPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(f);
+      });
+      setFile(f);
+    },
+    [toast],
+  );
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!file && !form.caption.trim()) {
+    if (!file && !caption.trim()) {
       toast.error('Add a caption or a media file');
       return;
     }
+    if ((schedule.date && !schedule.time) || (!schedule.date && schedule.time)) {
+      toast.error('Pick both a date and a time to schedule (or leave both blank)');
+      return;
+    }
+    const scheduled_at = schedule.date && schedule.time ? new Date(`${schedule.date}T${schedule.time}`).toISOString() : null;
+
     setBusy(true);
     try {
       let media_url = null;
@@ -47,19 +69,19 @@ export default function UploadPostPage() {
       }
 
       await postPool.create({
-        caption: form.caption,
-        target_platform: form.target_platform,
-        priority: Number(form.priority) || 0,
-        status: form.status,
+        caption,
+        target_platform: 'facebook', // single platform for now
+        status: 'ready',
         media_url,
         s3_key,
         media_type,
+        scheduled_at,
       });
 
       toast.success('Post added to the pool');
       navigate('/post-pool');
     } catch (err) {
-      toast.error(apiError(err));
+      setErrorDialog(apiError(err)); // e.g. "A post is already scheduled for that date and time"
     } finally {
       setBusy(false);
     }
@@ -79,37 +101,32 @@ export default function UploadPostPage() {
       <div className="grid-2">
         <Card className="card--pad">
           <form onSubmit={submit}>
-            <Field label="Media (image or video)" hint="Optional — text-only posts are allowed">
-              <input className="input" type="file" accept="image/*,video/*" onChange={onFile} />
-            </Field>
+            <div className="field">
+              <span className="field__label">Media (image or video)</span>
+              <MediaDropzone file={file} onFile={handleFile} />
+              <span className="field__hint">Optional — text-only posts are allowed</span>
+            </div>
+
             <Field label="Caption">
               <textarea
                 className="textarea"
-                value={form.caption}
-                onChange={set('caption')}
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
                 placeholder="Write your caption…"
               />
             </Field>
-            <div className="grid-2">
-              <Field label="Target platform">
-                <select className="select" value={form.target_platform} onChange={set('target_platform')}>
-                  {PLATFORMS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Priority" hint="Higher posts first">
-                <input className="input" type="number" value={form.priority} onChange={set('priority')} />
-              </Field>
+
+            <div className="field">
+              <span className="field__label">Schedule (optional)</span>
+              <div className="grid-2">
+                <input className="input" type="date" min={todayStr()} value={schedule.date} onChange={setSched('date')} />
+                <input className="input" type="time" step="1800" value={schedule.time} onChange={setSched('time')} />
+              </div>
+              <span className="field__hint">
+                Posts at this exact date/time (one post per slot). Times snap to :00 / :30. Leave blank to use the interval.
+              </span>
             </div>
-            <Field label="Status">
-              <select className="select" value={form.status} onChange={set('status')}>
-                <option value="draft">Draft — not ready to post</option>
-                <option value="ready">Ready — eligible for auto-posting</option>
-              </select>
-            </Field>
+
             <Button type="submit" size="lg" className="btn--block" disabled={busy}>
               {busy ? 'Uploading…' : 'Add to pool'}
             </Button>
@@ -134,6 +151,15 @@ export default function UploadPostPage() {
           </p>
         </Card>
       </div>
+
+      <Modal
+        open={!!errorDialog}
+        title="Couldn't add post"
+        onClose={() => setErrorDialog(null)}
+        footer={<Button onClick={() => setErrorDialog(null)}>OK</Button>}
+      >
+        {errorDialog}
+      </Modal>
     </>
   );
 }

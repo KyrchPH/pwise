@@ -37,9 +37,9 @@ JOIN (
          'https://demo-bucket.s3.amazonaws.com/demo/post2.jpg',
          'demo/post2.jpg', 'facebook', 'ready', 5
   UNION ALL
-  SELECT 'A draft still being written', 'video',
+  SELECT 'Third ready post 🎬', 'video',
          'https://demo-bucket.s3.amazonaws.com/demo/post3.mp4',
-         'demo/post3.mp4', 'facebook', 'draft', 0
+         'demo/post3.mp4', 'facebook', 'ready', 0
 ) x
 WHERE u.email = 'demo@example.com'
   AND NOT EXISTS (

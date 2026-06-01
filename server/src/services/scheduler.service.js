@@ -4,17 +4,22 @@ import { isWithinWindow, minutesSince } from '../utils/date.util.js';
 import { createDownloadUrl } from './s3.service.js';
 import * as logsService from './logs.service.js';
 
-// Which enabled users are currently DUE: in their posting window, interval
-// elapsed since their last post, and they have at least one ready post.
-// Window math is done in Node (Intl) to avoid depending on MySQL tz tables.
-async function dueUserIds() {
+async function enabledUserIds() {
+  const rows = await query('SELECT user_id FROM posting_settings WHERE is_enabled = 1');
+  return rows.map((r) => Number(r.user_id));
+}
+
+// Users due by INTERVAL: enabled, inside the allowed window, interval elapsed
+// since the last post, and holding at least one UNSCHEDULED ready post.
+// Window math is done in Node (Intl) to avoid relying on DB timezone tables.
+async function intervalDueUserIds() {
   const rows = await query(
     `SELECT ps.user_id, ps.posting_interval_minutes, ps.allowed_start_time,
             ps.allowed_end_time, ps.timezone,
             (SELECT MAX(p.posted_at) FROM post_pool p
                WHERE p.user_id = ps.user_id AND p.status = 'posted') AS last_posted_at,
             (SELECT COUNT(*) FROM post_pool p
-               WHERE p.user_id = ps.user_id AND p.status = 'ready') AS ready_count
+               WHERE p.user_id = ps.user_id AND p.status = 'ready' AND p.scheduled_at IS NULL) AS ready_count
      FROM posting_settings ps
      WHERE ps.is_enabled = 1`,
   );
@@ -29,32 +34,20 @@ async function dueUserIds() {
   return due;
 }
 
-// Atomically claim the next post to publish: pick the highest-priority ready
-// post for a due user, mark it 'posting', and return it with a presigned media
-// URL. FOR UPDATE SKIP LOCKED guarantees two concurrent runs can't grab the same row.
-export async function claimNext({ userId = null } = {}) {
-  const due = await dueUserIds();
-  let candidates = due;
-  if (userId != null) {
-    candidates = due.includes(Number(userId)) ? [Number(userId)] : [];
-  }
-  if (!candidates.length) return { claimed: false, reason: 'no due users with ready posts' };
-
+// Atomically claim the single post matching `whereSql`/`orderBy`, mark it
+// 'posting', and return it with a presigned media URL. SKIP LOCKED guarantees
+// two concurrent runs can't grab the same row.
+async function claimAndLock(whereSql, params, orderBy) {
   const conn = await getConnection();
   try {
     await conn.beginTransaction();
-    const placeholders = candidates.map(() => '?').join(', ');
     const [rows] = await conn.query(
-      `SELECT * FROM post_pool
-         WHERE status = 'ready' AND user_id IN (${placeholders})
-         ORDER BY priority DESC, created_at ASC
-         LIMIT 1
-         FOR UPDATE SKIP LOCKED`,
-      candidates,
+      `SELECT * FROM post_pool WHERE ${whereSql} ORDER BY ${orderBy} LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      params,
     );
     if (!rows.length) {
       await conn.commit();
-      return { claimed: false, reason: 'no ready posts available' };
+      return null;
     }
     const post = rows[0];
     await conn.query("UPDATE post_pool SET status = 'posting' WHERE id = ?", [post.id]);
@@ -65,7 +58,7 @@ export async function claimNext({ userId = null } = {}) {
       try {
         mediaDownloadUrl = await createDownloadUrl(post.s3_key);
       } catch {
-        // S3 not configured / object missing — leave null, n8n can decide.
+        /* S3 not configured / object missing */
       }
     }
     return { claimed: true, post: { ...post, status: 'posting', media_download_url: mediaDownloadUrl } };
@@ -75,6 +68,43 @@ export async function claimNext({ userId = null } = {}) {
   } finally {
     conn.release();
   }
+}
+
+/**
+ * Claim the next post to publish.
+ *   Phase 1 — a DUE scheduled post (scheduled_at <= now), which overrides the
+ *             allowed-window and interval (the user picked an exact time).
+ *   Phase 2 — fallback: an UNSCHEDULED ready post, gated by the posting interval
+ *             and allowed window (the original behavior).
+ */
+export async function claimNext({ userId = null } = {}) {
+  const enabled = await enabledUserIds();
+
+  // Phase 1: due scheduled posts, earliest scheduled time first.
+  let schedUsers = enabled;
+  if (userId != null) schedUsers = enabled.includes(Number(userId)) ? [Number(userId)] : [];
+  if (schedUsers.length) {
+    const claimed = await claimAndLock(
+      "status = 'ready' AND scheduled_at IS NOT NULL AND scheduled_at <= UTC_TIMESTAMP() AND user_id IN (?)",
+      [schedUsers],
+      'scheduled_at ASC, priority DESC, created_at ASC',
+    );
+    if (claimed) return { ...claimed, via: 'scheduled' };
+  }
+
+  // Phase 2: interval fallback (unscheduled posts only).
+  const due = await intervalDueUserIds();
+  let intervalUsers = due;
+  if (userId != null) intervalUsers = due.includes(Number(userId)) ? [Number(userId)] : [];
+  if (!intervalUsers.length) {
+    return { claimed: false, reason: 'nothing due (no scheduled post ready, no interval match)' };
+  }
+  const claimed = await claimAndLock(
+    "status = 'ready' AND scheduled_at IS NULL AND user_id IN (?)",
+    [intervalUsers],
+    'priority DESC, created_at ASC',
+  );
+  return claimed ? { ...claimed, via: 'interval' } : { claimed: false, reason: 'no ready posts available' };
 }
 
 export async function markPosted(postId, { platformPostId = null, responseMessage = null, targetPlatform = null } = {}) {
@@ -115,7 +145,6 @@ export async function markFailed(postId, { errorMessage = null } = {}) {
 }
 
 // Per-user ready counts + whether a low-pool alert should fire (24h cooldown).
-// n8n calls this and sends the email; markAlertSent records the cooldown stamp.
 export async function poolStatus() {
   const rows = await query(
     `SELECT ps.user_id, ps.owner_email, ps.low_pool_alert_threshold, ps.last_alert_sent_at,

@@ -3,8 +3,8 @@ import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/post_pool.service.js';
 
 export const list = asyncHandler(async (req, res) => {
-  const { status, limit, offset } = req.query;
-  const posts = await service.list(req.user.id, { status, limit, offset });
+  const { status, scheduled, limit, offset } = req.query;
+  const posts = await service.list(req.user.id, { status, scheduled, limit, offset });
   sendSuccess(res, { posts });
 });
 

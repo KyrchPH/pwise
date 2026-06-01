@@ -83,6 +83,29 @@ export function Modal({ open, title, onClose, children, footer }) {
   );
 }
 
+// App logo (client/public/logo.png). Falls back to the text wordmark if the
+// file isn't present yet.
+export function Logo({ height = 40, className = '' }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <span className="brand">
+        <span className="brand__mark">p</span>
+        <span className="brand__name">pwise</span>
+      </span>
+    );
+  }
+  return (
+    <img
+      src="/logo.png"
+      alt="Wise Cleaner Shop"
+      className={`logo-img ${className}`}
+      style={{ height }}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 // Renders the media image; falls back to a type icon if it can't load
 // (private S3 objects aren't directly viewable without a presigned URL).
 export function MediaThumb({ mediaUrl, mediaType }) {

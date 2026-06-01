@@ -5,9 +5,26 @@ import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb } from '../../components/ui.jsx';
 
-const FILTERS = ['all', 'draft', 'ready', 'posting', 'posted', 'failed', 'archived'];
-const STATUS_OPTIONS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived'];
-const PLATFORMS = ['facebook', 'instagram', 'twitter', 'linkedin', 'tiktok'];
+const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived'];
+
+const pad = (n) => String(n).padStart(2, '0');
+
+// Split a stored UTC ISO into local date/time inputs.
+function schedToParts(iso) {
+  if (!iso) return { _schedDate: '', _schedTime: '' };
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { _schedDate: '', _schedTime: '' };
+  return {
+    _schedDate: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    _schedTime: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}
+
+function fmtSched(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
 export default function PostPoolPage() {
   const toast = useToast();
@@ -15,6 +32,7 @@ export default function PostPoolPage() {
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
+  const [editError, setEditError] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -37,31 +55,31 @@ export default function PostPoolPage() {
     load(filter);
   }, [filter, load]);
 
-  const quickStatus = async (post, status) => {
-    try {
-      await postPool.update(post.id, { status });
-      toast.success(`Marked as ${status}`);
-      load(filter);
-    } catch (e) {
-      toast.error(apiError(e));
-    }
+  const openEdit = (post) => {
+    setEditError(null);
+    setEditing({ ...post, ...schedToParts(post.scheduled_at) });
   };
 
   const saveEdit = async (e) => {
     e.preventDefault();
+    setEditError(null);
+    if ((editing._schedDate && !editing._schedTime) || (!editing._schedDate && editing._schedTime)) {
+      setEditError('Pick both a date and a time to schedule (or clear both).');
+      return;
+    }
+    const scheduled_at =
+      editing._schedDate && editing._schedTime
+        ? new Date(`${editing._schedDate}T${editing._schedTime}`).toISOString()
+        : null;
+
     setSaving(true);
     try {
-      await postPool.update(editing.id, {
-        caption: editing.caption,
-        status: editing.status,
-        priority: Number(editing.priority) || 0,
-        target_platform: editing.target_platform,
-      });
+      await postPool.update(editing.id, { caption: editing.caption, scheduled_at });
       toast.success('Post updated');
       setEditing(null);
       load(filter);
     } catch (err) {
-      toast.error(apiError(err));
+      setEditError(apiError(err)); // e.g. duplicate-slot conflict
     } finally {
       setSaving(false);
     }
@@ -125,23 +143,15 @@ export default function PostPoolPage() {
               <div className="post-card__body">
                 <div className="row row--between">
                   <StatusBadge status={post.status} />
-                  <span className="text-sm text-muted">P{post.priority}</span>
+                  <span className="text-sm text-muted">#{post.id}</span>
                 </div>
                 <div className="post-card__caption">{post.caption || <em className="text-muted">No caption</em>}</div>
-                <div className="post-card__meta">
-                  <span>{post.target_platform || 'no platform'}</span>
-                  <span>#{post.id}</span>
-                </div>
+                {post.scheduled_at && <div className="post-card__sched">📅 {fmtSched(post.scheduled_at)}</div>}
               </div>
               <div className="post-card__actions">
-                <Button variant="subtle" size="sm" onClick={() => setEditing({ ...post })}>
+                <Button variant="subtle" size="sm" onClick={() => openEdit(post)}>
                   Edit
                 </Button>
-                {post.status === 'draft' && (
-                  <Button variant="ghost" size="sm" onClick={() => quickStatus(post, 'ready')}>
-                    Mark ready
-                  </Button>
-                )}
                 <div className="toolbar__spacer" />
                 <Button variant="danger" size="sm" onClick={() => setDeleting(post)}>
                   Delete
@@ -173,35 +183,21 @@ export default function PostPoolPage() {
             <Field label="Caption">
               <textarea className="textarea" value={editing.caption || ''} onChange={editField('caption')} />
             </Field>
-            <div className="grid-2">
-              <Field label="Status">
-                <select className="select" value={editing.status} onChange={editField('status')}>
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Priority">
+            <div className="field">
+              <span className="field__label">Schedule (optional)</span>
+              <div className="grid-2">
+                <input className="input" type="date" value={editing._schedDate || ''} onChange={editField('_schedDate')} />
                 <input
                   className="input"
-                  type="number"
-                  value={editing.priority ?? 0}
-                  onChange={editField('priority')}
+                  type="time"
+                  step="1800"
+                  value={editing._schedTime || ''}
+                  onChange={editField('_schedTime')}
                 />
-              </Field>
+              </div>
+              <span className="field__hint">Clear both to fall back to the interval. One post per slot.</span>
             </div>
-            <Field label="Target platform">
-              <select className="select" value={editing.target_platform || ''} onChange={editField('target_platform')}>
-                <option value="">— none —</option>
-                {PLATFORMS.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {editError && <div className="error-text">{editError}</div>}
           </form>
         )}
       </Modal>

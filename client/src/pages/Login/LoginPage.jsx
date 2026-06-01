@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { apiError } from '../../services/api.js';
-import { Card, Button, Field } from '../../components/ui.jsx';
+import { Card, Button, Field, Logo } from '../../components/ui.jsx';
 
 export default function LoginPage() {
   const { login, register, isAuthenticated } = useAuth();
@@ -43,10 +43,7 @@ export default function LoginPage() {
     <div className="auth">
       <Card className="auth__card card--pad">
         <div className="auth__head">
-          <div className="brand">
-            <span className="brand__mark">p</span>
-            <span className="brand__name">pwise</span>
-          </div>
+          <Logo height={120} className="auth__logo" />
           <div className="auth__sub">Automated social-media post scheduler</div>
         </div>
 

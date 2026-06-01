@@ -5,6 +5,7 @@ import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Spinner, Button, StatusBadge } from '../../components/ui.jsx';
+import CalendarMonth from '../../components/CalendarMonth.jsx';
 
 const STAT_DEFS = [
   { key: 'total', label: 'Total posts', color: 'var(--primary)' },
@@ -27,13 +28,15 @@ export default function DashboardPage() {
   const toast = useToast();
   const [counts, setCounts] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [scheduled, setScheduled] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([postPool.counts(), settingsService.get()])
-      .then(([c, s]) => {
+    Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })])
+      .then(([c, s, sched]) => {
         setCounts(c);
         setSettings(s);
+        setScheduled(sched);
       })
       .catch((e) => toast.error(apiError(e)))
       .finally(() => setLoading(false));
@@ -87,7 +90,7 @@ export default function DashboardPage() {
           </div>
           <div className="card--pad col gap-sm">
             <div className="row row--between">
-              <span className="text-muted">Posting interval</span>
+              <span className="text-muted">Interval (fallback)</span>
               <strong>{formatInterval(settings.posting_interval_minutes)}</strong>
             </div>
             <div className="row row--between">
@@ -101,8 +104,8 @@ export default function DashboardPage() {
               <strong>{settings.timezone}</strong>
             </div>
             <div className="row row--between">
-              <span className="text-muted">Low-pool threshold</span>
-              <strong>{settings.low_pool_alert_threshold}</strong>
+              <span className="text-muted">Scheduled posts</span>
+              <strong>{scheduled.length}</strong>
             </div>
             <Button as={Link} to="/settings" variant="subtle" size="sm" className="mt-lg">
               Edit settings
@@ -136,6 +139,14 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
+      <Card className="card--pad mt-lg">
+        <div className="row row--between" style={{ marginBottom: 16 }}>
+          <div className="card__title">Content calendar</div>
+          <span className="text-sm text-muted">Open days have no post scheduled yet</span>
+        </div>
+        <CalendarMonth posts={scheduled} />
+      </Card>
     </>
   );
 }
