@@ -1,18 +1,28 @@
-import { verifyToken } from '../services/auth.service.js';
+import { verifyToken, findActiveById } from '../services/auth.service.js';
 import ApiError from '../utils/ApiError.js';
 
-// Verifies a `Authorization: Bearer <jwt>` header and sets req.user.
+// Verifies the Bearer JWT, then loads the user from the DB so deactivated /
+// deleted accounts are rejected immediately (their existing token stops working).
+// Sets req.user = { id, name, email, role, is_active }.
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');
   if (scheme !== 'Bearer' || !token) return next(ApiError.unauthorized('missing bearer token'));
+
+  let payload;
   try {
-    const payload = verifyToken(token);
-    req.user = { id: payload.sub, email: payload.email };
-    next();
+    payload = verifyToken(token);
   } catch {
-    next(ApiError.unauthorized('invalid or expired token'));
+    return next(ApiError.unauthorized('invalid or expired token'));
   }
+
+  findActiveById(payload.sub)
+    .then((user) => {
+      if (!user) return next(ApiError.unauthorized('account not found or inactive'));
+      req.user = user;
+      next();
+    })
+    .catch(next); // forward real errors (e.g. DB) instead of masking as 401
 }
 
 export default requireAuth;

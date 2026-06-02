@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import * as upload from '../../services/upload.service.js';
 import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
+import { invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Card, Button, Field, Modal } from '../../components/ui.jsx';
+import { Card, Button, Field, Modal, TimeSelect, ProgressBar } from '../../components/ui.jsx';
 import MediaDropzone from '../../components/MediaDropzone.jsx';
 
 const todayStr = () => {
@@ -22,6 +23,8 @@ export default function UploadPostPage() {
   const [caption, setCaption] = useState('');
   const [schedule, setSchedule] = useState({ date: '', time: '' });
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState(null); // 'preparing' | 'uploading' | 'saving'
+  const [progress, setProgress] = useState(0); // 0..100 for the S3 upload
   const [errorDialog, setErrorDialog] = useState(null);
 
   const setSched = (key) => (e) => setSchedule((s) => ({ ...s, [key]: e.target.value }));
@@ -44,8 +47,8 @@ export default function UploadPostPage() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!file && !caption.trim()) {
-      toast.error('Add a caption or a media file');
+    if (!caption.trim()) {
+      toast.error('Please write a caption');
       return;
     }
     if ((schedule.date && !schedule.time) || (!schedule.date && schedule.time)) {
@@ -55,19 +58,25 @@ export default function UploadPostPage() {
     const scheduled_at = schedule.date && schedule.time ? new Date(`${schedule.date}T${schedule.time}`).toISOString() : null;
 
     setBusy(true);
+    setProgress(0);
     try {
       let media_url = null;
       let s3_key = null;
       let media_type = null;
 
       if (file) {
+        setPhase('preparing');
         const pres = await upload.getPresignedUrl(file.name, file.type);
-        await upload.uploadToS3(pres.uploadUrl, file);
+
+        setPhase('uploading');
+        await upload.uploadToS3(pres.uploadUrl, file, setProgress);
+
         media_url = pres.mediaUrl;
         s3_key = pres.s3Key;
         media_type = file.type.startsWith('video') ? 'video' : 'image';
       }
 
+      setPhase('saving');
       await postPool.create({
         caption,
         target_platform: 'facebook', // single platform for now
@@ -78,12 +87,18 @@ export default function UploadPostPage() {
         scheduled_at,
       });
 
+      // New post → the pool list and dashboard counts are now stale.
+      invalidateCache('post-pool');
+      invalidateCache('dashboard');
+
       toast.success('Post added to the pool');
       navigate('/post-pool');
     } catch (err) {
       setErrorDialog(apiError(err)); // e.g. "A post is already scheduled for that date and time"
     } finally {
       setBusy(false);
+      setPhase(null);
+      setProgress(0);
     }
   };
 
@@ -107,12 +122,13 @@ export default function UploadPostPage() {
               <span className="field__hint">Optional — text-only posts are allowed</span>
             </div>
 
-            <Field label="Caption">
+            <Field label="Caption" hint="Required">
               <textarea
                 className="textarea"
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
                 placeholder="Write your caption…"
+                required
               />
             </Field>
 
@@ -120,7 +136,7 @@ export default function UploadPostPage() {
               <span className="field__label">Schedule (optional)</span>
               <div className="grid-2">
                 <input className="input" type="date" min={todayStr()} value={schedule.date} onChange={setSched('date')} />
-                <input className="input" type="time" step="1800" value={schedule.time} onChange={setSched('time')} />
+                <TimeSelect value={schedule.time} onChange={setSched('time')} date={schedule.date} />
               </div>
               <span className="field__hint">
                 Posts at this exact date/time (one post per slot). Times snap to :00 / :30. Leave blank to use the interval.
@@ -128,7 +144,13 @@ export default function UploadPostPage() {
             </div>
 
             <Button type="submit" size="lg" className="btn--block" disabled={busy}>
-              {busy ? 'Uploading…' : 'Add to pool'}
+              {!busy
+                ? 'Add to pool'
+                : phase === 'preparing'
+                  ? 'Preparing…'
+                  : phase === 'uploading'
+                    ? `Uploading… ${progress}%`
+                    : 'Saving…'}
             </Button>
           </form>
         </Card>
@@ -151,6 +173,34 @@ export default function UploadPostPage() {
           </p>
         </Card>
       </div>
+
+      {/* Blocking progress dialog — no ✕ and no click-outside-to-close
+          (dismissable={false}), so it bars all other actions until the upload
+          finishes. It clears itself when busy ends, or the error dialog below
+          takes over on failure. */}
+      <Modal
+        open={busy}
+        dismissable={false}
+        title={phase === 'saving' ? 'Saving post…' : phase === 'preparing' ? 'Preparing upload…' : 'Uploading…'}
+      >
+        <ProgressBar
+          value={progress}
+          indeterminate={phase !== 'uploading'}
+          label={
+            phase === 'preparing'
+              ? 'Getting a secure upload link…'
+              : phase === 'uploading'
+                ? `Uploading ${isVideo ? 'video' : 'media'}…`
+                : 'Saving your post…'
+          }
+        />
+        {file && (
+          <p className="text-sm text-muted mt-lg">
+            {file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB
+          </p>
+        )}
+        <p className="text-sm text-muted">Please keep this tab open until it finishes.</p>
+      </Modal>
 
       <Modal
         open={!!errorDialog}

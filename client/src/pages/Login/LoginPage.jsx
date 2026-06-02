@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { apiError } from '../../services/api.js';
-import { Card, Button, Field, Logo } from '../../components/ui.jsx';
+import { Card, Button, Field, Logo, PasswordInput } from '../../components/ui.jsx';
 
 export default function LoginPage() {
-  const { login, register, isAuthenticated } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -24,17 +23,11 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     try {
-      if (mode === 'login') {
-        await login(form.email, form.password);
-        toast.success('Welcome back!');
-      } else {
-        await register({ name: form.name, email: form.email, password: form.password });
-        toast.success('Account created!');
-      }
+      await login(form.email, form.password);
+      toast.success('Welcome back!');
       navigate('/dashboard', { replace: true });
     } catch (err) {
       toast.error(apiError(err));
-    } finally {
       setBusy(false);
     }
   };
@@ -47,29 +40,7 @@ export default function LoginPage() {
           <div className="auth__sub">Automated social-media post scheduler</div>
         </div>
 
-        <div className="tabs">
-          <button
-            type="button"
-            className={`tabs__btn ${mode === 'login' ? 'active' : ''}`}
-            onClick={() => setMode('login')}
-          >
-            Log in
-          </button>
-          <button
-            type="button"
-            className={`tabs__btn ${mode === 'register' ? 'active' : ''}`}
-            onClick={() => setMode('register')}
-          >
-            Sign up
-          </button>
-        </div>
-
         <form onSubmit={submit}>
-          {mode === 'register' && (
-            <Field label="Name">
-              <input className="input" value={form.name} onChange={set('name')} placeholder="Jane Doe" required />
-            </Field>
-          )}
           <Field label="Email">
             <input
               className="input"
@@ -80,24 +51,22 @@ export default function LoginPage() {
               required
             />
           </Field>
-          <Field label="Password" hint={mode === 'register' ? 'At least 8 characters' : undefined}>
-            <input
-              className="input"
-              type="password"
-              value={form.password}
-              onChange={set('password')}
-              placeholder="••••••••"
-              required
-            />
+          <Field label="Password">
+            <PasswordInput value={form.password} onChange={set('password')} placeholder="••••••••" required />
           </Field>
 
-          <Button type="submit" size="lg" className="btn--block mt-0" disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Create account'}
+          <Button type="submit" size="lg" className="btn--block" disabled={busy}>
+            {busy ? 'Please wait…' : 'Log in'}
           </Button>
         </form>
 
         <p className="text-center text-sm text-muted mt-lg">
-          Demo: <strong>demo@example.com</strong> / <strong>Password123!</strong>
+          Accounts are invite-only. Need access? Ask an admin for a sign-up link.
+        </p>
+        <p className="text-center text-sm mt-lg">
+          <Link to="/privacy" className="link">
+            Privacy Policy
+          </Link>
         </p>
       </Card>
     </div>

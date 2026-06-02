@@ -6,14 +6,34 @@ export async function getPresignedUrl(filename, contentType) {
   return data.data; // { uploadUrl, s3Key, mediaUrl }
 }
 
-// 2) Upload the file bytes straight to S3 (bare fetch — no auth header to S3).
-export async function uploadToS3(uploadUrl, file) {
-  const res = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: { 'Content-Type': file.type },
+// 2) Upload the file bytes straight to S3 (bare XHR — no auth header to S3).
+//    Uses XMLHttpRequest instead of fetch so we can report upload progress:
+//    onProgress(percent) is called 0..100 as the bytes go up. Large images and
+//    videos otherwise look frozen because fetch gives no upload progress events.
+export function uploadToS3(uploadUrl, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', file.type);
+
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(100);
+        resolve();
+      } else {
+        reject(new Error(`S3 upload failed (HTTP ${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('S3 upload failed (network error)'));
+    xhr.onabort = () => reject(new Error('S3 upload canceled'));
+
+    xhr.send(file);
   });
-  if (!res.ok) throw new Error(`S3 upload failed (HTTP ${res.status})`);
 }
 
 // 3) Optionally confirm the object exists before saving the post.

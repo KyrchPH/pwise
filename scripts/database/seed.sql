@@ -8,11 +8,12 @@
 -- =====================================================================
 
 -- Demo user (INSERT IGNORE -> no-op if the email already exists) ---------
-INSERT IGNORE INTO users (name, email, password_hash)
+INSERT IGNORE INTO users (name, email, password_hash, role)
 VALUES (
-  'Demo User',
+  'Demo Admin',
   'demo@example.com',
-  '$2a$10$x17y.GCSS07n/xwK6AhLzug5CkHpbAGw1ZU85OBAVyf8QJwbXQWzG'
+  '$2a$10$x17y.GCSS07n/xwK6AhLzug5CkHpbAGw1ZU85OBAVyf8QJwbXQWzG',
+  'admin'
 );
 
 -- Posting settings for the demo user (UNIQUE user_id -> no-op on re-run) --

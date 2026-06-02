@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Button, Logo } from './ui.jsx';
 
@@ -8,6 +8,7 @@ const NAV = [
   { to: '/upload', label: 'Upload', icon: '↑' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
   { to: '/logs', label: 'Logs', icon: '≡' },
+  { to: '/accounts', label: 'Accounts', icon: '👥', admin: true },
 ];
 
 const TITLES = {
@@ -16,6 +17,7 @@ const TITLES = {
   '/upload': 'Upload Post',
   '/settings': 'Settings',
   '/logs': 'Posting Logs',
+  '/accounts': 'Accounts',
 };
 
 export default function AppLayout() {
@@ -31,7 +33,7 @@ export default function AppLayout() {
           <Logo height={54} />
         </div>
         <nav className="nav">
-          {NAV.map((n) => (
+          {NAV.filter((n) => !n.admin || user?.role === 'admin').map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
@@ -43,9 +45,10 @@ export default function AppLayout() {
           ))}
         </nav>
         <div className="sidebar__foot">
-          Auto-post scheduler
-          <br />
-          v0.1.0
+          <Link to="/privacy" className="sidebar__footlink">
+            Privacy Policy
+          </Link>
+          <div className="sidebar__footmeta">Auto-post scheduler · v0.1.0</div>
         </div>
       </aside>
 

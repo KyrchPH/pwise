@@ -2,12 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import { env } from './config/env.js';
 import { notFound, errorHandler } from './middleware/error.middleware.js';
+import revalidate from './middleware/cache.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import postPoolRoutes from './routes/post_pool.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import logsRoutes from './routes/logs.routes.js';
 import schedulerRoutes from './routes/scheduler.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -25,12 +27,15 @@ export function createApp() {
   app.get('/health', health);
   app.get('/api/health', health);
 
-  // Frontend-facing (JWT) routes.
+  // Frontend-facing (JWT) routes. `revalidate` lets the browser cache GETs and
+  // revalidate via ETag (304) — see cache.middleware.js. Applied to read-heavy
+  // routes only; auth + upload are left uncached.
   app.use('/api/auth', authRoutes);
-  app.use('/api/post-pool', postPoolRoutes);
+  app.use('/api/post-pool', revalidate, postPoolRoutes);
   app.use('/api/upload', uploadRoutes);
-  app.use('/api/settings', settingsRoutes);
-  app.use('/api/logs', logsRoutes);
+  app.use('/api/settings', revalidate, settingsRoutes);
+  app.use('/api/logs', revalidate, logsRoutes);
+  app.use('/api/admin', revalidate, adminRoutes);
 
   // Machine-facing (service-token) routes for n8n.
   app.use('/api/scheduler', schedulerRoutes);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
+import { invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Button, Field, Toggle, Spinner } from '../../components/ui.jsx';
 
@@ -59,6 +60,7 @@ export default function SettingsPage() {
         low_pool_alert_threshold: Number(form.low_pool_alert_threshold) || 0,
         owner_email: form.owner_email,
       });
+      invalidateCache('dashboard'); // the dashboard surfaces these settings
       toast.success('Settings saved');
     } catch (err) {
       toast.error(apiError(err));

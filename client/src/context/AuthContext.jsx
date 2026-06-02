@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import * as authService from '../services/auth.service.js';
+import { invalidateCache } from '../hooks/useCachedResource.js';
 
 const AuthContext = createContext(null);
 
@@ -42,10 +43,19 @@ export function AuthProvider({ children }) {
       /* ignore — clearing locally is enough */
     }
     localStorage.removeItem('token');
+    invalidateCache(); // drop all cached API data so the next user starts clean
     setUser(null);
   };
 
-  const value = { user, loading, login, register, logout, isAuthenticated: !!user };
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    logout,
+    isAuthenticated: !!user,
+    isAdmin: user?.role === 'admin',
+  };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

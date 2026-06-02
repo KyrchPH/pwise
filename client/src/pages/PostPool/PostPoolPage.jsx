@@ -1,13 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
+import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb } from '../../components/ui.jsx';
+import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect } from '../../components/ui.jsx';
+import PostViewer from '../../components/PostViewer.jsx';
 
 const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived'];
 
 const pad = (n) => String(n).padStart(2, '0');
+
+// Compact counts: 1234 -> "1.2k", 1_500_000 -> "1.5M".
+const fmtNum = (n) => {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(v);
+};
 
 // Split a stored UTC ISO into local date/time inputs.
 function schedToParts(iso) {
@@ -28,32 +38,32 @@ function fmtSched(iso) {
 
 export default function PostPoolPage() {
   const toast = useToast();
-  const [posts, setPosts] = useState([]);
   const [filter, setFilter] = useState('all');
-  const [loading, setLoading] = useState(true);
+  const [viewing, setViewing] = useState(null);
   const [editing, setEditing] = useState(null);
   const [editError, setEditError] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(
-    async (status) => {
-      setLoading(true);
-      try {
-        const params = status && status !== 'all' ? { status } : {};
-        setPosts(await postPool.list(params));
-      } catch (e) {
-        toast.error(apiError(e));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [toast],
-  );
+  const {
+    data: posts = [],
+    loading,
+    error,
+    refresh,
+  } = useCachedResource(`post-pool:list:${filter}`, () => postPool.list(filter !== 'all' ? { status: filter } : {}));
 
+  // Surface fetch failures as a toast (any cached posts stay on screen).
   useEffect(() => {
-    load(filter);
-  }, [filter, load]);
+    if (error) toast.error(apiError(error));
+  }, [error, toast]);
+
+  // After a change: drop sibling caches (other filters + dashboard counts) so
+  // they refetch when next visited, and refetch the current view now.
+  const reload = () => {
+    invalidateCache('post-pool');
+    invalidateCache('dashboard');
+    refresh();
+  };
 
   const openEdit = (post) => {
     setEditError(null);
@@ -77,7 +87,7 @@ export default function PostPoolPage() {
       await postPool.update(editing.id, { caption: editing.caption, scheduled_at });
       toast.success('Post updated');
       setEditing(null);
-      load(filter);
+      reload();
     } catch (err) {
       setEditError(apiError(err)); // e.g. duplicate-slot conflict
     } finally {
@@ -90,7 +100,7 @@ export default function PostPoolPage() {
       await postPool.remove(deleting.id);
       toast.success('Post deleted');
       setDeleting(null);
-      load(filter);
+      reload();
     } catch (e) {
       toast.error(apiError(e));
     }
@@ -138,8 +148,20 @@ export default function PostPoolPage() {
       ) : (
         <div className="grid grid--cards">
           {posts.map((post) => (
-            <Card key={post.id} className="post-card">
-              <MediaThumb mediaUrl={post.media_url} mediaType={post.media_type} />
+            <Card
+              key={post.id}
+              className="post-card post-card--clickable"
+              role="button"
+              tabIndex={0}
+              onClick={() => setViewing(post)}
+              onKeyDown={(e) => {
+                if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                  e.preventDefault();
+                  setViewing(post);
+                }
+              }}
+            >
+              <MediaThumb mediaUrl={post.media_preview_url} mediaType={post.media_type} />
               <div className="post-card__body">
                 <div className="row row--between">
                   <StatusBadge status={post.status} />
@@ -147,20 +169,52 @@ export default function PostPoolPage() {
                 </div>
                 <div className="post-card__caption">{post.caption || <em className="text-muted">No caption</em>}</div>
                 {post.scheduled_at && <div className="post-card__sched">📅 {fmtSched(post.scheduled_at)}</div>}
+                {post.engagement_synced_at && (
+                  <div className="post-card__stats">
+                    <span title="Reactions">❤️ {fmtNum(post.reactions_count)}</span>
+                    <span title="Comments">💬 {fmtNum(post.comments_count)}</span>
+                    <span title="Shares">🔁 {fmtNum(post.shares_count)}</span>
+                    {post.media_type === 'video' && <span title="Views">▶️ {fmtNum(post.views_count)}</span>}
+                  </div>
+                )}
               </div>
-              <div className="post-card__actions">
-                <Button variant="subtle" size="sm" onClick={() => openEdit(post)}>
-                  Edit
-                </Button>
-                <div className="toolbar__spacer" />
-                <Button variant="danger" size="sm" onClick={() => setDeleting(post)}>
-                  Delete
-                </Button>
+              {/* stopPropagation so the action buttons don't also open the viewer */}
+              <div className="post-card__actions" onClick={(e) => e.stopPropagation()}>
+                <button type="button" className="card-iconbtn" onClick={() => openEdit(post)} aria-label="Edit post" title="Edit">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="card-iconbtn card-iconbtn--danger"
+                  onClick={() => setDeleting(post)}
+                  aria-label="Delete post"
+                  title="Delete"
+                >
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
               </div>
             </Card>
           ))}
         </div>
       )}
+
+      {/* Full-screen, Facebook-style post viewer */}
+      <PostViewer
+        post={viewing}
+        onClose={() => setViewing(null)}
+        onEdit={(p) => {
+          setViewing(null);
+          openEdit(p);
+        }}
+      />
 
       {/* Edit modal */}
       <Modal
@@ -187,13 +241,7 @@ export default function PostPoolPage() {
               <span className="field__label">Schedule (optional)</span>
               <div className="grid-2">
                 <input className="input" type="date" value={editing._schedDate || ''} onChange={editField('_schedDate')} />
-                <input
-                  className="input"
-                  type="time"
-                  step="1800"
-                  value={editing._schedTime || ''}
-                  onChange={editField('_schedTime')}
-                />
+                <TimeSelect value={editing._schedTime || ''} onChange={editField('_schedTime')} date={editing._schedDate} />
               </div>
               <span className="field__hint">Clear both to fall back to the interval. One post per slot.</span>
             </div>

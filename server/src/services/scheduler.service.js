@@ -112,7 +112,10 @@ export async function markPosted(postId, { platformPostId = null, responseMessag
   const post = rows[0];
   if (!post) throw ApiError.notFound('post not found');
 
-  await query("UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP() WHERE id = ?", [postId]);
+  await query(
+    "UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP(), platform_post_id = ? WHERE id = ?",
+    [platformPostId, postId],
+  );
   const updated = (await query('SELECT * FROM post_pool WHERE id = ?', [postId]))[0];
 
   await logsService.create({
@@ -176,4 +179,32 @@ export async function markAlertSent(userId) {
   );
   if (!result.affectedRows) throw ApiError.notFound('settings not found for user');
   return { user_id: Number(userId), alert_sent_at: new Date().toISOString() };
+}
+
+// Published posts (with a platform id) whose engagement the n8n sync flow should
+// refresh from the platform. Most-recently-posted first.
+export async function pendingEngagement(limit = 50) {
+  return query(
+    `SELECT id, platform_post_id, media_type, posted_at
+       FROM post_pool
+      WHERE status = 'posted' AND platform_post_id IS NOT NULL
+      ORDER BY posted_at DESC
+      LIMIT ?`,
+    [Number(limit) || 50],
+  );
+}
+
+// Store engagement counts pulled from the platform (called by n8n). Any missing
+// metric is stored as NULL.
+export async function saveEngagement(postId, { reactions, comments, shares, views } = {}) {
+  const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+  const result = await query(
+    `UPDATE post_pool
+        SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
+            engagement_synced_at = UTC_TIMESTAMP()
+      WHERE id = ?`,
+    [num(reactions), num(comments), num(shares), num(views), postId],
+  );
+  if (!result.affectedRows) throw ApiError.notFound('post not found');
+  return (await query('SELECT * FROM post_pool WHERE id = ?', [postId]))[0];
 }

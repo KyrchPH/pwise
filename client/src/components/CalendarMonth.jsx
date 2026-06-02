@@ -56,15 +56,23 @@ export default function CalendarMonth({ posts = [] }) {
   return (
     <div className="calendar">
       <div className="calendar__head">
-        <button className="btn btn--ghost btn--icon" onClick={() => go(-1)} aria-label="Previous month">
-          ‹
-        </button>
         <div className="calendar__title">
           {MONTHS[month]} {year}
         </div>
-        <button className="btn btn--ghost btn--icon" onClick={() => go(1)} aria-label="Next month">
-          ›
-        </button>
+        <div className="calendar__nav">
+          <button
+            className="btn btn--subtle btn--sm"
+            onClick={() => setView({ year: today.getFullYear(), month: today.getMonth() })}
+          >
+            Today
+          </button>
+          <button className="btn btn--ghost btn--icon" onClick={() => go(-1)} aria-label="Previous month">
+            ‹
+          </button>
+          <button className="btn btn--ghost btn--icon" onClick={() => go(1)} aria-label="Next month">
+            ›
+          </button>
+        </div>
       </div>
 
       <div className="calendar__grid calendar__dow">
@@ -86,6 +94,7 @@ export default function CalendarMonth({ posts = [] }) {
           const isOpen = count === 0 && !isPast; // no post set yet (upcoming)
           const cls = [
             'calendar__cell',
+            count > 0 && 'is-scheduled',
             isToday && 'is-today',
             isOpen && 'is-open',
             isPast && count === 0 && 'is-past',
@@ -96,12 +105,13 @@ export default function CalendarMonth({ posts = [] }) {
             <div key={k} className={cls}>
               <span className="calendar__day">{d}</span>
               {count > 0 ? (
-                <span className="calendar__count" title={`${count} scheduled`}>
+                <span className="calendar__count" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
                   {count}
+                  <span className="calendar__count-unit">{count === 1 ? 'post' : 'posts'}</span>
                 </span>
               ) : isOpen ? (
-                <span className="calendar__open" title="No post set yet">
-                  +
+                <span className="calendar__open" title="No post scheduled yet">
+                  Open
                 </span>
               ) : null}
             </div>

@@ -36,3 +36,20 @@ export const alertSent = asyncHandler(async (req, res) => {
   const result = await service.markAlertSent(req.params.id);
   sendSuccess(res, result);
 });
+
+// n8n: list published posts whose engagement should be refreshed from the platform.
+export const engagementPending = asyncHandler(async (req, res) => {
+  const posts = await service.pendingEngagement(req.query.limit);
+  sendSuccess(res, { posts });
+});
+
+// n8n: store engagement counts (reactions/comments/shares/views) for a post.
+export const saveEngagement = asyncHandler(async (req, res) => {
+  const post = await service.saveEngagement(req.params.id, {
+    reactions: req.body?.reactions,
+    comments: req.body?.comments,
+    shares: req.body?.shares,
+    views: req.body?.views,
+  });
+  sendSuccess(res, { post });
+});

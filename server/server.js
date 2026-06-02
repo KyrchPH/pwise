@@ -4,7 +4,10 @@ import dotenv from 'dotenv';
 
 // Load the shared root .env before any config module reads process.env.
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Load .env from the repo root (monorepo dev) AND from alongside server.js
+// (flat production deploy). dotenv won't override already-set vars, so first wins.
 dotenv.config({ path: resolve(__dirname, '../.env') });
+dotenv.config({ path: resolve(__dirname, '.env') });
 
 const { createApp } = await import('./src/app.js');
 const { env, validateEnv } = await import('./src/config/env.js');

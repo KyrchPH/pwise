@@ -1,5 +1,6 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
+import { createDownloadUrl } from './s3.service.js';
 
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived'];
 const ALLOWED_MEDIA = ['image', 'video'];
@@ -18,6 +19,17 @@ function normalizeScheduledAt(value) {
 
 function truthy(v) {
   return v === '1' || v === 1 || v === true || v === 'true';
+}
+
+// Attach a short-lived presigned GET URL so the UI can show a real thumbnail
+// of the (private) S3 media. null if there's no media or S3 isn't configured.
+async function withMediaPreview(post) {
+  if (!post.s3_key) return { ...post, media_preview_url: null };
+  try {
+    return { ...post, media_preview_url: await createDownloadUrl(post.s3_key) };
+  } catch {
+    return { ...post, media_preview_url: null };
+  }
 }
 
 // Single post per scheduled slot (per user). Posts in a terminal state
@@ -46,7 +58,8 @@ export async function list(userId, { status, scheduled, limit = 50, offset = 0 }
   if (truthy(scheduled)) sql += ' AND scheduled_at IS NOT NULL';
   sql += ' ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?';
   params.push(Number(limit) || 50, Number(offset) || 0);
-  return query(sql, params);
+  const rows = await query(sql, params);
+  return Promise.all(rows.map(withMediaPreview));
 }
 
 export async function getById(userId, id) {
@@ -66,6 +79,7 @@ export async function create(userId, data = {}) {
     priority = 0,
     scheduled_at = null,
   } = data;
+  if (!caption || !String(caption).trim()) throw ApiError.badRequest('caption is required');
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
   const schedule = normalizeScheduledAt(scheduled_at);

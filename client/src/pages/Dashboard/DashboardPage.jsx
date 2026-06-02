@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import * as postPool from '../../services/post_pool.service.js';
 import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
+import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Spinner, Button, StatusBadge } from '../../components/ui.jsx';
 import CalendarMonth from '../../components/CalendarMonth.jsx';
@@ -26,24 +27,19 @@ const hhmm = (t) => (t ? String(t).slice(0, 5) : '—');
 
 export default function DashboardPage() {
   const toast = useToast();
-  const [counts, setCounts] = useState(null);
-  const [settings, setSettings] = useState(null);
-  const [scheduled, setScheduled] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, error } = useCachedResource('dashboard', () =>
+    Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })]).then(
+      ([counts, settings, scheduled]) => ({ counts, settings, scheduled }),
+    ),
+  );
 
   useEffect(() => {
-    Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })])
-      .then(([c, s, sched]) => {
-        setCounts(c);
-        setSettings(s);
-        setScheduled(sched);
-      })
-      .catch((e) => toast.error(apiError(e)))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (error) toast.error(apiError(error));
+  }, [error, toast]);
 
-  if (loading) return <Spinner label="Loading dashboard…" />;
+  const { counts, settings, scheduled = [] } = data || {};
+
+  if (loading && !data) return <Spinner label="Loading dashboard…" />;
   if (!counts || !settings) return null;
 
   const enabled = !!settings.is_enabled;
