@@ -32,3 +32,9 @@ export const counts = asyncHandler(async (req, res) => {
   const counts = await service.counts(req.user.id);
   sendSuccess(res, { counts });
 });
+
+// Pre-flight check the client calls before uploading media to a scheduled slot.
+export const checkSlot = asyncHandler(async (req, res) => {
+  const available = await service.isSlotFree(req.user.id, req.query.scheduled_at, req.query.exclude_id);
+  sendSuccess(res, { available });
+});

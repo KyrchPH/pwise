@@ -8,6 +8,7 @@ router.use(requireAuth);
 router.get('/', ctrl.list);
 router.post('/', ctrl.create);
 router.get('/counts', ctrl.counts); // before /:id so it isn't captured as an id
+router.get('/slot', ctrl.checkSlot); // before /:id; pre-flight slot availability
 router.get('/:id', ctrl.get);
 router.patch('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);

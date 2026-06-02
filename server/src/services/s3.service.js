@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client, S3_BUCKET } from '../config/s3.js';
 import { env } from '../config/env.js';
@@ -61,4 +61,20 @@ export async function headObject(s3Key) {
 // Canonical object URL (stored as metadata; not directly fetchable on a private bucket).
 export function publicObjectUrl(s3Key) {
   return `https://${S3_BUCKET}.s3.${env.aws.region}.amazonaws.com/${s3Key}`;
+}
+
+// Best-effort delete (e.g. when a post is removed). Never throws — a missing
+// s3:DeleteObject permission or an already-gone object shouldn't block the post
+// deletion; the worst case is an orphaned object left behind. Also drops any
+// cached presigned URL for the key.
+export async function deleteObject(s3Key) {
+  if (!s3Client || !S3_BUCKET || !s3Key) return;
+  try {
+    await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: s3Key }));
+  } catch {
+    /* best-effort cleanup */
+  }
+  for (const key of [...downloadUrlCache.keys()]) {
+    if (key.startsWith(`${s3Key}|`)) downloadUrlCache.delete(key);
+  }
 }

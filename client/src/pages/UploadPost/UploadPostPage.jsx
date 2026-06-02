@@ -60,6 +60,17 @@ export default function UploadPostPage() {
     setBusy(true);
     setProgress(0);
     try {
+      // Pre-flight: if scheduling, confirm the slot is free BEFORE uploading any
+      // media — otherwise a taken slot would orphan the file in S3.
+      if (scheduled_at) {
+        setPhase('preparing');
+        const free = await postPool.slotAvailable(scheduled_at);
+        if (!free) {
+          setErrorDialog('A post is already scheduled for that date and time. Please pick a different slot.');
+          return; // the `finally` block resets the busy/progress state
+        }
+      }
+
       let media_url = null;
       let s3_key = null;
       let media_type = null;

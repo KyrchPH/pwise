@@ -29,3 +29,11 @@ export async function counts() {
   const { data } = await api.get('/post-pool/counts');
   return data.data.counts;
 }
+
+// Pre-flight: is the given scheduled slot free? Call before uploading media.
+export async function slotAvailable(scheduledAt, excludeId) {
+  const { data } = await api.get('/post-pool/slot', {
+    params: { scheduled_at: scheduledAt, ...(excludeId != null ? { exclude_id: excludeId } : {}) },
+  });
+  return data.data.available;
+}

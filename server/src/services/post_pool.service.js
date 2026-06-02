@@ -1,6 +1,6 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
-import { createDownloadUrl } from './s3.service.js';
+import { createDownloadUrl, deleteObject } from './s3.service.js';
 
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived'];
 const ALLOWED_MEDIA = ['image', 'video'];
@@ -45,6 +45,24 @@ async function assertSlotFree(userId, scheduledDate, excludeId = null) {
   }
   const rows = await query(sql, params);
   if (rows.length) throw ApiError.conflict('A post is already scheduled for that date and time');
+}
+
+// Non-throwing slot check for the client to pre-flight BEFORE uploading media,
+// so a post bound to an already-taken slot doesn't orphan a file in S3. Returns
+// true when the slot is free (or when there's no schedule). `create`/`update`
+// still run assertSlotFree as the authoritative guard against races.
+export async function isSlotFree(userId, scheduledAt, excludeId = null) {
+  const schedule = normalizeScheduledAt(scheduledAt); // validates :00/:30 boundary
+  if (!schedule) return true;
+  let sql = `SELECT id FROM post_pool
+             WHERE user_id = ? AND scheduled_at = ? AND status NOT IN ('posted', 'failed', 'archived')`;
+  const params = [userId, schedule];
+  if (excludeId != null) {
+    sql += ' AND id <> ?';
+    params.push(Number(excludeId));
+  }
+  const rows = await query(sql, params);
+  return rows.length === 0;
 }
 
 export async function list(userId, { status, scheduled, limit = 50, offset = 0 } = {}) {
@@ -123,8 +141,9 @@ export async function update(userId, id, data = {}) {
 }
 
 export async function remove(userId, id) {
-  await getById(userId, id);
+  const post = await getById(userId, id); // ownership + existence check (also gives s3_key)
   await query('DELETE FROM post_pool WHERE id = ? AND user_id = ?', [id, userId]);
+  if (post.s3_key) await deleteObject(post.s3_key); // best-effort: clean up the media in S3
   return { id: Number(id), deleted: true };
 }
 
