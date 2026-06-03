@@ -64,3 +64,28 @@ export async function listComments(platformPostId, { after = null, limit = 25 } 
     nextCursor: data.paging?.next ? data.paging.cursors?.after ?? null : null,
   };
 }
+
+// Resolve a published post's {page}_{post} feed id from its stored platform id, so
+// shares can be read per-post (lightweight) instead of a heavy bulk query. Text/
+// feed posts already store the {page}_{post}; photo/video posts store an object id
+// whose feed post we find via published_posts (attachments.target.id). Best-effort:
+// returns null if not found yet (e.g. a video still being indexed) — caller retries.
+export async function resolveParentPostId(platformPostId) {
+  if (!platformPostId) return null;
+  if (String(platformPostId).includes('_')) return platformPostId; // already a {page}_{post}
+  if (!env.facebook.pageId) return null;
+  try {
+    const { ok, data } = await graph(`${env.facebook.pageId}/published_posts`, {
+      fields: { fields: 'id,attachments.limit(1){target{id}}', limit: '25' },
+    });
+    if (!ok) return null;
+    for (const p of data.data || []) {
+      for (const a of p.attachments?.data || []) {
+        if (a.target && String(a.target.id) === String(platformPostId)) return p.id;
+      }
+    }
+  } catch {
+    /* best-effort — leave null, backfill later */
+  }
+  return null;
+}

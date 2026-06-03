@@ -43,6 +43,7 @@ export default function PostPoolPage() {
   const [editing, setEditing] = useState(null);
   const [editError, setEditError] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const {
@@ -96,6 +97,8 @@ export default function PostPoolPage() {
   };
 
   const confirmDelete = async () => {
+    if (deletingBusy) return; // guard against double-clicks
+    setDeletingBusy(true);
     try {
       await postPool.remove(deleting.id);
       toast.success('Post deleted');
@@ -103,6 +106,8 @@ export default function PostPoolPage() {
       reload();
     } catch (e) {
       toast.error(apiError(e));
+    } finally {
+      setDeletingBusy(false);
     }
   };
 
@@ -255,13 +260,14 @@ export default function PostPoolPage() {
         open={!!deleting}
         title="Delete post"
         onClose={() => setDeleting(null)}
+        dismissable={!deletingBusy}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setDeleting(null)}>
+            <Button variant="ghost" onClick={() => setDeleting(null)} disabled={deletingBusy}>
               Cancel
             </Button>
-            <Button variant="danger" onClick={confirmDelete}>
-              Delete
+            <Button variant="danger" onClick={confirmDelete} disabled={deletingBusy}>
+              {deletingBusy ? 'Deleting…' : 'Delete'}
             </Button>
           </>
         }

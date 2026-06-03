@@ -34,6 +34,7 @@ export const env = {
   facebook: {
     pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || '',
     graphVersion: process.env.FB_GRAPH_VERSION || 'v21.0',
+    pageId: process.env.FACEBOOK_PAGE_ID || '',
   },
 };
 

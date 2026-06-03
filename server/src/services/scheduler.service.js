@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import { minutesSince } from '../utils/date.util.js';
 import { createDownloadUrl } from './s3.service.js';
 import * as logsService from './logs.service.js';
+import * as fb from './fb.service.js';
 
 async function enabledUserIds() {
   const rows = await query('SELECT user_id FROM posting_settings WHERE is_enabled = 1');
@@ -91,9 +92,13 @@ export async function markPosted(postId, { platformPostId = null, responseMessag
   const post = rows[0];
   if (!post) throw ApiError.notFound('post not found');
 
+  // Resolve the {page}_{post} feed id now so shares can be read per-post later.
+  // Best-effort: a video's feed story may not be indexed yet (then it's null and
+  // pendingEngagement backfills it on the first sync).
+  const parentPostId = await fb.resolveParentPostId(platformPostId);
   await query(
-    "UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP(), platform_post_id = ? WHERE id = ?",
-    [platformPostId, postId],
+    "UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP(), platform_post_id = ?, parent_post_id = ? WHERE id = ?",
+    [platformPostId, parentPostId, postId],
   );
   const updated = (await query('SELECT * FROM post_pool WHERE id = ?', [postId]))[0];
 
@@ -163,14 +168,30 @@ export async function markAlertSent(userId) {
 // Published posts (with a platform id) whose engagement the n8n sync flow should
 // refresh from the platform. Most-recently-posted first.
 export async function pendingEngagement(limit = 50) {
-  return query(
-    `SELECT id, platform_post_id, media_type, posted_at
+  // The engagement sync runs on its own schedule (≈hourly), independent of the
+  // publish poll, so run the expiry sweep here too — overdue posts still get
+  // cleared even if the publish workflow is paused/deactivated. Cheap, once per sync.
+  await expireOverdue();
+  const posts = await query(
+    `SELECT id, platform_post_id, parent_post_id, media_type, posted_at
        FROM post_pool
       WHERE status = 'posted' AND platform_post_id IS NOT NULL
       ORDER BY posted_at DESC
       LIMIT ?`,
     [Number(limit) || 50],
   );
+  // Backfill any missing parent_post_id (e.g. a video whose feed story wasn't
+  // indexed yet at mark-posted time). Resolved once, then cached on the row.
+  for (const p of posts) {
+    if (!p.parent_post_id && p.platform_post_id) {
+      const parent = await fb.resolveParentPostId(p.platform_post_id);
+      if (parent) {
+        await query('UPDATE post_pool SET parent_post_id = ? WHERE id = ?', [parent, p.id]);
+        p.parent_post_id = parent;
+      }
+    }
+  }
+  return posts;
 }
 
 // Store engagement counts pulled from the platform (called by n8n). Any missing
