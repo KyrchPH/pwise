@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS post_pool (
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_post_pool_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT chk_post_pool_status
-    CHECK (status IN ('draft','ready','posting','posted','failed','archived')),
+    CHECK (status IN ('draft','ready','posting','posted','failed','archived','expired')),
   CONSTRAINT chk_post_pool_media_type
     CHECK (media_type IS NULL OR media_type IN ('image','video')),
   -- Supports the scheduler claim query:
@@ -127,4 +127,22 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_platform_accounts_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_platform_accounts_user (user_id, platform_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- post_activity_log — audit trail of who created/edited/deleted each post -----
+-- (the pool is shared; this identifies the actor). user/post SET NULL on delete
+-- so the record survives; user_name is a snapshot for durable display.
+CREATE TABLE IF NOT EXISTS post_activity_log (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  post_id    INT NULL,
+  user_id    INT NULL,
+  user_name  VARCHAR(255),
+  action     VARCHAR(20) NOT NULL,
+  details    TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_activity_post FOREIGN KEY (post_id) REFERENCES post_pool(id) ON DELETE SET NULL,
+  CONSTRAINT fk_activity_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT chk_activity_action CHECK (action IN ('created','edited','deleted')),
+  INDEX idx_activity_created (created_at DESC),
+  INDEX idx_activity_post (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

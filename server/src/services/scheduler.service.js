@@ -9,6 +9,24 @@ async function enabledUserIds() {
   return rows.map((r) => Number(r.user_id));
 }
 
+// A 'ready' post more than this many minutes past its scheduled time is overdue
+// → marked 'expired' and never published (so it can't fire late or jump ahead of
+// on-time posts). Must be >= the n8n check interval; n8n checks ~every 5 min, so
+// 10 min gives a couple of attempts before giving up. Rescheduling an expired
+// post (editing its date/time to a future slot) revives it to 'ready'.
+const EXPIRE_AFTER_MINUTES = 10;
+
+// Expire overdue scheduled posts. Runs on every claim (each n8n check), so stale
+// posts are cleared even while Auto-posting is off (no enabled users).
+async function expireOverdue() {
+  await query(
+    `UPDATE post_pool SET status = 'expired'
+      WHERE status = 'ready' AND scheduled_at IS NOT NULL
+        AND scheduled_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? MINUTE)`,
+    [EXPIRE_AFTER_MINUTES],
+  );
+}
+
 // Atomically claim the single post matching `whereSql`/`orderBy`, mark it
 // 'posting', and return it with a presigned media URL. SKIP LOCKED guarantees
 // two concurrent runs can't grab the same row.
@@ -51,6 +69,7 @@ async function claimAndLock(whereSql, params, orderBy) {
  * exact date/time — there is no interval fallback.
  */
 export async function claimNext({ userId = null } = {}) {
+  await expireOverdue(); // overdue posts are skipped (expired), never posted late
   const enabled = await enabledUserIds();
 
   let schedUsers = enabled;

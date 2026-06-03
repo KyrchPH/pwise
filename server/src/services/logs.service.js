@@ -1,10 +1,11 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 
-export async function list(userId, { limit = 50, offset = 0 } = {}) {
+// Shared pool → posting logs are global (every signed-in user sees all of them).
+export async function list({ limit = 50, offset = 0 } = {}) {
   return query(
-    'SELECT * FROM posting_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
-    [userId, Number(limit) || 50, Number(offset) || 0],
+    'SELECT * FROM posting_logs ORDER BY created_at DESC LIMIT ? OFFSET ?',
+    [Number(limit) || 50, Number(offset) || 0],
   );
 }
 

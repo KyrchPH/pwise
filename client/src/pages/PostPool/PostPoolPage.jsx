@@ -7,7 +7,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
 
-const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived'];
+const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
 
 const pad = (n) => String(n).padStart(2, '0');
 

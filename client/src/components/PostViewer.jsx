@@ -1,5 +1,7 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from './ui.jsx';
+import * as postPool from '../services/post_pool.service.js';
+import { apiError } from '../services/api.js';
 
 const fmt = (iso) => {
   if (!iso) return '';
@@ -16,6 +18,85 @@ const fmtNum = (n) => {
   if (v >= 1_000) return `${(v / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
   return String(v);
 };
+
+// Live Facebook comments for a published post. The first page loads when the
+// viewer opens; more pages lazy-load as you scroll near the bottom. Shows each
+// comment's text + time — Facebook withholds the commenter's identity (`from`)
+// for ordinary users (privacy), so author names aren't available.
+function CommentsSection({ post }) {
+  const [comments, setComments] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [error, setError] = useState(null);
+  const scrollerRef = useRef(null);
+  const cursorRef = useRef(null); // mirror of `cursor` for the scroll handler (no stale closure)
+  const loadingRef = useRef(false);
+
+  const canHaveComments = post.status === 'posted' && post.platform_post_id;
+
+  const fetchPage = useCallback(
+    async (after) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoading(true);
+      setError(null);
+      try {
+        const { comments: page, nextCursor } = await postPool.comments(post.id, after);
+        setComments((prev) => (after ? [...prev, ...page] : page));
+        cursorRef.current = nextCursor;
+        setCursor(nextCursor);
+        setLoadedOnce(true);
+      } catch (err) {
+        setError(apiError(err));
+      } finally {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [post.id],
+  );
+
+  useEffect(() => {
+    setComments([]);
+    setCursor(null);
+    cursorRef.current = null;
+    setLoadedOnce(false);
+    setError(null);
+    if (canHaveComments) fetchPage(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id]);
+
+  if (!canHaveComments) return null;
+
+  const onScroll = () => {
+    const el = scrollerRef.current;
+    if (!el || loadingRef.current || !cursorRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) fetchPage(cursorRef.current);
+  };
+
+  return (
+    <div className="post-comments">
+      <div className="post-comments__head">Comments</div>
+      <div className="post-comments__list" ref={scrollerRef} onScroll={onScroll}>
+        {comments.map((c) => (
+          <div className="comment" key={c.id}>
+            <div className="comment__body">{c.message || <em className="text-muted">(no text)</em>}</div>
+            <div className="comment__time">{fmt(c.created_time)}</div>
+          </div>
+        ))}
+        {loading && <div className="post-comments__status">Loading…</div>}
+        {error && <div className="post-comments__status post-comments__status--error">{error}</div>}
+        {loadedOnce && !loading && !error && comments.length === 0 && (
+          <div className="post-comments__status">No comments yet.</div>
+        )}
+        {loadedOnce && !loading && !cursor && comments.length > 0 && (
+          <div className="post-comments__status">— end of comments —</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Full-screen, Facebook-style post viewer: the media fills a dark stage on the
@@ -148,6 +229,9 @@ export default function PostViewer({ post, onClose, onEdit }) {
             <div className="post-stats__synced">Updated {fmt(post.engagement_synced_at)}</div>
           </div>
         )}
+
+        {/* Live comments from Facebook — first page on open, lazy-load on scroll */}
+        <CommentsSection post={post} />
       </aside>
     </div>
   );

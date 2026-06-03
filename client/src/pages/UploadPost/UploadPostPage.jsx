@@ -8,11 +8,18 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Button, Field, Modal, TimeSelect, ProgressBar } from '../../components/ui.jsx';
 import MediaDropzone from '../../components/MediaDropzone.jsx';
 
-const todayStr = () => {
+const pad2 = (n) => String(n).padStart(2, '0');
+const dateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const todayStr = () => dateStr(new Date());
+
+// Default schedule: today + the next :00/:30 slot after now (rounds the current
+// time up to the next half-hour; rolls to tomorrow if it's past 23:30).
+function nextSlot() {
   const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
+  if (d.getMinutes() < 30) d.setMinutes(30, 0, 0);
+  else d.setHours(d.getHours() + 1, 0, 0, 0);
+  return { date: dateStr(d), time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
+}
 
 export default function UploadPostPage() {
   const toast = useToast();
@@ -21,7 +28,7 @@ export default function UploadPostPage() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [caption, setCaption] = useState('');
-  const [schedule, setSchedule] = useState({ date: '', time: '' });
+  const [schedule, setSchedule] = useState(nextSlot);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState(null); // 'preparing' | 'uploading' | 'saving'
   const [progress, setProgress] = useState(0); // 0..100 for the S3 upload

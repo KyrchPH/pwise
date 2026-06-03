@@ -37,3 +37,10 @@ export async function slotAvailable(scheduledAt, excludeId) {
   });
   return data.data.available;
 }
+
+// A page of live Facebook comments for a published post. `after` is the paging
+// cursor (omit for the first page). Returns { comments, nextCursor }.
+export async function comments(id, after) {
+  const { data } = await api.get(`/post-pool/${id}/comments`, { params: after ? { after } : {} });
+  return data.data;
+}

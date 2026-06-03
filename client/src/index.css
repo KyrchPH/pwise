@@ -228,6 +228,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .badge--posted { color: var(--green-700); background: rgba(47, 180, 87, 0.16); }
 .badge--failed { color: var(--red-700); background: rgba(230, 59, 46, 0.13); }
 .badge--archived { color: #7d93a6; background: rgba(125, 147, 166, 0.14); }
+.badge--expired { color: #b4541e; background: rgba(180, 84, 30, 0.13); }
 .badge--success { color: var(--green-700); background: rgba(47, 180, 87, 0.16); }
 .badge--skipped { color: #b87400; background: rgba(245, 166, 35, 0.18); }
 
@@ -252,7 +253,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .nav__link:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .nav__link.active { background: #fff; color: var(--blue-700); box-shadow: 0 4px 12px rgba(15, 60, 95, 0.18); }
-.nav__icon { width: 18px; text-align: center; font-size: 1.05rem; }
+.nav__icon { width: 18px; display: inline-flex; align-items: center; justify-content: center; }
 .sidebar__foot { margin-top: auto; font-size: 0.76rem; color: rgba(255, 255, 255, 0.7); }
 .sidebar__footlink { color: #fff; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .sidebar__footlink:hover { color: var(--yellow); }
@@ -330,6 +331,16 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .post-stats__item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.98rem; font-weight: 800; color: var(--text); }
 .post-stats__item > span { font-size: 1.02rem; font-weight: 400; }
 .post-stats__synced { margin-top: 9px; font-size: 0.72rem; color: var(--faint); }
+
+/* Comments list in the post viewer — scrollable + lazy-loaded */
+.post-comments { margin-top: 18px; padding-top: 14px; border-top: 1.5px solid var(--border); }
+.post-comments__head { font-weight: 800; font-size: 0.95rem; margin-bottom: 10px; }
+.post-comments__list { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; padding-right: 6px; }
+.comment { background: #f1f8fe; border: 1px solid var(--border); border-radius: 12px; padding: 9px 12px; }
+.comment__body { font-size: 0.9rem; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.comment__time { margin-top: 4px; font-size: 0.72rem; color: var(--faint); }
+.post-comments__status { font-size: 0.8rem; color: var(--muted); text-align: center; padding: 6px 0; }
+.post-comments__status--error { color: var(--danger, #e63b2e); }
 
 @media (max-width: 720px) {
   .post-viewer { flex-direction: column; }

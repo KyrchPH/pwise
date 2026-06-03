@@ -2,12 +2,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
-// Load the shared root .env before any config module reads process.env.
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Load .env from the repo root (monorepo dev) AND from alongside server.js
-// (flat production deploy). dotenv won't override already-set vars, so first wins.
-dotenv.config({ path: resolve(__dirname, '../.env') });
-dotenv.config({ path: resolve(__dirname, '.env') });
+// Env precedence: server/.env (server-only — e.g. the Meta/Graph token) wins,
+// then the shared repo-root .env fills in the rest (DB, JWT, SERVICE_TOKEN, AWS —
+// shared with the scripts workspace). dotenv won't override already-set vars, so
+// the FIRST file to set a var wins. Both are also read in a flat production deploy.
+dotenv.config({ path: resolve(__dirname, '.env') }); // server/.env — server-specific, wins
+dotenv.config({ path: resolve(__dirname, '../.env') }); // repo root — shared fallback
 
 const { createApp } = await import('./src/app.js');
 const { env, validateEnv } = await import('./src/config/env.js');

@@ -25,7 +25,7 @@ async function graph(id, { method = 'GET', fields = {} } = {}) {
     throw new ApiError(502, `Facebook request failed: ${err.message}`);
   }
   const data = await res.json().catch(() => ({}));
-  return { ok: res.ok && !data.error, error: data.error || null };
+  return { ok: res.ok && !data.error, error: data.error || null, data };
 }
 
 // Delete a published post/video/photo by its platform id. A post that's already
@@ -48,4 +48,19 @@ export async function editCaption(platformPostId, mediaType, caption) {
   });
   if (ok) return { edited: true };
   throw new ApiError(502, `Couldn't update the caption on Facebook: ${error?.message || 'unknown error'}`);
+}
+
+// One page of comment content for a published post, oldest first. NOTE: Facebook
+// withholds the commenter's identity (`from`) for ordinary users even with
+// pages_read_user_content — verified 2026-06-03 that `from` is simply omitted
+// from the response (privacy) — so we surface message + time only.
+export async function listComments(platformPostId, { after = null, limit = 25 } = {}) {
+  const fields = { fields: 'message,created_time', order: 'chronological', limit: String(limit) };
+  if (after) fields.after = after;
+  const { ok, error, data } = await graph(`${platformPostId}/comments`, { fields });
+  if (!ok) throw new ApiError(502, `Couldn't load comments from Facebook: ${error?.message || 'unknown error'}`);
+  return {
+    comments: (data.data || []).map((c) => ({ id: c.id, message: c.message || '', created_time: c.created_time })),
+    nextCursor: data.paging?.next ? data.paging.cursors?.after ?? null : null,
+  };
 }
