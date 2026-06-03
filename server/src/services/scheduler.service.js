@@ -1,37 +1,12 @@
 import { query, getConnection } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
-import { isWithinWindow, minutesSince } from '../utils/date.util.js';
+import { minutesSince } from '../utils/date.util.js';
 import { createDownloadUrl } from './s3.service.js';
 import * as logsService from './logs.service.js';
 
 async function enabledUserIds() {
   const rows = await query('SELECT user_id FROM posting_settings WHERE is_enabled = 1');
   return rows.map((r) => Number(r.user_id));
-}
-
-// Users due by INTERVAL: enabled, inside the allowed window, interval elapsed
-// since the last post, and holding at least one UNSCHEDULED ready post.
-// Window math is done in Node (Intl) to avoid relying on DB timezone tables.
-async function intervalDueUserIds() {
-  const rows = await query(
-    `SELECT ps.user_id, ps.posting_interval_minutes, ps.allowed_start_time,
-            ps.allowed_end_time, ps.timezone,
-            (SELECT MAX(p.posted_at) FROM post_pool p
-               WHERE p.user_id = ps.user_id AND p.status = 'posted') AS last_posted_at,
-            (SELECT COUNT(*) FROM post_pool p
-               WHERE p.user_id = ps.user_id AND p.status = 'ready' AND p.scheduled_at IS NULL) AS ready_count
-     FROM posting_settings ps
-     WHERE ps.is_enabled = 1`,
-  );
-  const now = new Date();
-  const due = [];
-  for (const r of rows) {
-    if (Number(r.ready_count) === 0) continue;
-    if (!isWithinWindow(now, r.allowed_start_time, r.allowed_end_time, r.timezone)) continue;
-    if (minutesSince(r.last_posted_at) < Number(r.posting_interval_minutes)) continue;
-    due.push(Number(r.user_id));
-  }
-  return due;
 }
 
 // Atomically claim the single post matching `whereSql`/`orderBy`, mark it
@@ -71,40 +46,25 @@ async function claimAndLock(whereSql, params, orderBy) {
 }
 
 /**
- * Claim the next post to publish.
- *   Phase 1 — a DUE scheduled post (scheduled_at <= now), which overrides the
- *             allowed-window and interval (the user picked an exact time).
- *   Phase 2 — fallback: an UNSCHEDULED ready post, gated by the posting interval
- *             and allowed window (the original behavior).
+ * Claim the next post to publish: a DUE scheduled post (scheduled_at <= now) for
+ * an enabled user, earliest scheduled time first. Every post is scheduled to an
+ * exact date/time — there is no interval fallback.
  */
 export async function claimNext({ userId = null } = {}) {
   const enabled = await enabledUserIds();
 
-  // Phase 1: due scheduled posts, earliest scheduled time first.
   let schedUsers = enabled;
   if (userId != null) schedUsers = enabled.includes(Number(userId)) ? [Number(userId)] : [];
-  if (schedUsers.length) {
-    const claimed = await claimAndLock(
-      "status = 'ready' AND scheduled_at IS NOT NULL AND scheduled_at <= UTC_TIMESTAMP() AND user_id IN (?)",
-      [schedUsers],
-      'scheduled_at ASC, priority DESC, created_at ASC',
-    );
-    if (claimed) return { ...claimed, via: 'scheduled' };
+  if (!schedUsers.length) {
+    return { claimed: false, reason: 'no enabled users' };
   }
 
-  // Phase 2: interval fallback (unscheduled posts only).
-  const due = await intervalDueUserIds();
-  let intervalUsers = due;
-  if (userId != null) intervalUsers = due.includes(Number(userId)) ? [Number(userId)] : [];
-  if (!intervalUsers.length) {
-    return { claimed: false, reason: 'nothing due (no scheduled post ready, no interval match)' };
-  }
   const claimed = await claimAndLock(
-    "status = 'ready' AND scheduled_at IS NULL AND user_id IN (?)",
-    [intervalUsers],
-    'priority DESC, created_at ASC',
+    "status = 'ready' AND scheduled_at IS NOT NULL AND scheduled_at <= UTC_TIMESTAMP() AND user_id IN (?)",
+    [schedUsers],
+    'scheduled_at ASC, priority DESC, created_at ASC',
   );
-  return claimed ? { ...claimed, via: 'interval' } : { claimed: false, reason: 'no ready posts available' };
+  return claimed ? { ...claimed, via: 'scheduled' } : { claimed: false, reason: 'no scheduled post due' };
 }
 
 export async function markPosted(postId, { platformPostId = null, responseMessage = null, targetPlatform = null } = {}) {

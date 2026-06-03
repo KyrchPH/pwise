@@ -51,11 +51,11 @@ export default function UploadPostPage() {
       toast.error('Please write a caption');
       return;
     }
-    if ((schedule.date && !schedule.time) || (!schedule.date && schedule.time)) {
-      toast.error('Pick both a date and a time to schedule (or leave both blank)');
+    if (!schedule.date || !schedule.time) {
+      toast.error('Pick a date and time for this post');
       return;
     }
-    const scheduled_at = schedule.date && schedule.time ? new Date(`${schedule.date}T${schedule.time}`).toISOString() : null;
+    const scheduled_at = new Date(`${schedule.date}T${schedule.time}`).toISOString();
 
     setBusy(true);
     setProgress(0);
@@ -144,13 +144,13 @@ export default function UploadPostPage() {
             </Field>
 
             <div className="field">
-              <span className="field__label">Schedule (optional)</span>
+              <span className="field__label">Schedule</span>
               <div className="grid-2">
-                <input className="input" type="date" min={todayStr()} value={schedule.date} onChange={setSched('date')} />
+                <input className="input" type="date" min={todayStr()} value={schedule.date} onChange={setSched('date')} required />
                 <TimeSelect value={schedule.time} onChange={setSched('time')} date={schedule.date} />
               </div>
               <span className="field__hint">
-                Posts at this exact date/time (one post per slot). Times snap to :00 / :30. Leave blank to use the interval.
+                Posts at this exact date and time (one post per slot). Times snap to :00 / :30.
               </span>
             </div>
 

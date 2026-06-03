@@ -18,8 +18,6 @@ const TIMEZONES = [
   'Australia/Sydney',
 ];
 
-const hhmm = (t) => (t ? String(t).slice(0, 5) : '');
-
 export default function SettingsPage() {
   const toast = useToast();
   const [form, setForm] = useState(null);
@@ -32,9 +30,6 @@ export default function SettingsPage() {
       .then((s) =>
         setForm({
           is_enabled: !!s.is_enabled,
-          posting_interval_minutes: s.posting_interval_minutes,
-          allowed_start_time: hhmm(s.allowed_start_time),
-          allowed_end_time: hhmm(s.allowed_end_time),
           timezone: s.timezone,
           low_pool_alert_threshold: s.low_pool_alert_threshold,
           owner_email: s.owner_email || '',
@@ -53,9 +48,6 @@ export default function SettingsPage() {
     try {
       await settingsService.update({
         is_enabled: form.is_enabled,
-        posting_interval_minutes: Number(form.posting_interval_minutes) || 0,
-        allowed_start_time: form.allowed_start_time,
-        allowed_end_time: form.allowed_end_time,
         timezone: form.timezone,
         low_pool_alert_threshold: Number(form.low_pool_alert_threshold) || 0,
         owner_email: form.owner_email,
@@ -95,42 +87,15 @@ export default function SettingsPage() {
         </Card>
 
         <Card className="card--pad" style={{ marginBottom: 16 }}>
-          <div className="grid-2">
-            <Field label="Posting interval (minutes)" hint="e.g. 360 = every 6 hours">
-              <input
-                className="input"
-                type="number"
-                min="1"
-                value={form.posting_interval_minutes}
-                onChange={(e) => set('posting_interval_minutes', e.target.value)}
-              />
-            </Field>
-            <Field label="Timezone">
-              <select className="select" value={form.timezone} onChange={(e) => set('timezone', e.target.value)}>
-                {tzOptions.map((tz) => (
-                  <option key={tz} value={tz}>
-                    {tz}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Allowed start time">
-              <input
-                className="input"
-                type="time"
-                value={form.allowed_start_time}
-                onChange={(e) => set('allowed_start_time', e.target.value)}
-              />
-            </Field>
-            <Field label="Allowed end time">
-              <input
-                className="input"
-                type="time"
-                value={form.allowed_end_time}
-                onChange={(e) => set('allowed_end_time', e.target.value)}
-              />
-            </Field>
-          </div>
+          <Field label="Timezone">
+            <select className="select" value={form.timezone} onChange={(e) => set('timezone', e.target.value)}>
+              {tzOptions.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
+          </Field>
         </Card>
 
         <Card className="card--pad" style={{ marginBottom: 16 }}>

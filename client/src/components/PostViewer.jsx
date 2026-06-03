@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Linkify } from './ui.jsx';
+import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from './ui.jsx';
 
 const fmt = (iso) => {
   if (!iso) return '';
@@ -131,17 +131,17 @@ export default function PostViewer({ post, onClose, onEdit }) {
           <div className="post-stats">
             <div className="post-stats__row">
               <span className="post-stats__item" title="Reactions">
-                <span aria-hidden="true">❤️</span> {fmtNum(post.reactions_count)}
+                <HeartIcon size={16} />{fmtNum(post.reactions_count)}
               </span>
               <span className="post-stats__item" title="Comments">
-                <span aria-hidden="true">💬</span> {fmtNum(post.comments_count)}
+                <CommentIcon size={16} />{fmtNum(post.comments_count)}
               </span>
               <span className="post-stats__item" title="Shares">
-                <span aria-hidden="true">🔁</span> {fmtNum(post.shares_count)}
+                <ShareIcon size={16} />{fmtNum(post.shares_count)}
               </span>
               {post.media_type === 'video' && (
                 <span className="post-stats__item" title="Views">
-                  <span aria-hidden="true">▶️</span> {fmtNum(post.views_count)}
+                  <EyeIcon size={16} />{fmtNum(post.views_count)}
                 </span>
               )}
             </div>

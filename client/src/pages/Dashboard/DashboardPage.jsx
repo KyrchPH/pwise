@@ -16,15 +16,6 @@ const STAT_DEFS = [
   { key: 'draft', label: 'Drafts', color: 'var(--muted)' },
 ];
 
-function formatInterval(min) {
-  if (!min) return '—';
-  if (min % 1440 === 0) return `every ${min / 1440}d`;
-  if (min % 60 === 0) return `every ${min / 60}h`;
-  return `every ${min}m`;
-}
-
-const hhmm = (t) => (t ? String(t).slice(0, 5) : '—');
-
 export default function DashboardPage() {
   const toast = useToast();
   const { data, loading, error } = useCachedResource('dashboard', () =>
@@ -85,16 +76,6 @@ export default function DashboardPage() {
             </span>
           </div>
           <div className="card--pad col gap-sm">
-            <div className="row row--between">
-              <span className="text-muted">Interval (fallback)</span>
-              <strong>{formatInterval(settings.posting_interval_minutes)}</strong>
-            </div>
-            <div className="row row--between">
-              <span className="text-muted">Allowed window</span>
-              <strong>
-                {hhmm(settings.allowed_start_time)} – {hhmm(settings.allowed_end_time)}
-              </strong>
-            </div>
             <div className="row row--between">
               <span className="text-muted">Timezone</span>
               <strong>{settings.timezone}</strong>

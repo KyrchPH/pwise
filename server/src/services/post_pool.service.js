@@ -101,6 +101,7 @@ export async function create(userId, data = {}) {
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
   const schedule = normalizeScheduledAt(scheduled_at);
+  if (!schedule) throw ApiError.badRequest('a schedule date and time is required');
   await assertSlotFree(userId, schedule);
 
   const result = await query(
@@ -128,6 +129,7 @@ export async function update(userId, id, data = {}) {
     let value = data[key];
     if (key === 'scheduled_at') {
       value = normalizeScheduledAt(data.scheduled_at);
+      if (!value) throw ApiError.badRequest('a schedule date and time is required');
       await assertSlotFree(userId, value, id);
     }
     fields.push(`${key} = ?`);

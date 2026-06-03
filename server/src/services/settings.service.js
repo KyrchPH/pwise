@@ -14,9 +14,6 @@ export async function updateForUser(userId, data = {}) {
 
   const editable = [
     'is_enabled',
-    'posting_interval_minutes',
-    'allowed_start_time',
-    'allowed_end_time',
     'timezone',
     'low_pool_alert_threshold',
     'owner_email',

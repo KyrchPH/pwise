@@ -4,7 +4,7 @@ import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect } from '../../components/ui.jsx';
+import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
 
 const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived'];
@@ -171,10 +171,10 @@ export default function PostPoolPage() {
                 {post.scheduled_at && <div className="post-card__sched">📅 {fmtSched(post.scheduled_at)}</div>}
                 {post.engagement_synced_at && (
                   <div className="post-card__stats">
-                    <span title="Reactions">❤️ {fmtNum(post.reactions_count)}</span>
-                    <span title="Comments">💬 {fmtNum(post.comments_count)}</span>
-                    <span title="Shares">🔁 {fmtNum(post.shares_count)}</span>
-                    {post.media_type === 'video' && <span title="Views">▶️ {fmtNum(post.views_count)}</span>}
+                    <span title="Reactions"><HeartIcon size={14} />{fmtNum(post.reactions_count)}</span>
+                    <span title="Comments"><CommentIcon size={14} />{fmtNum(post.comments_count)}</span>
+                    <span title="Shares"><ShareIcon size={14} />{fmtNum(post.shares_count)}</span>
+                    {post.media_type === 'video' && <span title="Views"><EyeIcon size={14} />{fmtNum(post.views_count)}</span>}
                   </div>
                 )}
               </div>
