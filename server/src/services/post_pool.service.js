@@ -1,6 +1,7 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { createDownloadUrl, deleteObject } from './s3.service.js';
+import * as fb from './fb.service.js';
 
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived'];
 const ALLOWED_MEDIA = ['image', 'video'];
@@ -113,7 +114,7 @@ export async function create(userId, data = {}) {
 }
 
 export async function update(userId, id, data = {}) {
-  await getById(userId, id); // ownership + existence check
+  const existing = await getById(userId, id); // ownership + existence check
 
   const editable = ['caption', 'media_type', 'media_url', 's3_key', 'target_platform', 'status', 'priority', 'scheduled_at'];
   const fields = [];
@@ -135,6 +136,18 @@ export async function update(userId, id, data = {}) {
     fields.push(`${key} = ?`);
     params.push(value);
   }
+  // Push a caption change to Facebook for an already-published post, so an
+  // in-app edit keeps the live post in sync. Done before the local write so a
+  // Facebook failure aborts the update (no silent divergence).
+  if (
+    'caption' in data &&
+    data.caption !== existing.caption &&
+    existing.status === 'posted' &&
+    existing.platform_post_id
+  ) {
+    await fb.editCaption(existing.platform_post_id, existing.media_type, data.caption);
+  }
+
   if (fields.length) {
     params.push(id, userId);
     await query(`UPDATE post_pool SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, params);
@@ -144,6 +157,12 @@ export async function update(userId, id, data = {}) {
 
 export async function remove(userId, id) {
   const post = await getById(userId, id); // ownership + existence check (also gives s3_key)
+  // Delete the live Facebook post first (only published posts carry a platform
+  // id). A real FB failure throws and aborts, so the record stays and the user
+  // can retry; an already-deleted FB post is treated as success.
+  if (post.status === 'posted' && post.platform_post_id) {
+    await fb.deletePost(post.platform_post_id);
+  }
   await query('DELETE FROM post_pool WHERE id = ? AND user_id = ?', [id, userId]);
   if (post.s3_key) await deleteObject(post.s3_key); // best-effort: clean up the media in S3
   return { id: Number(id), deleted: true };

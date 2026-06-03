@@ -28,6 +28,13 @@ export const env = {
   },
   uploadUrlTtl: Number(process.env.UPLOAD_URL_TTL_SECONDS) || 300, // 5 min
   downloadUrlTtl: Number(process.env.DOWNLOAD_URL_TTL_SECONDS) || 3600, // 1 hr
+
+  // Facebook Page Graph API — used for USER-INITIATED delete/edit of already
+  // published posts. (n8n still owns publishing.) Token needs pages_manage_posts.
+  facebook: {
+    pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || '',
+    graphVersion: process.env.FB_GRAPH_VERSION || 'v21.0',
+  },
 };
 
 // Warn (don't crash) on missing config so the server still boots for partial use.
@@ -37,6 +44,7 @@ export function validateEnv(logger = console) {
   if (!env.jwtSecret) warnings.push('JWT_SECRET is not set — using an ephemeral dev secret (tokens reset on restart).');
   if (!env.serviceToken) warnings.push('SERVICE_TOKEN is not set — /api/scheduler/* endpoints are disabled (503).');
   if (!env.aws.bucket || !env.aws.region) warnings.push('AWS S3 not fully configured — upload + presigned URLs will fail.');
+  if (!env.facebook.pageAccessToken) warnings.push('FACEBOOK_PAGE_ACCESS_TOKEN is not set — deleting/editing published posts on Facebook will fail (503).');
   for (const w of warnings) logger.warn(`[env] ${w}`);
   return warnings;
 }
