@@ -31,6 +31,14 @@ export const comments = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+export const insights = asyncHandler(async (req, res) => {
+  const result = await service.insights(req.params.id, {
+    metric: req.query.metric,
+    granularity: req.query.granularity,
+  });
+  sendSuccess(res, result);
+});
+
 export const update = asyncHandler(async (req, res) => {
   const post = await service.update(req.params.id, req.body || {}, req.user);
   sendSuccess(res, { post });

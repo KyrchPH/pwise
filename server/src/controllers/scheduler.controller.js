@@ -1,6 +1,8 @@
 import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/scheduler.service.js';
+import * as postPool from '../services/post_pool.service.js';
+import * as analytics from '../services/analytics.service.js';
 
 // n8n: claim the next post to publish (atomic; returns a presigned media URL).
 export const claim = asyncHandler(async (req, res) => {
@@ -35,4 +37,12 @@ export const poolStatus = asyncHandler(async (req, res) => {
 export const alertSent = asyncHandler(async (req, res) => {
   const result = await service.markAlertSent(req.params.id);
   sendSuccess(res, result);
+});
+
+// n8n: record an hourly engagement snapshot for recently-published posts (for the
+// Insights graph). Batched + scoped server-side; n8n just triggers this on a schedule.
+export const insightsSnapshot = asyncHandler(async (req, res) => {
+  const posts = await postPool.snapshotRecentInsights();
+  const page = await analytics.refreshPageInsights(7); // also refresh page-level metrics
+  sendSuccess(res, { posts, page });
 });

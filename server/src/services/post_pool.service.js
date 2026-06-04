@@ -12,6 +12,15 @@ const ALLOWED_MEDIA = ['image', 'video'];
 // the background revalidate) don't re-hit Graph.
 const ENGAGEMENT_TTL_MS = 5 * 60 * 1000;
 
+// Insight metric → the snapshot/post column it maps to (whitelist; the value is
+// interpolated into SQL, so it MUST only ever come from here).
+const INSIGHT_METRICS = {
+  reactions: 'reactions_count',
+  comments: 'comments_count',
+  shares: 'shares_count',
+  views: 'views_count',
+};
+
 function engagementStale(syncedAt) {
   if (!syncedAt) return true;
   const t = new Date(syncedAt).getTime();
@@ -291,6 +300,8 @@ export async function refreshEngagement(posts = []) {
         WHERE id = ?`,
       [reactions, comments, shares, views, p.id],
     );
+    // Record this hour's snapshot so insights can be plotted over time.
+    await recordInsightSnapshot(p.id, { reactions, comments, shares, views });
     Object.assign(p, {
       reactions_count: reactions,
       comments_count: comments,
@@ -300,4 +311,113 @@ export async function refreshEngagement(posts = []) {
     });
   }
   return posts;
+}
+
+// Time-series for one metric of one post, from the recorded snapshots.
+// granularity: 'hour' (raw hourly points, returned as ISO-UTC so the client can
+// localize) | 'day' | 'month' (aggregated — peak per bucket; counts are ~monotonic
+// so peak ≈ end-of-bucket). Refreshes the post first (best-effort) so the current
+// point exists when the drawer opens.
+export async function insights(postId, { metric = 'reactions', granularity = 'day' } = {}) {
+  const col = INSIGHT_METRICS[metric];
+  if (!col) throw ApiError.badRequest(`invalid metric (one of: ${Object.keys(INSIGHT_METRICS).join(', ')})`);
+
+  const post = await getById(postId); // 404 if missing; full row for the refresh
+  await refreshEngagement([post]); // best-effort fresh pull + this hour's snapshot
+
+  let rows;
+  if (granularity === 'hour') {
+    rows = await query(
+      `SELECT DATE_FORMAT(captured_at, '%Y-%m-%dT%H:00:00Z') AS period, ${col} AS value
+         FROM post_insight_history
+        WHERE post_id = ? AND ${col} IS NOT NULL
+        ORDER BY captured_at ASC`,
+      [postId],
+    );
+  } else if (granularity === 'month') {
+    rows = await query(
+      `SELECT DATE_FORMAT(captured_at, '%Y-%m') AS period, MAX(${col}) AS value
+         FROM post_insight_history
+        WHERE post_id = ? AND ${col} IS NOT NULL
+        GROUP BY period
+        ORDER BY period ASC`,
+      [postId],
+    );
+  } else {
+    rows = await query(
+      `SELECT DATE_FORMAT(captured_at, '%Y-%m-%d') AS period, MAX(${col}) AS value
+         FROM post_insight_history
+        WHERE post_id = ? AND ${col} IS NOT NULL
+        GROUP BY period
+        ORDER BY period ASC`,
+      [postId],
+    );
+  }
+
+  const g = granularity === 'hour' ? 'hour' : granularity === 'month' ? 'month' : 'day';
+  return { metric, granularity: g, points: rows.map((r) => ({ period: r.period, value: Number(r.value) })) };
+}
+
+// Upsert this hour's engagement snapshot for a post. Best-effort: a missing table
+// or write error must never break the caller (refresh / scheduled snapshot).
+async function recordInsightSnapshot(postId, { reactions, comments, shares, views }) {
+  try {
+    await query(
+      `INSERT INTO post_insight_history (post_id, captured_at, reactions_count, comments_count, shares_count, views_count)
+            VALUES (?, DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:00:00'), ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+            reactions_count = COALESCE(VALUES(reactions_count), reactions_count),
+            comments_count  = COALESCE(VALUES(comments_count), comments_count),
+            shares_count    = COALESCE(VALUES(shares_count), shares_count),
+            views_count     = COALESCE(VALUES(views_count), views_count)`,
+      [postId, reactions, comments, shares, views],
+    );
+  } catch {
+    /* history is auxiliary — never break the caller */
+  }
+}
+
+// Scheduled snapshot (called by n8n via /api/scheduler/insights/snapshot): pull
+// fresh engagement for recently-published posts in one batch and record this
+// hour's point for each. Scoped to the last FRESH_INSIGHT_DAYS days — older posts
+// barely move, so their history is left frozen.
+const FRESH_INSIGHT_DAYS = 7;
+export async function snapshotRecentInsights() {
+  const rows = await query(
+    `SELECT id, platform_post_id, parent_post_id, media_type,
+            reactions_count, comments_count, shares_count, views_count
+       FROM post_pool
+      WHERE status = 'posted' AND platform_post_id IS NOT NULL
+        AND posted_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? DAY)
+      ORDER BY posted_at DESC`,
+    [FRESH_INSIGHT_DAYS],
+  );
+  if (!rows.length) return { scanned: 0, recorded: 0 };
+
+  let counts;
+  try {
+    counts = await fb.fetchEngagementBatch(rows); // batched (≤50/call) internally
+  } catch {
+    return { scanned: rows.length, recorded: 0, error: 'facebook unreachable' };
+  }
+
+  let recorded = 0;
+  for (const p of rows) {
+    const c = counts.get(p.id);
+    if (!c) continue;
+    const reactions = c.reactions ?? p.reactions_count ?? null;
+    const comments = c.comments ?? p.comments_count ?? null;
+    const shares = c.shares ?? p.shares_count ?? null;
+    const views = c.views ?? p.views_count ?? null;
+    await query(
+      `UPDATE post_pool
+          SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
+              engagement_synced_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [reactions, comments, shares, views, p.id],
+    );
+    await recordInsightSnapshot(p.id, { reactions, comments, shares, views });
+    recorded += 1;
+  }
+  return { scanned: rows.length, recorded };
 }

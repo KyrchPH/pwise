@@ -11,6 +11,9 @@ import logsRoutes from './routes/logs.routes.js';
 import schedulerRoutes from './routes/scheduler.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import activityRoutes from './routes/activity.routes.js';
+import contentNotesRoutes from './routes/content_notes.routes.js';
+import analyticsRoutes from './routes/analytics.routes.js';
+import creatomateRoutes from './routes/creatomate.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -38,6 +41,9 @@ export function createApp() {
   app.use('/api/logs', revalidate, logsRoutes);
   app.use('/api/admin', revalidate, adminRoutes);
   app.use('/api/activity', revalidate, activityRoutes);
+  app.use('/api/content-notes', revalidate, contentNotesRoutes);
+  app.use('/api/analytics', revalidate, analyticsRoutes);
+  app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
 
   // Machine-facing (service-token) routes for n8n.
   app.use('/api/scheduler', schedulerRoutes);

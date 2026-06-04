@@ -169,3 +169,31 @@ export async function fetchEngagementBatch(posts = []) {
   });
   return out;
 }
+
+// Daily page-level insight time-series from the Graph Insights API (Meta serves
+// the history). `metrics` is an array of metric names; returns
+// { [metricName]: [{ date: 'YYYY-MM-DD', value }] }. Throws on a Graph error.
+export async function fetchPageInsights(metrics = [], since, until) {
+  if (!env.facebook.pageId) throw new ApiError(503, 'Facebook page is not configured (FACEBOOK_PAGE_ID missing)');
+  const fields = { metric: metrics.join(','), period: 'day' };
+  if (since) fields.since = String(since);
+  if (until) fields.until = String(until);
+  const { ok, error, data } = await graph(`${env.facebook.pageId}/insights`, { fields });
+  if (!ok) throw new ApiError(502, `Couldn't read page insights: ${error?.message || 'unknown error'}`);
+  const out = {};
+  for (const m of data.data || []) {
+    out[m.name] = (m.values || []).map((v) => ({
+      date: String(v.end_time || '').slice(0, 10),
+      value: typeof v.value === 'number' ? v.value : 0,
+    }));
+  }
+  return out;
+}
+
+// Current follower/fan count + name from the Page object. null on error.
+export async function fetchPageProfile() {
+  if (!env.facebook.pageId) return null;
+  const { ok, data } = await graph(env.facebook.pageId, { fields: { fields: 'name,fan_count,followers_count' } });
+  if (!ok) return null;
+  return { name: data.name ?? null, fans: data.fan_count ?? null, followers: data.followers_count ?? null };
+}

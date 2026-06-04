@@ -11,6 +11,7 @@ router.get('/counts', ctrl.counts); // before /:id so it isn't captured as an id
 router.get('/slot', ctrl.checkSlot); // before /:id; pre-flight slot availability
 router.get('/:id', ctrl.get);
 router.get('/:id/comments', ctrl.comments); // live Facebook comments (paged / lazy)
+router.get('/:id/insights', ctrl.insights); // per-day/month engagement series for the graph
 router.patch('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);
 
