@@ -137,12 +137,73 @@ CREATE TABLE IF NOT EXISTS post_activity_log (
   post_id    INT NULL,
   user_id    INT NULL,
   user_name  VARCHAR(255),
+  note_id    INT NULL,                      -- set instead of post_id for content-note actions
   action     VARCHAR(20) NOT NULL,
   details    TEXT,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_activity_post FOREIGN KEY (post_id) REFERENCES post_pool(id) ON DELETE SET NULL,
   CONSTRAINT fk_activity_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT chk_activity_action CHECK (action IN ('created','edited','deleted')),
+  CONSTRAINT chk_activity_action CHECK (action IN ('created','edited','deleted','tagged')),
   INDEX idx_activity_created (created_at DESC),
   INDEX idx_activity_post (post_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- content_notes — per-day content planning behind the calendar -----------------
+-- Each row is one planning note attached to a calendar day. Shared pool (every
+-- signed-in user sees/edits all notes); user_id/user_name record the author.
+CREATE TABLE IF NOT EXISTS content_notes (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  note_date  DATE NOT NULL,
+  content    TEXT NOT NULL,
+  status     VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending | ongoing | completed | cancelled
+  user_id    INT NULL,
+  user_name  VARCHAR(255),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_content_notes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT chk_content_notes_status CHECK (status IN ('pending','ongoing','completed','cancelled')),
+  INDEX idx_content_notes_date (note_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- post_insight_history — one engagement snapshot per post per HOUR ------------
+-- Facebook returns only current totals, so we record snapshots (pulled during
+-- the engagement refresh and by the scheduled snapshot job) to plot insights
+-- over time. Forward-only. captured_at is truncated to the hour; Day/Month
+-- views aggregate the hourly points.
+CREATE TABLE IF NOT EXISTS post_insight_history (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  post_id         INT NOT NULL,
+  captured_at     DATETIME NOT NULL,
+  reactions_count INT NULL,
+  comments_count  INT NULL,
+  shares_count    INT NULL,
+  views_count     INT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_insight_post_hour (post_id, captured_at),
+  CONSTRAINT fk_insight_post FOREIGN KEY (post_id) REFERENCES post_pool(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- page_insight_daily — daily page-level metrics (Analytics dashboard) ----------
+-- Generic metric/value-by-day: reach, impressions, post reach, engagement,
+-- follows, unfollows. Backfilled from the Graph Insights API, refreshed forward.
+CREATE TABLE IF NOT EXISTS page_insight_daily (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  captured_on DATE NOT NULL,
+  metric      VARCHAR(64) NOT NULL,
+  value       BIGINT NOT NULL DEFAULT 0,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_page_insight_day_metric (captured_on, metric),
+  INDEX idx_page_insight_metric (metric, captured_on)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- creatomate_templates — reusable video render configs (Settings) --------------
+CREATE TABLE IF NOT EXISTS creatomate_templates (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  name        VARCHAR(255) NOT NULL,
+  config      LONGTEXT NOT NULL,
+  user_id     INT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_creatomate_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
