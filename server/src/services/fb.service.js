@@ -28,6 +28,32 @@ async function graph(id, { method = 'GET', fields = {} } = {}) {
   return { ok: res.ok && !data.error, error: data.error || null, data };
 }
 
+// POST a Graph API batch (array of { method, relative_url }, up to 50) in ONE
+// HTTP call. The page token rides in the form body and every sub-request inherits
+// it. Returns the raw results array [{ code, body }, …] where `body` is a JSON
+// string. Throws on a transport or top-level error (e.g. a bad token comes back
+// as an error object, not an array).
+async function graphBatch(ops) {
+  if (!env.facebook.pageAccessToken) {
+    throw new ApiError(503, 'Facebook is not configured (FACEBOOK_PAGE_ACCESS_TOKEN missing)');
+  }
+  const body = new URLSearchParams({
+    access_token: env.facebook.pageAccessToken,
+    batch: JSON.stringify(ops),
+  });
+  let res;
+  try {
+    res = await fetch(`https://graph.facebook.com/${env.facebook.graphVersion}/`, { method: 'POST', body });
+  } catch (err) {
+    throw new ApiError(502, `Facebook batch request failed: ${err.message}`);
+  }
+  const data = await res.json().catch(() => null);
+  if (!Array.isArray(data)) {
+    throw new ApiError(502, `Facebook batch failed: ${data?.error?.message || 'unexpected response'}`);
+  }
+  return data;
+}
+
 // Delete a published post/video/photo by its platform id. A post that's already
 // gone on Facebook is treated as success so the local record can still be removed.
 export async function deletePost(platformPostId) {
@@ -88,4 +114,58 @@ export async function resolveParentPostId(platformPostId) {
     /* best-effort — leave null, backfill later */
   }
   return null;
+}
+
+// Read engagement for a set of published posts in ONE Graph batch (≤50 sub-
+// requests). Reactions/comments/shares come from the feed story ({page}_{post});
+// video views live on the video object, so a video adds a second sub-request.
+// Best-effort: a failed sub-request is skipped (caller keeps the last-known value)
+// rather than throwing. Returns Map<postId, { reactions?, comments?, shares?,
+// views? }> — a key is present only when that metric was read successfully.
+export async function fetchEngagementBatch(posts = []) {
+  const subs = []; // parallel to ops: { postId, kind, isFeed }
+  const ops = [];
+  for (const p of posts) {
+    const feedId = p.parent_post_id || p.platform_post_id;
+    if (feedId) {
+      const isFeed = String(feedId).includes('_'); // only feed stories expose `shares`
+      const fields = isFeed
+        ? 'reactions.summary(true).limit(0),comments.summary(true).limit(0),shares'
+        : 'reactions.summary(true).limit(0),comments.summary(true).limit(0)';
+      subs.push({ postId: p.id, kind: 'engagement', isFeed });
+      ops.push({ method: 'GET', relative_url: `${feedId}?fields=${encodeURIComponent(fields)}` });
+    }
+    if (p.media_type === 'video' && p.platform_post_id) {
+      subs.push({ postId: p.id, kind: 'views' });
+      ops.push({ method: 'GET', relative_url: `${p.platform_post_id}?fields=views` });
+    }
+  }
+  if (!ops.length) return new Map();
+
+  const results = await graphBatch(ops);
+  const out = new Map();
+  const bucket = (id) => {
+    if (!out.has(id)) out.set(id, {});
+    return out.get(id);
+  };
+  results.forEach((r, i) => {
+    const sub = subs[i];
+    if (!sub || !r || r.code >= 400 || !r.body) return; // sub-request failed → skip
+    let payload;
+    try {
+      payload = JSON.parse(r.body);
+    } catch {
+      return;
+    }
+    if (!payload || payload.error) return;
+    const b = bucket(sub.postId);
+    if (sub.kind === 'engagement') {
+      if (payload.reactions?.summary) b.reactions = payload.reactions.summary.total_count ?? 0;
+      if (payload.comments?.summary) b.comments = payload.comments.summary.total_count ?? 0;
+      if (sub.isFeed) b.shares = payload.shares?.count ?? 0; // `shares` is omitted when zero
+    } else if (sub.kind === 'views' && payload.views != null) {
+      b.views = Number(payload.views);
+    }
+  });
+  return out;
 }

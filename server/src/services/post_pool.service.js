@@ -7,6 +7,17 @@ import * as activity from './activity.service.js';
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
 const ALLOWED_MEDIA = ['image', 'video'];
 
+// Engagement counts older than this are re-read from Facebook when a post is
+// viewed; within the window the cached numbers are served, so rapid reloads (or
+// the background revalidate) don't re-hit Graph.
+const ENGAGEMENT_TTL_MS = 5 * 60 * 1000;
+
+function engagementStale(syncedAt) {
+  if (!syncedAt) return true;
+  const t = new Date(syncedAt).getTime();
+  return Number.isNaN(t) || Date.now() - t >= ENGAGEMENT_TTL_MS;
+}
+
 // Validate an optional schedule datetime. Must be a valid instant on a :00 or
 // :30 boundary. Returns a Date (stored UTC) or null. Empty clears the schedule.
 function normalizeScheduledAt(value) {
@@ -77,12 +88,17 @@ export async function list({ status, scheduled, limit = 50, offset = 0 } = {}) {
     params.push(status);
   }
   if (truthy(scheduled)) where.push('scheduled_at IS NOT NULL');
-  let sql = 'SELECT * FROM post_pool';
-  if (where.length) sql += ' WHERE ' + where.join(' AND ');
-  sql += ' ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?';
-  params.push(Number(limit) || 50, Number(offset) || 0);
-  const rows = await query(sql, params);
-  return Promise.all(rows.map(withMediaPreview));
+  const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+
+  // Total for the same filter, so the client can paginate (page X of Y).
+  const [{ total }] = await query(`SELECT COUNT(*) AS total FROM post_pool${whereSql}`, params);
+
+  const rows = await query(
+    `SELECT * FROM post_pool${whereSql} ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?`,
+    [...params, Number(limit) || 50, Number(offset) || 0],
+  );
+  const posts = await Promise.all(rows.map(withMediaPreview));
+  return { posts, total: Number(total) };
 }
 
 export async function getById(id) {
@@ -228,4 +244,60 @@ export async function counts() {
     out.total += Number(r.count);
   }
   return out;
+}
+
+// Refresh engagement for the published posts in `posts` straight from Facebook (one
+// Graph batch) and persist the new counts. Bounded to whatever's passed in — one
+// page of the pool — so cost stays flat no matter how big the pool grows. Stale-
+// only (TTL) so repeat views are cheap, and best-effort throughout: any failure
+// leaves the last-known counts untouched. Mutates and returns the same `posts`.
+export async function refreshEngagement(posts = []) {
+  const stale = posts.filter(
+    (p) => p.status === 'posted' && p.platform_post_id && engagementStale(p.engagement_synced_at),
+  );
+  if (!stale.length) return posts;
+
+  // Backfill any missing feed-story id so `shares` can be read (only a freshly
+  // posted video lacks it; bounded to this page, usually a no-op).
+  for (const p of stale) {
+    if (!p.parent_post_id) {
+      const parent = await fb.resolveParentPostId(p.platform_post_id).catch(() => null);
+      if (parent) {
+        await query('UPDATE post_pool SET parent_post_id = ? WHERE id = ?', [parent, p.id]);
+        p.parent_post_id = parent;
+      }
+    }
+  }
+
+  let counts;
+  try {
+    counts = await fb.fetchEngagementBatch(stale);
+  } catch {
+    return posts; // platform unreachable / not configured — keep cached numbers
+  }
+
+  for (const p of stale) {
+    const c = counts.get(p.id);
+    if (!c) continue; // every metric failed for this post → leave it as-is
+    // Merge: a metric that came back wins; one that didn't keeps its last value.
+    const reactions = c.reactions ?? p.reactions_count ?? null;
+    const comments = c.comments ?? p.comments_count ?? null;
+    const shares = c.shares ?? p.shares_count ?? null;
+    const views = c.views ?? p.views_count ?? null;
+    await query(
+      `UPDATE post_pool
+          SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
+              engagement_synced_at = UTC_TIMESTAMP()
+        WHERE id = ?`,
+      [reactions, comments, shares, views, p.id],
+    );
+    Object.assign(p, {
+      reactions_count: reactions,
+      comments_count: comments,
+      shares_count: shares,
+      views_count: views,
+      engagement_synced_at: new Date().toISOString(),
+    });
+  }
+  return posts;
 }

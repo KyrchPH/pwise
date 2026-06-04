@@ -94,7 +94,7 @@ export async function markPosted(postId, { platformPostId = null, responseMessag
 
   // Resolve the {page}_{post} feed id now so shares can be read per-post later.
   // Best-effort: a video's feed story may not be indexed yet (then it's null and
-  // pendingEngagement backfills it on the first sync).
+  // the next engagement refresh backfills it).
   const parentPostId = await fb.resolveParentPostId(platformPostId);
   await query(
     "UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP(), platform_post_id = ?, parent_post_id = ? WHERE id = ?",
@@ -165,46 +165,7 @@ export async function markAlertSent(userId) {
   return { user_id: Number(userId), alert_sent_at: new Date().toISOString() };
 }
 
-// Published posts (with a platform id) whose engagement the n8n sync flow should
-// refresh from the platform. Most-recently-posted first.
-export async function pendingEngagement(limit = 50) {
-  // The engagement sync runs on its own schedule (≈hourly), independent of the
-  // publish poll, so run the expiry sweep here too — overdue posts still get
-  // cleared even if the publish workflow is paused/deactivated. Cheap, once per sync.
-  await expireOverdue();
-  const posts = await query(
-    `SELECT id, platform_post_id, parent_post_id, media_type, posted_at
-       FROM post_pool
-      WHERE status = 'posted' AND platform_post_id IS NOT NULL
-      ORDER BY posted_at DESC
-      LIMIT ?`,
-    [Number(limit) || 50],
-  );
-  // Backfill any missing parent_post_id (e.g. a video whose feed story wasn't
-  // indexed yet at mark-posted time). Resolved once, then cached on the row.
-  for (const p of posts) {
-    if (!p.parent_post_id && p.platform_post_id) {
-      const parent = await fb.resolveParentPostId(p.platform_post_id);
-      if (parent) {
-        await query('UPDATE post_pool SET parent_post_id = ? WHERE id = ?', [parent, p.id]);
-        p.parent_post_id = parent;
-      }
-    }
-  }
-  return posts;
-}
-
-// Store engagement counts pulled from the platform (called by n8n). Any missing
-// metric is stored as NULL.
-export async function saveEngagement(postId, { reactions, comments, shares, views } = {}) {
-  const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
-  const result = await query(
-    `UPDATE post_pool
-        SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
-            engagement_synced_at = UTC_TIMESTAMP()
-      WHERE id = ?`,
-    [num(reactions), num(comments), num(shares), num(views), postId],
-  );
-  if (!result.affectedRows) throw ApiError.notFound('post not found');
-  return (await query('SELECT * FROM post_pool WHERE id = ?', [postId]))[0];
-}
+// NOTE: engagement is no longer swept here. The Post Pool page refreshes the
+// engagement of the posts it actually displays, on view, in one Graph batch —
+// see post_pool.service.refreshEngagement(). That keeps Graph cost proportional
+// to what's on screen instead of growing with the whole published history.

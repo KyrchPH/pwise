@@ -127,7 +127,7 @@ export default function AccountsPage() {
               <div className="card__title">Accounts ({users.length})</div>
             </div>
             <div className="table-wrap">
-              <table className="table">
+              <table className="table table--stack">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -144,13 +144,13 @@ export default function AccountsPage() {
                     const deleted = !!u.deleted_at;
                     return (
                       <tr key={u.id}>
-                        <td>{u.name}</td>
-                        <td className="cell-muted">{u.email}</td>
-                        <td>
+                        <td data-label="Name">{u.name}</td>
+                        <td className="cell-muted" data-label="Email">{u.email}</td>
+                        <td data-label="Role">
                           <span className={`badge badge--${u.role === 'admin' ? 'posted' : 'draft'}`}>{u.role}</span>
                         </td>
-                        <td>{statusBadge(u)}</td>
-                        <td className="cell-muted">{fmt(u.created_at)}</td>
+                        <td data-label="Status">{statusBadge(u)}</td>
+                        <td className="cell-muted" data-label="Joined">{fmt(u.created_at)}</td>
                         <td>
                           <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
                             <Button
@@ -182,7 +182,7 @@ export default function AccountsPage() {
               <EmptyState icon="🔗" title="No invites yet" message="Generate a login link to invite someone." />
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="table table--stack">
                   <thead>
                     <tr>
                       <th>Created by</th>
@@ -198,16 +198,16 @@ export default function AccountsPage() {
                       const link = `${window.location.origin}/signup?token=${inv.token}`;
                       return (
                         <tr key={inv.id}>
-                          <td className="cell-muted">{inv.created_by_email}</td>
-                          <td>
+                          <td className="cell-muted" data-label="Created by">{inv.created_by_email}</td>
+                          <td data-label="Status">
                             {used ? (
                               <span className="badge badge--posted">used</span>
                             ) : (
                               <span className="badge badge--ready">unused</span>
                             )}
                           </td>
-                          <td className="cell-muted">{inv.used_by_email || '—'}</td>
-                          <td className="cell-muted">{fmt(inv.created_at)}</td>
+                          <td className="cell-muted" data-label="Used by">{inv.used_by_email || '—'}</td>
+                          <td className="cell-muted" data-label="Created">{fmt(inv.created_at)}</td>
                           <td>
                             <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
                               {!used && (

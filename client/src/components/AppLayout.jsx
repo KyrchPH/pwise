@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Button, Logo } from './ui.jsx';
@@ -121,9 +122,22 @@ export default function AppLayout() {
   const title = TITLES[pathname] || 'pwise';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
 
+  // Mobile nav drawer: closes on navigation and on Escape.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => setNavOpen(false), [pathname]);
+  useEffect(() => {
+    if (!navOpen) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setNavOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar${navOpen ? ' is-open' : ''}`}>
+        <button className="sidebar__close" onClick={() => setNavOpen(false)} aria-label="Close menu">
+          ✕
+        </button>
         <div className="sidebar__logo">
           <Logo height={54} />
         </div>
@@ -147,9 +161,20 @@ export default function AppLayout() {
         </div>
       </aside>
 
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+
       <div className="main">
         <header className="topbar">
-          <div className="topbar__title">{title}</div>
+          <div className="topbar__left">
+            <button className="topbar__menu" onClick={() => setNavOpen(true)} aria-label="Open menu">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+            <div className="topbar__title">{title}</div>
+          </div>
           <div className="user-chip">
             <div className="avatar">{initials}</div>
             <div className="col" style={{ lineHeight: 1.2 }}>

@@ -1,8 +1,10 @@
 import api from './api.js';
 
+// Returns { posts, total }. Pass { refresh: 1 } to have the server re-read this
+// page's engagement from Facebook (stale-only) before responding.
 export async function list(params = {}) {
   const { data } = await api.get('/post-pool', { params });
-  return data.data.posts;
+  return data.data; // { posts, total }
 }
 
 export async function get(id) {

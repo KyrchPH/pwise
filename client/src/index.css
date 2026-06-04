@@ -276,6 +276,31 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .content { padding: 28px; max-width: 1200px; width: 100%; }
 
+/* --- Mobile nav controls (hamburger + off-canvas drawer + backdrop) ---
+   Hidden on desktop; the responsive block at the bottom switches them on. */
+.topbar__left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar__menu {
+  display: none; flex-shrink: 0; width: 40px; height: 40px; border-radius: 12px;
+  border: 1.5px solid var(--border); background: var(--surface); color: var(--text);
+  cursor: pointer; place-items: center; transition: background 0.15s ease;
+}
+.topbar__menu:hover { background: var(--surface-2); }
+.topbar__menu:focus-visible { outline: none; box-shadow: var(--ring); }
+.sidebar__close {
+  display: none; position: absolute; top: 14px; right: 14px; z-index: 2;
+  width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 1rem; place-items: center;
+  transition: background 0.12s ease;
+}
+.sidebar__close:hover { background: rgba(255, 255, 255, 0.32); }
+.nav-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 55;
+  background: rgba(15, 60, 95, 0.45);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: fade 0.15s ease;
+}
+/* Let inputs/selects shrink inside flex rows instead of forcing overflow. */
+.row > .input, .row > .select { min-width: 0; }
+
 /* --- Grids / stats --- */
 .grid { display: grid; gap: 16px; }
 .grid--stats { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
@@ -388,6 +413,10 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .chip { border: none; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 0.83rem; font-weight: 700; padding: 7px 15px; border-radius: 999px; text-transform: capitalize; transition: background 0.15s ease, color 0.15s ease; }
 .chip:hover { color: var(--text); background: var(--surface-2); }
 .chip.active { background: linear-gradient(180deg, #45b0f2, var(--blue)); color: #fff; box-shadow: 0 3px 8px rgba(31, 155, 230, 0.3); }
+
+/* --- Pagination --- */
+.pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 22px; }
+.pagination__info { font-size: 14px; font-weight: 600; color: var(--muted); }
 
 /* --- Page header --- */
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
@@ -625,11 +654,71 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 /* --- Responsive --- */
 @media (max-width: 820px) {
   .app-shell { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; gap: 14px; padding: 12px 16px; overflow-x: auto; }
+
+  /* Sidebar becomes an off-canvas drawer, toggled by the topbar hamburger. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; height: 100%; width: min(82vw, 300px);
+    z-index: 60; padding: 26px 16px 22px; overflow-y: auto;
+    transform: translateX(-100%); transition: transform 0.24s ease;
+    box-shadow: 0 0 50px rgba(15, 60, 95, 0.4);
+  }
+  .sidebar.is-open { transform: translateX(0); }
   .sidebar::before { display: none; }
-  .sidebar .brand { flex-shrink: 0; }
-  .nav { flex-direction: row; gap: 4px; }
-  .sidebar__foot { display: none; }
+  .sidebar__close { display: grid; }
+  .nav-backdrop { display: block; }
+  .topbar__menu { display: inline-grid; }
+
+  .topbar { height: 60px; padding: 0 16px; gap: 10px; }
+  .topbar__title { font-size: 1.1rem; }
   .content { padding: 18px; }
   .grid-2 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .content { padding: 14px; }
+  .page-head { gap: 12px; margin-bottom: 18px; }
+  .page-head__title { font-size: 1.4rem; }
+
+  /* Keep stat cards two-up rather than one tall column. */
+  .grid--stats { grid-template-columns: 1fr 1fr; }
+  .stat { padding: 16px; }
+  .stat__value { font-size: 1.8rem; }
+
+  /* Drop the name/email text — the avatar (initials) still shows who's in. */
+  .user-chip .col { display: none; }
+
+  .toaster { left: 12px; right: 12px; bottom: 12px; max-width: none; }
+  .overlay { padding: 12px; }
+  .modal__foot { padding: 14px 18px; }
+
+  .calendar__grid { gap: 5px; }
+  .calendar__cell { min-height: 46px; padding: 5px; }
+  .calendar__day { width: 22px; height: 22px; font-size: 0.78rem; }
+  .calendar__legend { gap: 12px; }
+
+  .auth { padding: 16px; }
+  .auth__card { padding: 48px 22px 28px; }
+}
+
+/* Stacked-card tables: below 640px each row becomes a labelled card, so the
+   data tables no longer need horizontal scrolling to be read. Each <td> shows
+   its column name via data-label; action cells omit the label. */
+@media (max-width: 640px) {
+  .table--stack thead { display: none; }
+  .table--stack, .table--stack tbody, .table--stack tr, .table--stack td { display: block; width: 100%; }
+  .table--stack tr {
+    background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-sm);
+    padding: 4px 14px; margin-bottom: 12px;
+  }
+  .table--stack td {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 10px 0; border-bottom: 1px solid var(--border); text-align: right; white-space: normal;
+  }
+  .table--stack td:last-child { border-bottom: none; }
+  .table--stack td::before {
+    content: attr(data-label); flex-shrink: 0; text-align: left;
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+  }
+  .table--stack td:empty { display: none; }
+  .table--stack .cell-truncate { max-width: none; overflow: visible; text-overflow: clip; white-space: normal; }
 }

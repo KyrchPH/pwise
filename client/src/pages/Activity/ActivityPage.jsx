@@ -54,7 +54,7 @@ export default function ActivityPage() {
       ) : (
         <Card>
           <div className="table-wrap">
-            <table className="table">
+            <table className="table table--stack">
               <thead>
                 <tr>
                   <th>When</th>
@@ -68,12 +68,12 @@ export default function ActivityPage() {
                   const meta = ACTION[a.action] || { label: a.action, badge: 'draft' };
                   return (
                     <tr key={a.id}>
-                      <td className="cell-muted">{fmt(a.created_at)}</td>
-                      <td>{a.user_name || '—'}</td>
-                      <td>
+                      <td className="cell-muted" data-label="When">{fmt(a.created_at)}</td>
+                      <td data-label="User">{a.user_name || '—'}</td>
+                      <td data-label="Action">
                         <span className={`badge badge--${meta.badge}`}>{meta.label}</span>
                       </td>
-                      <td className="cell-truncate" title={a.details || ''}>
+                      <td className="cell-truncate" data-label="Details">
                         {a.post_id ? `#${a.post_id} ` : ''}
                         {a.details || '—'}
                       </td>

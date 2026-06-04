@@ -20,7 +20,7 @@ export default function DashboardPage() {
   const toast = useToast();
   const { data, loading, error } = useCachedResource('dashboard', () =>
     Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })]).then(
-      ([counts, settings, scheduled]) => ({ counts, settings, scheduled }),
+      ([counts, settings, scheduled]) => ({ counts, settings, scheduled: scheduled.posts }),
     ),
   );
 

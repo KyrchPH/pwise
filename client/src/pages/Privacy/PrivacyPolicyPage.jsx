@@ -19,7 +19,8 @@ export default function PrivacyPolicyPage() {
           This Privacy Policy explains how <strong>Wise Cleaner Shop</strong> (&ldquo;we&rdquo;, &ldquo;us&rdquo;,
           &ldquo;our&rdquo;) collects, uses, and protects your information when you use <strong>pwise</strong> (the
           &ldquo;App&rdquo;), our social-media post scheduling tool available at{' '}
-          <a href="https://pwise.sixpent.com">pwise.sixpent.com</a>. By using the App, you agree to this policy.
+          <a href="https://pwise.sixpent.com">pwise.sixpent.com</a>. The App is intended for internal and personal use
+          only and is not offered as a public or commercial service. By using the App, you agree to this policy.
         </p>
 
         <h2>1. Information We Collect</h2>

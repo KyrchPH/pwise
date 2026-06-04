@@ -9,6 +9,8 @@ import PostViewer from '../../components/PostViewer.jsx';
 
 const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
 
+const PAGE_SIZE = 15;
+
 const pad = (n) => String(n).padStart(2, '0');
 
 // Compact counts: 1234 -> "1.2k", 1_500_000 -> "1.5M".
@@ -39,6 +41,7 @@ function fmtSched(iso) {
 export default function PostPoolPage() {
   const toast = useToast();
   const [filter, setFilter] = useState('all');
+  const [page, setPage] = useState(1);
   const [viewing, setViewing] = useState(null);
   const [editing, setEditing] = useState(null);
   const [editError, setEditError] = useState(null);
@@ -47,16 +50,32 @@ export default function PostPoolPage() {
   const [saving, setSaving] = useState(false);
 
   const {
-    data: posts = [],
+    data,
     loading,
     error,
     refresh,
-  } = useCachedResource(`post-pool:list:${filter}`, () => postPool.list(filter !== 'all' ? { status: filter } : {}));
+  } = useCachedResource(`post-pool:list:${filter}:p${page}`, () =>
+    postPool.list({
+      ...(filter !== 'all' ? { status: filter } : {}),
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+      refresh: 1, // re-read this page's engagement from Facebook on load
+    }),
+  );
+  const posts = data?.posts ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   // Surface fetch failures as a toast (any cached posts stay on screen).
   useEffect(() => {
     if (error) toast.error(apiError(error));
   }, [error, toast]);
+
+  // If the current page drifts out of range (e.g. deletes shrink the pool), step
+  // back onto the last page that still exists.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   // After a change: drop sibling caches (other filters + dashboard counts) so
   // they refetch when next visited, and refetch the current view now.
@@ -128,7 +147,14 @@ export default function PostPoolPage() {
       <div className="toolbar">
         <div className="chips">
           {FILTERS.map((f) => (
-            <button key={f} className={`chip ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
+            <button
+              key={f}
+              className={`chip ${filter === f ? 'active' : ''}`}
+              onClick={() => {
+                setFilter(f);
+                setPage(1);
+              }}
+            >
               {f}
             </button>
           ))}
@@ -208,6 +234,24 @@ export default function PostPoolPage() {
               </div>
             </Card>
           ))}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="pagination">
+          <Button variant="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+            ← Prev
+          </Button>
+          <span className="pagination__info">
+            Page {page} of {totalPages}
+          </span>
+          <Button
+            variant="ghost"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+          >
+            Next →
+          </Button>
         </div>
       )}
 
