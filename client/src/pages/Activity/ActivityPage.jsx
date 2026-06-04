@@ -16,6 +16,7 @@ const fmt = (d) => {
 const ACTION = {
   created: { label: 'Created', badge: 'ready' },
   edited: { label: 'Edited', badge: 'draft' },
+  tagged: { label: 'Tagged', badge: 'posting' },
   deleted: { label: 'Deleted', badge: 'failed' },
 };
 
@@ -32,7 +33,7 @@ export default function ActivityPage() {
       <div className="page-head">
         <div>
           <h1 className="page-head__title">Activity Log</h1>
-          <div className="page-head__sub">Who created, edited, or deleted each post.</div>
+          <div className="page-head__sub">Who created, edited, tagged, or deleted each post and content note.</div>
         </div>
       </div>
 
@@ -60,7 +61,7 @@ export default function ActivityPage() {
                   <th>When</th>
                   <th>User</th>
                   <th>Action</th>
-                  <th>Post / details</th>
+                  <th>Item / details</th>
                 </tr>
               </thead>
               <tbody>
@@ -74,7 +75,7 @@ export default function ActivityPage() {
                         <span className={`badge badge--${meta.badge}`}>{meta.label}</span>
                       </td>
                       <td className="cell-truncate" data-label="Details">
-                        {a.post_id ? `#${a.post_id} ` : ''}
+                        {a.note_id ? '🗒 Note ' : a.post_id ? `#${a.post_id} ` : ''}
                         {a.details || '—'}
                       </td>
                     </tr>

@@ -1,4 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import * as notesService from '../services/content_notes.service.js';
+import { apiError } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import DayNotesModal from './DayNotesModal.jsx';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
@@ -13,8 +17,52 @@ const keyOf = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
  * Empty upcoming days (no post set yet) are highlighted as "open".
  */
 export default function CalendarMonth({ posts = [] }) {
+  const toast = useToast();
   const today = new Date();
   const [view, setView] = useState({ year: today.getFullYear(), month: today.getMonth() });
+  const [noteCounts, setNoteCounts] = useState({});
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [draggingNote, setDraggingNote] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
+  const [notesRefreshToken, setNotesRefreshToken] = useState(0);
+
+  // Per-day note counts for the visible month → drives the calendar's note badges.
+  useEffect(() => {
+    let active = true;
+    notesService
+      .monthCounts(view.year, view.month + 1)
+      .then((c) => {
+        if (active) setNoteCounts(c);
+      })
+      .catch(() => {
+        if (active) setNoteCounts({});
+      });
+    return () => {
+      active = false;
+    };
+  }, [view.year, view.month]);
+
+  // Re-pull counts after the day modal adds/deletes a note (so badges stay live).
+  const refreshNoteCounts = () => {
+    notesService
+      .monthCounts(view.year, view.month + 1)
+      .then(setNoteCounts)
+      .catch(() => {});
+  };
+
+  // A note dragged from the day dialog and dropped on `targetKey` moves to that
+  // day. Refreshes the badges and tells the open dialog to drop the moved note.
+  const moveNote = async (note, targetKey) => {
+    if (!note || targetKey === note.note_date) return;
+    try {
+      await notesService.setDate(note.id, targetKey);
+      toast.success('Note moved');
+      refreshNoteCounts();
+      setNotesRefreshToken((t) => t + 1);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  };
 
   // Bucket scheduled posts by their LOCAL calendar day.
   const counts = useMemo(() => {
@@ -92,28 +140,61 @@ export default function CalendarMonth({ posts = [] }) {
           const isPast = cell < todayMidnight;
           const isToday = k === todayKey;
           const isOpen = count === 0 && !isPast; // no post set yet (upcoming)
+          const noteCount = noteCounts[k] || 0;
           const cls = [
             'calendar__cell',
             count > 0 && 'is-scheduled',
             isToday && 'is-today',
             isOpen && 'is-open',
             isPast && count === 0 && 'is-past',
+            noteCount > 0 && 'has-notes',
+            draggingNote && dragOverKey === k && 'is-drop-target',
           ]
             .filter(Boolean)
             .join(' ');
           return (
-            <div key={k} className={cls}>
+            <div
+              key={k}
+              className={cls}
+              role="button"
+              tabIndex={0}
+              title="Plan content for this day"
+              onClick={() => setSelectedDate(k)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedDate(k);
+                }
+              }}
+              onDragOver={(e) => {
+                if (!draggingNote) return;
+                e.preventDefault(); // allow drop
+                e.dataTransfer.dropEffect = 'move';
+                // Drive the highlight from dragover alone (each cell overwrites the
+                // active key) — avoids the dragenter/dragleave child-bubbling flicker.
+                if (dragOverKey !== k) setDragOverKey(k);
+              }}
+              onDrop={(e) => {
+                if (!draggingNote) return;
+                e.preventDefault();
+                const note = draggingNote;
+                setDragOverKey(null);
+                moveNote(note, k);
+              }}
+            >
               <span className="calendar__day">{d}</span>
-              {count > 0 ? (
+              {noteCount > 0 && (
+                <span className="calendar__notes" title={`${noteCount} note${noteCount === 1 ? '' : 's'} planned`}>
+                  <span className="calendar__notes-ico" aria-hidden="true">📋</span>
+                  {noteCount}
+                </span>
+              )}
+              {count > 0 && (
                 <span className="calendar__count" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
                   {count}
                   <span className="calendar__count-unit">{count === 1 ? 'post' : 'posts'}</span>
                 </span>
-              ) : isOpen ? (
-                <span className="calendar__open" title="No post scheduled yet">
-                  Open
-                </span>
-              ) : null}
+              )}
             </div>
           );
         })}
@@ -126,7 +207,23 @@ export default function CalendarMonth({ posts = [] }) {
         <span>
           <i className="dot dot--open" /> open day ({openCount} this month)
         </span>
+        <span>
+          <i className="dot dot--notes" /> has notes
+        </span>
       </div>
+
+      <DayNotesModal
+        dateKey={selectedDate}
+        hidden={!!draggingNote}
+        refreshToken={notesRefreshToken}
+        onClose={() => setSelectedDate(null)}
+        onChanged={refreshNoteCounts}
+        onNoteDragStart={(note) => setDraggingNote(note)}
+        onNoteDragEnd={() => {
+          setDraggingNote(null);
+          setDragOverKey(null);
+        }}
+      />
     </div>
   );
 }
