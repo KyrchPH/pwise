@@ -46,3 +46,10 @@ export async function comments(id, after) {
   const { data } = await api.get(`/post-pool/${id}/comments`, { params: after ? { after } : {} });
   return data.data;
 }
+
+// Engagement time-series for one metric of a post. metric: reactions|comments|
+// shares|views. granularity: 'day' | 'month'. Returns { metric, granularity, points }.
+export async function insights(id, metric, granularity) {
+  const { data } = await api.get(`/post-pool/${id}/insights`, { params: { metric, granularity } });
+  return data.data;
+}

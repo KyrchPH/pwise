@@ -248,6 +248,74 @@ export function Toggle({ checked, onChange, label }) {
   );
 }
 
+// Compact custom dropdown with a styled menu (a native <select> can't style its
+// options). `options` = [{ value, label, disabled }]. Closes on outside-click / Esc.
+export function Dropdown({ value, options = [], onChange, ariaLabel, className = '' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const current = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className={`dropdown${open ? ' is-open' : ''} ${className}`.trim()} ref={ref}>
+      <button
+        type="button"
+        className="dropdown__trigger"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+      >
+        <span>{current?.label ?? '—'}</span>
+        <svg className="dropdown__caret" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="dropdown__menu" role="listbox">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              disabled={o.disabled}
+              className={`dropdown__opt${o.value === value ? ' is-selected' : ''}`}
+              onClick={() => {
+                if (o.disabled) return;
+                onChange?.(o.value);
+                setOpen(false);
+              }}
+            >
+              <span>{o.label}</span>
+              {o.value === value && (
+                <span className="dropdown__check" aria-hidden="true">
+                  ✓
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Spinner({ label }) {
   return (
     <div className="spinner-wrap">
@@ -308,12 +376,24 @@ export function EmptyState({ icon = '📭', title, message, action }) {
   );
 }
 
-export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '' }) {
+export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '', hidden = false }) {
+  // Lock background page scroll while the dialog is open; restore on close/unmount.
+  // Released while `hidden` (e.g. dragging an item out) so the page behind can scroll.
+  useEffect(() => {
+    if (!open || hidden) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open, hidden]);
+
   if (!open) return null;
   return (
-    // When not dismissable, the backdrop swallows clicks (no onClose) and the ✕
-    // is hidden, so the only way out is the action completing — a true barrier.
-    <div className="overlay" onClick={dismissable ? onClose : undefined}>
+    // `hidden` keeps the dialog mounted but visually gone and click-through — used
+    // while dragging an item out onto the page behind it. When not dismissable, the
+    // backdrop swallows clicks and the ✕ is hidden, so it's a true barrier.
+    <div className={`overlay${hidden ? ' overlay--hidden' : ''}`} onClick={dismissable ? onClose : undefined}>
       <div className={`card modal ${className}`} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="card__head">
           <div className="card__title">{title}</div>
