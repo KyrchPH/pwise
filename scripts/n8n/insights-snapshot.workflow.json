@@ -1,0 +1,59 @@
+{
+  "name": "pwise — insights snapshot (hourly)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-4a01-9001-000000000001",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/scheduler/insights/snapshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-service-token",
+              "value": "YOUR_SERVICE_TOKEN_HERE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4a02-9002-000000000002",
+      "name": "Snapshot insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, 0],
+      "retryOnFail": true
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Snapshot insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "pinData": {}
+}
