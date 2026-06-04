@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from './ui.jsx';
+import InsightsDrawer from './InsightsDrawer.jsx';
 import * as postPool from '../services/post_pool.service.js';
 import { apiError } from '../services/api.js';
+
+const ChartIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 3v18h18" />
+    <path d="M7 13l3.5-3.5 3 3L19 7" />
+  </svg>
+);
 
 const fmt = (iso) => {
   if (!iso) return '';
@@ -104,6 +112,8 @@ function CommentsSection({ post }) {
  * full-height on the right. Renders nothing when `post` is null.
  */
 export default function PostViewer({ post, onClose, onEdit }) {
+  const [showInsights, setShowInsights] = useState(false);
+
   // Close on Escape and lock background scroll while open.
   useEffect(() => {
     if (!post) return undefined;
@@ -119,6 +129,11 @@ export default function PostViewer({ post, onClose, onEdit }) {
     };
   }, [post, onClose]);
 
+  // Reset the insights drawer when switching to a different post.
+  useEffect(() => {
+    setShowInsights(false);
+  }, [post?.id]);
+
   if (!post) return null;
 
   const when = post.posted_at
@@ -132,6 +147,12 @@ export default function PostViewer({ post, onClose, onEdit }) {
       <button className="post-viewer__close" onClick={onClose} aria-label="Close">
         ✕
       </button>
+      {post.status === 'posted' && post.platform_post_id && (
+        <button className="post-viewer__insights" onClick={() => setShowInsights(true)} title="View insights">
+          <ChartIcon />
+          <span>Insights</span>
+        </button>
+      )}
 
       <div className="post-viewer__stage">
         {post.media_preview_url ? (
@@ -233,6 +254,8 @@ export default function PostViewer({ post, onClose, onEdit }) {
         {/* Live comments from Facebook — first page on open, lazy-load on scroll */}
         <CommentsSection post={post} />
       </aside>
+
+      <InsightsDrawer post={post} open={showInsights} onClose={() => setShowInsights(false)} />
     </div>
   );
 }

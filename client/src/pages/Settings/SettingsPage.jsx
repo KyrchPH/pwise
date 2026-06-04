@@ -4,6 +4,7 @@ import { apiError } from '../../services/api.js';
 import { invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Button, Field, Toggle, Spinner } from '../../components/ui.jsx';
+import CreatomateTemplates from './CreatomateTemplates.jsx';
 
 const TIMEZONES = [
   'Asia/Manila',
@@ -125,6 +126,8 @@ export default function SettingsPage() {
           {saving ? 'Saving…' : 'Save settings'}
         </Button>
       </form>
+
+      <CreatomateTemplates />
     </>
   );
 }

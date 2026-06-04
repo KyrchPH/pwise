@@ -6,6 +6,7 @@ import LoginPage from './pages/Login/LoginPage.jsx';
 import SignupPage from './pages/Signup/SignupPage.jsx';
 import PrivacyPolicyPage from './pages/Privacy/PrivacyPolicyPage.jsx';
 import DashboardPage from './pages/Dashboard/DashboardPage.jsx';
+import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import SettingsPage from './pages/Settings/SettingsPage.jsx';
@@ -29,6 +30,7 @@ export default function App() {
       >
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/post-pool" element={<PostPoolPage />} />
         <Route path="/upload" element={<UploadPostPage />} />
         <Route path="/settings" element={<SettingsPage />} />
