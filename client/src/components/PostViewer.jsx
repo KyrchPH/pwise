@@ -174,7 +174,7 @@ export default function PostViewer({ post, onClose, onEdit }) {
         <div className="post-author">
           <img
             className="post-author__avatar"
-            src="/logo.jpg"
+            src="/logo.png"
             alt=""
             onError={(e) => {
               e.currentTarget.style.display = 'none';

@@ -192,3 +192,23 @@ export async function fetchPageProfile({ token, fbPageId } = {}) {
   if (!ok) return null;
   return { name: data.name ?? null, fans: data.fan_count ?? null, followers: data.followers_count ?? null };
 }
+
+// Validate a page access token: read the object it belongs to (/me) and confirm
+// it matches the given page id. Catches the common mistakes — expired/invalid
+// token, or a USER token pasted instead of a PAGE token. Returns
+// { ok, name, followers } or { ok:false, error }.
+export async function verifyPageToken({ token, fbPageId } = {}) {
+  if (!token) return { ok: false, error: 'A page access token is required.' };
+  const { ok, error, data } = await graph('me', {
+    fields: { fields: 'id,name,followers_count,fan_count' },
+    token,
+  });
+  if (!ok) return { ok: false, error: error?.message || 'The access token was rejected by Facebook.' };
+  if (fbPageId && String(data.id) !== String(fbPageId)) {
+    return {
+      ok: false,
+      error: `This token belongs to "${data.name || data.id}" (id ${data.id}), not Page ID ${fbPageId}.`,
+    };
+  }
+  return { ok: true, name: data.name ?? null, followers: data.followers_count ?? data.fan_count ?? null };
+}

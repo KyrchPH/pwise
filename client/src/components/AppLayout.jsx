@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
-import { Button, Dropdown, Logo } from './ui.jsx';
+import { Button, Modal } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
 // whole nav is consistent — no emojis. Inherits the link's text color.
@@ -129,15 +129,41 @@ const TITLES = {
   '/accounts': 'Accounts',
 };
 
+// Compact follower count: 1234 → "1.2K", 1500000 → "1.5M".
+function formatCount(n) {
+  if (n == null || Number.isNaN(Number(n))) return '';
+  const num = Number(n);
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(num % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(num % 1_000 === 0 ? 0 : 1)}K`;
+  return String(num);
+}
+
+// A connected page's photo (the Facebook page picture) with a letter fallback.
+function PageAvatar({ page, className = '' }) {
+  const [broken, setBroken] = useState(false);
+  const src = page?.fb_page_id
+    ? `https://graph.facebook.com/v21.0/${page.fb_page_id}/picture?type=square&width=96&height=96`
+    : null;
+  if (!src || broken) {
+    return (
+      <span className={`page-avatar page-avatar--fallback ${className}`} aria-hidden="true">
+        {(page?.account_name || '?').charAt(0).toUpperCase()}
+      </span>
+    );
+  }
+  return <img className={`page-avatar ${className}`} src={src} alt="" onError={() => setBroken(true)} />;
+}
+
 export default function AppLayout() {
   const { user, logout } = useAuth();
-  const { pages, activeId, switchPage } = usePages();
+  const { pages, activeId, activePage, activeFollowers, switchPage } = usePages();
   const { pathname } = useLocation();
   const title = TITLES[pathname] || 'pwise';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false); // page-switcher dialog
   useEffect(() => setNavOpen(false), [pathname]);
   useEffect(() => {
     if (!navOpen) return undefined;
@@ -152,9 +178,7 @@ export default function AppLayout() {
         <button className="sidebar__close" onClick={() => setNavOpen(false)} aria-label="Close menu">
           ✕
         </button>
-        <div className="sidebar__logo">
-          <Logo height={54} />
-        </div>
+        <div className="sidebar__spacer" aria-hidden="true" />
         <nav className="nav">
           {NAV.filter((n) => !n.admin || user?.role === 'admin').map((n) => (
             <NavLink
@@ -168,6 +192,39 @@ export default function AppLayout() {
           ))}
         </nav>
         <div className="sidebar__foot">
+          {pages.length > 0 ? (
+            <div className="sidebar__pagebox">
+              <div className="sidebar__page">
+                <button
+                  type="button"
+                  className="sidebar__page-btn"
+                  onClick={() => setPickerOpen(true)}
+                  title="Switch page"
+                  aria-label="Switch active page"
+                >
+                  <PageAvatar page={activePage} className="sidebar__page-photo" />
+                  <span className="sidebar__page-switch" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="17 1 21 5 17 9" />
+                      <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                      <polyline points="7 23 3 19 7 15" />
+                      <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                    </svg>
+                  </span>
+                </button>
+                <span className="sidebar__page-name">{activePage?.account_name || 'Select a page'}</span>
+                {activeFollowers != null && (
+                  <span className="sidebar__page-followers">{formatCount(activeFollowers)} followers</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            user?.role === 'admin' && (
+              <Link to="/settings" className="sidebar__footlink">
+                + Connect a page
+              </Link>
+            )
+          )}
           <Link to="/privacy" className="sidebar__footlink">
             Privacy Policy
           </Link>
@@ -188,26 +245,6 @@ export default function AppLayout() {
               </svg>
             </button>
             <div className="topbar__title">{title}</div>
-            {pages.length > 0 ? (
-              <div className="topbar__page" title="Active Facebook page (scopes everything below)">
-                <span className="topbar__page-ico" aria-hidden="true">📄</span>
-                <Dropdown
-                  className="topbar__pageswitch"
-                  ariaLabel="Active Facebook page"
-                  value={activeId != null ? String(activeId) : ''}
-                  options={pages
-                    .filter((p) => p.is_active)
-                    .map((p) => ({ value: String(p.id), label: p.account_name }))}
-                  onChange={(v) => switchPage(Number(v))}
-                />
-              </div>
-            ) : (
-              user?.role === 'admin' && (
-                <Link to="/settings" className="topbar__page-connect">
-                  + Connect a page
-                </Link>
-              )
-            )}
           </div>
           <div className="user-chip">
             <div className="avatar">{initials}</div>
@@ -226,6 +263,45 @@ export default function AppLayout() {
           </div>
         </main>
       </div>
+
+      <Modal
+        open={pickerOpen}
+        title="Switch page"
+        onClose={() => setPickerOpen(false)}
+        className="modal--pagepicker"
+        footer={
+          user?.role === 'admin' ? (
+            <Link to="/settings" className="btn btn--primary" onClick={() => setPickerOpen(false)}>
+              + Add page
+            </Link>
+          ) : null
+        }
+      >
+        <ul className="page-picker">
+          {pages
+            .filter((p) => p.is_active)
+            .map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className={`page-picker__item${p.id === activeId ? ' is-active' : ''}`}
+                  onClick={() => {
+                    switchPage(p.id);
+                    setPickerOpen(false);
+                  }}
+                >
+                  <PageAvatar page={p} className="page-picker__photo" />
+                  <span className="page-picker__name">{p.account_name}</span>
+                  {p.id === activeId && (
+                    <span className="page-picker__check" aria-hidden="true">
+                      ✓
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+        </ul>
+      </Modal>
     </div>
   );
 }

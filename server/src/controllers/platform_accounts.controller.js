@@ -22,6 +22,11 @@ export const active = asyncHandler(async (req, res) => {
   sendSuccess(res, { selected_account_id: page ? id : null, page });
 });
 
+// Live follower count (+ name) for a page — any signed-in user (sidebar widget).
+export const stats = asyncHandler(async (req, res) => {
+  sendSuccess(res, { stats: await pages.getStats(req.params.id) });
+});
+
 // Switch the current user's active page.
 export const select = asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};
@@ -31,6 +36,12 @@ export const select = asyncHandler(async (req, res) => {
 });
 
 // Admin-only writes.
+
+// Test page credentials against Facebook before saving (the "Connect" step).
+export const test = asyncHandler(async (req, res) => {
+  sendSuccess(res, await pages.testConnection(req.body || {}));
+});
+
 export const create = asyncHandler(async (req, res) => {
   const page = await pages.create(req.user, req.body || {});
   sendSuccess(res, { page }, 201);

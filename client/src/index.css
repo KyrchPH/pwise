@@ -281,6 +281,8 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   mask: radial-gradient(9px at 50% 100%, #0000 96%, #000) 50% 0 / 44px 100% repeat-x; }
 .sidebar .brand__name { color: #fff; }
 
+/* Breathing room between the top edge and the nav (where the logo used to sit). */
+.sidebar__spacer { height: 50px; flex-shrink: 0; }
 .nav { display: flex; flex-direction: column; gap: 5px; }
 .nav__link {
   display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 12px;
@@ -316,16 +318,64 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 /* --- Mobile nav controls (hamburger + off-canvas drawer + backdrop) ---
    Hidden on desktop; the responsive block at the bottom switches them on. */
 .topbar__left { display: flex; align-items: center; gap: 12px; min-width: 0; }
-/* Active-page switcher in the top bar */
-.topbar__page { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.topbar__page-ico { font-size: 0.95rem; line-height: 1; }
-.topbar__page .dropdown__trigger { min-width: 0; max-width: 200px; }
-.topbar__page-connect { font-size: 0.85rem; font-weight: 700; color: var(--blue-700); text-decoration: none; white-space: nowrap; }
-.topbar__page-connect:hover { text-decoration: underline; }
-@media (max-width: 560px) {
-  .topbar__page-ico { display: none; }
-  .topbar__page .dropdown__trigger { max-width: 130px; }
+/* Active-page switcher in the sidebar footer — a contained panel holding a photo
+   button (with a "switch" badge) + the page name. */
+.sidebar__pagebox {
+  margin: 2px 0 16px; padding: 14px 12px; border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.18);
 }
+.sidebar__page { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.sidebar__page-btn {
+  position: relative; padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%;
+  line-height: 0; transition: transform 0.12s ease;
+}
+.sidebar__page-btn:hover { transform: translateY(-1px); }
+/* "Switch" badge on the photo, so it reads as clickable to change pages. */
+.sidebar__page-switch {
+  position: absolute; right: -2px; bottom: -2px; width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; color: var(--blue); display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(15, 60, 95, 0.4);
+}
+.sidebar__page-photo {
+  width: 56px; height: 56px; font-size: 1.3rem;
+  border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 4px 12px rgba(15, 60, 95, 0.3);
+}
+.sidebar__page-name {
+  max-width: 100%; color: #fff; font-weight: 700; font-size: 0.85rem; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar__page-followers { margin-top: -2px; color: rgba(255, 255, 255, 0.72); font-size: 0.74rem; font-weight: 600; }
+
+/* A connected page's photo (Facebook page picture) with a letter fallback */
+.page-avatar {
+  flex-shrink: 0; border-radius: 50%; object-fit: cover;
+  display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2);
+}
+.page-avatar--fallback { color: var(--blue-700); font-weight: 800; background: linear-gradient(180deg, #eaf5ff, #d8ecfe); }
+
+/* Page-switcher dialog — centered, fixed-height scrolling list */
+/* Fixed-height dialog (two-class selector beats the later base `.modal`): the
+   header and footer stay pinned while the page list scrolls between them. */
+.modal.modal--pagepicker {
+  max-width: 440px; height: min(72vh, 540px); display: flex; flex-direction: column; overflow: hidden;
+}
+.modal--pagepicker > .card__head { flex-shrink: 0; }
+.modal--pagepicker > .card--pad { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.modal--pagepicker > .modal__foot { flex-shrink: 0; }
+.page-picker { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.page-picker__item {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 14px;
+  border: 1.5px solid var(--border); background: var(--surface-2); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; transition: background 0.12s ease, border-color 0.12s ease;
+}
+.page-picker__item:hover { background: #fff; border-color: var(--blue); }
+.page-picker__item.is-active { border-color: var(--blue); background: #fff; box-shadow: var(--ring); }
+.page-picker__photo { width: 46px; height: 46px; font-size: 1.1rem; }
+.page-picker__name { flex: 1; min-width: 0; font-size: 0.98rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-picker__check { flex-shrink: 0; color: var(--blue); font-weight: 800; font-size: 1.1rem; }
+
+/* "Connection verified" line in the Facebook Pages add/edit form. */
+.fb-test-ok { margin: 2px 0 -2px; font-size: 0.85rem; font-weight: 700; color: #1f8f43; }
 .topbar__menu {
   display: none; flex-shrink: 0; width: 40px; height: 40px; border-radius: 12px;
   border: 1.5px solid var(--border); background: var(--surface); color: var(--text);
@@ -900,11 +950,6 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 /* --- Logo (circular) --- */
 .logo-img { display: block; width: auto; border-radius: 50%; }
 .auth__logo { margin: 0 auto 12px; border-radius: 50%; box-shadow: var(--shadow-sm); }
-.sidebar__logo {
-  align-self: center; background: #fff; border-radius: 50%; padding: 6px;
-  display: flex; justify-content: center; box-shadow: 0 6px 16px rgba(15, 60, 95, 0.2);
-}
-.sidebar__logo .brand__name { color: var(--text); } /* keep text fallback readable */
 
 /* --- Responsive --- */
 @media (max-width: 820px) {

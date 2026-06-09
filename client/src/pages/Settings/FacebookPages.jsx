@@ -29,6 +29,8 @@ export default function FacebookPages() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { id?, ...fields }
   const [busy, setBusy] = useState(false);
+  const [tested, setTested] = useState(false); // connection verified for the CURRENT field values
+  const [testInfo, setTestInfo] = useState(null); // { name, followers } from the successful test
 
   const load = () => {
     setLoading(true);
@@ -41,18 +43,60 @@ export default function FacebookPages() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
-  const startAdd = () => setEditing({ ...BLANK });
-  const startEdit = (p) =>
+  const resetTest = () => {
+    setTested(false);
+    setTestInfo(null);
+  };
+  const startAdd = () => {
+    resetTest();
+    setEditing({ ...BLANK });
+  };
+  const startEdit = (p) => {
+    resetTest();
     setEditing({ ...BLANK, id: p.id, account_name: p.account_name || '', fb_page_id: p.fb_page_id || '', app_id: p.app_id || '' });
-  const cancel = () => setEditing(null);
-  const setField = (k) => (e) => setEditing((ed) => ({ ...ed, [k]: e.target.value }));
+  };
+  const cancel = () => {
+    resetTest();
+    setEditing(null);
+  };
+  // Any field edit invalidates a prior successful test → back to the "Connect" step.
+  const setField = (k) => (e) => {
+    const v = e.target.value;
+    setEditing((ed) => ({ ...ed, [k]: v }));
+    resetTest();
+  };
 
-  const save = async () => {
+  // Step 1 — verify credentials against Facebook. On success the primary button
+  // flips to "Add page" / "Save". (Edits may leave the token blank to reuse the
+  // stored one; the server falls back to it.)
+  const runTest = async () => {
+    const fbPageId = editing.fb_page_id.trim();
+    if (!fbPageId && !editing.id) return toast.error('Facebook Page ID is required.');
+    if (!editing.id && !editing.access_token.trim()) return toast.error('Page access token is required to test.');
+    setBusy(true);
+    try {
+      const res = await pagesService.test({
+        id: editing.id,
+        fb_page_id: fbPageId,
+        ...(editing.access_token.trim() ? { access_token: editing.access_token.trim() } : {}),
+      });
+      setTestInfo(res);
+      setTested(true);
+      toast.success(`Connection OK — ${res.name || 'page verified'}`);
+    } catch (e) {
+      resetTest();
+      toast.error(apiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 2 — persist. Only reachable once the connection has tested OK.
+  const commit = async () => {
     const name = editing.account_name.trim();
     const fbPageId = editing.fb_page_id.trim();
     if (!name) return toast.error('Give the page a name.');
     if (!fbPageId) return toast.error('Facebook Page ID is required.');
-    if (!editing.id && !editing.access_token.trim()) return toast.error('Page access token is required.');
     setBusy(true);
     try {
       const payload = {
@@ -68,14 +112,18 @@ export default function FacebookPages() {
       else await pagesService.create(payload);
       toast.success(editing.id ? 'Page updated' : 'Page connected');
       setEditing(null);
+      resetTest();
       load();
-      refreshSwitcher(); // keep the top-bar switcher in sync
+      refreshSwitcher(); // keep the switcher in sync
     } catch (e) {
       toast.error(apiError(e));
     } finally {
       setBusy(false);
     }
   };
+
+  // The primary button is a two-step gate: test the connection, then save.
+  const onPrimary = () => (tested ? commit() : runTest());
 
   const del = async (p) => {
     if (busy) return;
@@ -131,12 +179,18 @@ export default function FacebookPages() {
           <Field label="App Client Token" hint={secretHint('optional')}>
             <input className="input" type="password" value={editing.app_client_token} onChange={setField('app_client_token')} autoComplete="new-password" placeholder={editing.id ? '••••••••' : ''} />
           </Field>
+          {tested && (
+            <div className="fb-test-ok">
+              ✓ Connection verified{testInfo?.name ? ` — ${testInfo.name}` : ''}
+              {testInfo?.followers != null ? ` · ${Number(testInfo.followers).toLocaleString()} followers` : ''}
+            </div>
+          )}
           <div className="row gap-sm" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
               Cancel
             </Button>
-            <Button size="sm" onClick={save} disabled={busy}>
-              {busy ? 'Saving…' : editing.id ? 'Save' : 'Connect'}
+            <Button size="sm" variant={tested ? 'accent' : 'primary'} onClick={onPrimary} disabled={busy}>
+              {busy ? (tested ? 'Saving…' : 'Testing…') : tested ? (editing.id ? 'Save' : 'Add page') : 'Connect'}
             </Button>
           </div>
         </div>

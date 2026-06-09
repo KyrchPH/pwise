@@ -15,6 +15,7 @@ export function PageProvider({ children }) {
   const { isAuthenticated } = useAuth();
   const [pages, setPages] = useState([]);
   const [activeId, setActiveId] = useState(null);
+  const [activeFollowers, setActiveFollowers] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -46,6 +47,23 @@ export function PageProvider({ children }) {
     refresh();
   }, [refresh]);
 
+  // Followers count for the active page (server-side — needs the page token).
+  // Refetched whenever the active page changes; hidden (null) on any failure.
+  useEffect(() => {
+    if (activeId == null) {
+      setActiveFollowers(null);
+      return undefined;
+    }
+    let cancelled = false;
+    pagesService
+      .stats(activeId)
+      .then((s) => !cancelled && setActiveFollowers(s?.followers ?? null))
+      .catch(() => !cancelled && setActiveFollowers(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId]);
+
   const switchPage = useCallback(async (id) => {
     await pagesService.select(id);
     setActiveId(id);
@@ -55,7 +73,7 @@ export function PageProvider({ children }) {
   }, []);
 
   const activePage = pages.find((p) => p.id === activeId) || null;
-  const value = { pages, activePage, activeId, loading, refresh, switchPage };
+  const value = { pages, activePage, activeId, activeFollowers, loading, refresh, switchPage };
   return <PageContext.Provider value={value}>{children}</PageContext.Provider>;
 }
 
