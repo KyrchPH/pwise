@@ -20,6 +20,19 @@ const fmtTime = (iso) => {
     : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
+const fmtClock = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
+// Local 'YYYY-MM-DD' for today — date keys compare lexicographically.
+const todayKey = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
 const STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'ongoing', label: 'Ongoing' },
@@ -72,6 +85,8 @@ export default function DayNotesModal({
   dateKey,
   hidden = false,
   refreshToken = 0,
+  posts = [],
+  onCreatePost,
   onClose,
   onChanged,
   onNoteDragStart,
@@ -128,6 +143,7 @@ export default function DayNotesModal({
 
   const notifyChanged = () => onChanged?.(dateKey);
   const closeMenu = () => setMenu(null);
+  const isPast = dateKey ? dateKey < todayKey() : false; // can't schedule posts in the past
 
   const openMenu = (e, note, kind) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -272,16 +288,62 @@ export default function DayNotesModal({
                 </div>
               </div>
             ) : (
-              <button type="button" className="day-notes__addbtn" onClick={() => setComposing(true)}>
-                <PlusIcon /> Add note
-              </button>
+              <div className="day-notes__buttons">
+                <button type="button" className="day-notes__addbtn" onClick={() => setComposing(true)}>
+                  <PlusIcon /> Add note
+                </button>
+                {!isPast && (
+                  <button
+                    type="button"
+                    className="day-notes__addbtn day-notes__addbtn--post"
+                    onClick={() => onCreatePost?.(dateKey)}
+                  >
+                    <PlusIcon /> Create Post
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
-          {notes.length === 0 ? (
-            <EmptyState icon="🗓️" title="No plans yet" message="Use “Add note” above to plan content for this day." />
-          ) : (
+          {posts.length > 0 && (
+            <div className="day-posts">
+              <div className="day-section__label">Scheduled posts ({posts.length})</div>
+              <ul className="day-posts__list">
+                {posts.map((p) => (
+                  <li key={p.id} className="day-post">
+                    {p.media_preview_url ? (
+                      p.media_type === 'video' ? (
+                        <video className="day-post__thumb" src={p.media_preview_url} muted preload="metadata" />
+                      ) : (
+                        <img className="day-post__thumb" src={p.media_preview_url} alt="" />
+                      )
+                    ) : (
+                      <span className="day-post__icon" aria-hidden="true">
+                        {p.media_type === 'video' ? '🎬' : p.media_type === 'image' ? '🖼️' : '📝'}
+                      </span>
+                    )}
+                    <div className="day-post__main">
+                      <div className="day-post__caption">{p.caption || '(no caption)'}</div>
+                      <div className="day-post__meta">
+                        {fmtClock(p.scheduled_at)}
+                        {p.status ? ` · ${p.status}` : ''}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {notes.length === 0 && posts.length === 0 ? (
+            <EmptyState
+              icon="🗓️"
+              title="No plans yet"
+              message="Use “Add note” to plan, or “Create Post” to schedule content for this day."
+            />
+          ) : notes.length > 0 ? (
             <>
+              <div className="day-section__label">Notes ({notes.length})</div>
               <ul className="day-notes__list">
                 {notes.map((note) => (
                   <li key={note.id} className="day-note">
@@ -348,7 +410,7 @@ export default function DayNotesModal({
               </ul>
               <div className="day-notes__hint">Tip: drag a note by its handle onto another calendar day to move it.</div>
             </>
-          )}
+          ) : null}
         </div>
       )}
 

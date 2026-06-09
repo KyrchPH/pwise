@@ -1,9 +1,16 @@
 import api from './api.js';
 
-// 1) Ask the server for a presigned PUT URL.
-export async function getPresignedUrl(filename, contentType) {
-  const { data } = await api.post('/upload/presigned-url', { filename, contentType });
+// 1) Ask the server for a presigned PUT URL. Pass { temporary: true } for files
+//    that should live under tmp/ (auto-expiring), e.g. a template's input video.
+export async function getPresignedUrl(filename, contentType, { temporary = false } = {}) {
+  const { data } = await api.post('/upload/presigned-url', { filename, contentType, temporary });
   return data.data; // { uploadUrl, s3Key, mediaUrl }
+}
+
+// Delete a temporary upload (e.g. an abandoned template input video).
+export async function discard(s3Key) {
+  const { data } = await api.post('/upload/discard', { s3Key });
+  return data.data;
 }
 
 // 2) Upload the file bytes straight to S3 (bare XHR — no auth header to S3).

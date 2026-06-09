@@ -3,6 +3,20 @@ import ApiError from '../utils/ApiError.js';
 import { createDownloadUrl, deleteObject } from './s3.service.js';
 import * as fb from './fb.service.js';
 import * as activity from './activity.service.js';
+import * as accounts from './platform_accounts.service.js';
+import { getSelectedAccountId } from './settings.service.js';
+
+// Decrypted page credentials for a post's connected page. Returns {} when the
+// post isn't tagged with a page yet — fb.service then falls back to the env token.
+async function pageCtx(post) {
+  if (!post?.account_id) return {};
+  try {
+    const a = await accounts.getDecrypted(post.account_id);
+    return { token: a.access_token, fbPageId: a.fb_page_id };
+  } catch {
+    return {};
+  }
+}
 
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
 const ALLOWED_MEDIA = ['image', 'video'];
@@ -88,7 +102,7 @@ export async function isSlotFree(scheduledAt, excludeId = null) {
 
 // Shared pool: every user sees every post. A row's `user_id` records its creator
 // (for the audit trail), not access control.
-export async function list({ status, scheduled, limit = 50, offset = 0 } = {}) {
+export async function list({ status, scheduled, accountId = null, limit = 50, offset = 0 } = {}) {
   const where = [];
   const params = [];
   if (status) {
@@ -97,6 +111,11 @@ export async function list({ status, scheduled, limit = 50, offset = 0 } = {}) {
     params.push(status);
   }
   if (truthy(scheduled)) where.push('scheduled_at IS NOT NULL');
+  // Scope to the caller's active page (per-user). Null = no page selected → no filter.
+  if (accountId != null) {
+    where.push('account_id = ?');
+    params.push(accountId);
+  }
   const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
 
   // Total for the same filter, so the client can paginate (page X of Y).
@@ -122,7 +141,8 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
   const post = await getById(id); // existence
   if (post.status !== 'posted' || !post.platform_post_id) return { comments: [], nextCursor: null };
   const lim = Math.min(Math.max(Number(limit) || 25, 1), 50);
-  return fb.listComments(post.platform_post_id, { after: after || null, limit: lim });
+  const { token } = await pageCtx(post);
+  return fb.listComments(post.platform_post_id, { after: after || null, limit: lim }, token);
 }
 
 // `actor` = { id, name } of the signed-in user creating the post (recorded as
@@ -137,18 +157,30 @@ export async function create(actor = {}, data = {}) {
     status = 'ready',
     priority = 0,
     scheduled_at = null,
+    immediate = false,
   } = data;
   if (!caption || !String(caption).trim()) throw ApiError.badRequest('caption is required');
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
-  const schedule = normalizeScheduledAt(scheduled_at);
-  if (!schedule) throw ApiError.badRequest('a schedule date and time is required');
-  await assertSlotFree(schedule);
 
+  // "Post now": due immediately, so the n8n posting poll claims it on its next run.
+  // Otherwise require a valid, free :00/:30 slot.
+  let schedule;
+  if (truthy(immediate)) {
+    schedule = new Date();
+  } else {
+    schedule = normalizeScheduledAt(scheduled_at);
+    if (!schedule) throw ApiError.badRequest('a schedule date and time is required');
+    await assertSlotFree(schedule);
+  }
+
+  // Tag the post with the creator's active page (null = none selected → the
+  // scheduler/posting falls back to the env page during rollout).
+  const accountId = actor.id != null ? await getSelectedAccountId(actor.id) : null;
   const result = await query(
-    `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, target_platform, status, priority, scheduled_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [actor.id, caption, media_type, media_url, s3_key, target_platform, status, Number(priority) || 0, schedule],
+    `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, target_platform, account_id, status, priority, scheduled_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [actor.id, caption, media_type, media_url, s3_key, target_platform, accountId, status, Number(priority) || 0, schedule],
   );
   await activity.log({
     postId: result.insertId,
@@ -198,7 +230,8 @@ export async function update(id, data = {}, actor = {}) {
     existing.status === 'posted' &&
     existing.platform_post_id
   ) {
-    await fb.editCaption(existing.platform_post_id, existing.media_type, data.caption);
+    const { token } = await pageCtx(existing);
+    await fb.editCaption(existing.platform_post_id, existing.media_type, data.caption, token);
   }
 
   // Rescheduling an expired post to a future time revives it to 'ready' so the
@@ -230,7 +263,8 @@ export async function remove(id, actor = {}) {
   // id). A real FB failure throws and aborts, so the record stays and the user
   // can retry; an already-deleted FB post is treated as success.
   if (post.status === 'posted' && post.platform_post_id) {
-    await fb.deletePost(post.platform_post_id);
+    const { token } = await pageCtx(post);
+    await fb.deletePost(post.platform_post_id, token);
   }
   await query('DELETE FROM post_pool WHERE id = ?', [id]);
   if (post.s3_key) await deleteObject(post.s3_key); // best-effort: clean up the media in S3
@@ -244,9 +278,11 @@ export async function remove(id, actor = {}) {
   return { id: Number(id), deleted: true };
 }
 
-// Status breakdown for the dashboard (whole shared pool).
-export async function counts() {
-  const rows = await query('SELECT status, COUNT(*) AS count FROM post_pool GROUP BY status', []);
+// Status breakdown for the dashboard, scoped to the caller's active page.
+export async function counts(accountId = null) {
+  const where = accountId != null ? ' WHERE account_id = ?' : '';
+  const params = accountId != null ? [accountId] : [];
+  const rows = await query(`SELECT status, COUNT(*) AS count FROM post_pool${where} GROUP BY status`, params);
   const out = { draft: 0, ready: 0, posting: 0, posted: 0, failed: 0, archived: 0, total: 0 };
   for (const r of rows) {
     out[r.status] = Number(r.count);
@@ -266,23 +302,32 @@ export async function refreshEngagement(posts = []) {
   );
   if (!stale.length) return posts;
 
-  // Backfill any missing feed-story id so `shares` can be read (only a freshly
-  // posted video lacks it; bounded to this page, usually a no-op).
+  // Group by connected page so each Graph batch uses that page's token. Backfill
+  // any missing feed-story id (so `shares` can be read) within each group.
+  const groups = new Map(); // account_id (0 = untagged/env) -> posts[]
   for (const p of stale) {
-    if (!p.parent_post_id) {
-      const parent = await fb.resolveParentPostId(p.platform_post_id).catch(() => null);
-      if (parent) {
-        await query('UPDATE post_pool SET parent_post_id = ? WHERE id = ?', [parent, p.id]);
-        p.parent_post_id = parent;
+    const k = p.account_id ?? 0;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  const counts = new Map();
+  for (const group of groups.values()) {
+    const { token, fbPageId } = await pageCtx(group[0]);
+    for (const p of group) {
+      if (!p.parent_post_id) {
+        const parent = await fb.resolveParentPostId(p.platform_post_id, { token, fbPageId }).catch(() => null);
+        if (parent) {
+          await query('UPDATE post_pool SET parent_post_id = ? WHERE id = ?', [parent, p.id]);
+          p.parent_post_id = parent;
+        }
       }
     }
-  }
-
-  let counts;
-  try {
-    counts = await fb.fetchEngagementBatch(stale);
-  } catch {
-    return posts; // platform unreachable / not configured — keep cached numbers
+    try {
+      const part = await fb.fetchEngagementBatch(group, token);
+      for (const [id, v] of part) counts.set(id, v);
+    } catch {
+      /* this page unreachable — keep cached numbers for its posts */
+    }
   }
 
   for (const p of stale) {
@@ -384,7 +429,7 @@ async function recordInsightSnapshot(postId, { reactions, comments, shares, view
 const FRESH_INSIGHT_DAYS = 7;
 export async function snapshotRecentInsights() {
   const rows = await query(
-    `SELECT id, platform_post_id, parent_post_id, media_type,
+    `SELECT id, platform_post_id, parent_post_id, media_type, account_id,
             reactions_count, comments_count, shares_count, views_count
        FROM post_pool
       WHERE status = 'posted' AND platform_post_id IS NOT NULL
@@ -394,11 +439,22 @@ export async function snapshotRecentInsights() {
   );
   if (!rows.length) return { scanned: 0, recorded: 0 };
 
-  let counts;
-  try {
-    counts = await fb.fetchEngagementBatch(rows); // batched (≤50/call) internally
-  } catch {
-    return { scanned: rows.length, recorded: 0, error: 'facebook unreachable' };
+  // Recent posts can span several pages — batch each page with its own token.
+  const groups = new Map();
+  for (const p of rows) {
+    const k = p.account_id ?? 0;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  const counts = new Map();
+  for (const group of groups.values()) {
+    const { token } = await pageCtx(group[0]);
+    try {
+      const part = await fb.fetchEngagementBatch(group, token);
+      for (const [id, v] of part) counts.set(id, v);
+    } catch {
+      /* this page unreachable — skip its posts this run */
+    }
   }
 
   let recorded = 0;

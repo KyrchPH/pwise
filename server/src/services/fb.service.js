@@ -1,6 +1,11 @@
 import { env } from '../config/env.js';
 import ApiError from '../utils/ApiError.js';
 
+// Every call targets a specific connected page via its (decrypted) access token.
+// `token` falls back to the legacy env token so posts not yet tagged with a page
+// (or page-level calls before a page is selected) keep working during rollout.
+// fbPageId likewise falls back to env.facebook.pageId.
+
 // The caption lives in a different Graph field per media type.
 function captionField(mediaType) {
   if (mediaType === 'video') return 'description'; // videos / reels (verified editable)
@@ -8,13 +13,16 @@ function captionField(mediaType) {
   return 'message'; // text / link feed posts
 }
 
+function tokenOrThrow(token) {
+  const t = token || env.facebook.pageAccessToken;
+  if (!t) throw new ApiError(503, 'Facebook is not configured (no page access token)');
+  return t;
+}
+
 // Thin Graph API call against a single object id. The access token rides in the
 // query string for GET/DELETE and in the form body for POST.
-async function graph(id, { method = 'GET', fields = {} } = {}) {
-  if (!env.facebook.pageAccessToken) {
-    throw new ApiError(503, 'Facebook is not configured (FACEBOOK_PAGE_ACCESS_TOKEN missing)');
-  }
-  const params = new URLSearchParams({ ...fields, access_token: env.facebook.pageAccessToken });
+async function graph(id, { method = 'GET', fields = {}, token } = {}) {
+  const params = new URLSearchParams({ ...fields, access_token: tokenOrThrow(token) });
   const url = `https://graph.facebook.com/${env.facebook.graphVersion}/${id}`;
   let res;
   try {
@@ -30,17 +38,9 @@ async function graph(id, { method = 'GET', fields = {} } = {}) {
 
 // POST a Graph API batch (array of { method, relative_url }, up to 50) in ONE
 // HTTP call. The page token rides in the form body and every sub-request inherits
-// it. Returns the raw results array [{ code, body }, …] where `body` is a JSON
-// string. Throws on a transport or top-level error (e.g. a bad token comes back
-// as an error object, not an array).
-async function graphBatch(ops) {
-  if (!env.facebook.pageAccessToken) {
-    throw new ApiError(503, 'Facebook is not configured (FACEBOOK_PAGE_ACCESS_TOKEN missing)');
-  }
-  const body = new URLSearchParams({
-    access_token: env.facebook.pageAccessToken,
-    batch: JSON.stringify(ops),
-  });
+// it.
+async function graphBatch(ops, token) {
+  const body = new URLSearchParams({ access_token: tokenOrThrow(token), batch: JSON.stringify(ops) });
   let res;
   try {
     res = await fetch(`https://graph.facebook.com/${env.facebook.graphVersion}/`, { method: 'POST', body });
@@ -56,8 +56,8 @@ async function graphBatch(ops) {
 
 // Delete a published post/video/photo by its platform id. A post that's already
 // gone on Facebook is treated as success so the local record can still be removed.
-export async function deletePost(platformPostId) {
-  const { ok, error } = await graph(platformPostId, { method: 'DELETE' });
+export async function deletePost(platformPostId, token) {
+  const { ok, error } = await graph(platformPostId, { method: 'DELETE', token });
   if (ok) return { deleted: true };
   const msg = error?.message || 'unknown error';
   if (/do(es)?\s*not exist|cannot be loaded|Unsupported \w+ request/i.test(msg)) {
@@ -67,23 +67,23 @@ export async function deletePost(platformPostId) {
 }
 
 // Edit a published post's caption. The target field depends on media type.
-export async function editCaption(platformPostId, mediaType, caption) {
+export async function editCaption(platformPostId, mediaType, caption, token) {
   const { ok, error } = await graph(platformPostId, {
     method: 'POST',
     fields: { [captionField(mediaType)]: caption ?? '' },
+    token,
   });
   if (ok) return { edited: true };
   throw new ApiError(502, `Couldn't update the caption on Facebook: ${error?.message || 'unknown error'}`);
 }
 
 // One page of comment content for a published post, oldest first. NOTE: Facebook
-// withholds the commenter's identity (`from`) for ordinary users even with
-// pages_read_user_content — verified 2026-06-03 that `from` is simply omitted
-// from the response (privacy) — so we surface message + time only.
-export async function listComments(platformPostId, { after = null, limit = 25 } = {}) {
+// withholds the commenter's identity (`from`) for ordinary users — surface
+// message + time only.
+export async function listComments(platformPostId, { after = null, limit = 25 } = {}, token) {
   const fields = { fields: 'message,created_time', order: 'chronological', limit: String(limit) };
   if (after) fields.after = after;
-  const { ok, error, data } = await graph(`${platformPostId}/comments`, { fields });
+  const { ok, error, data } = await graph(`${platformPostId}/comments`, { fields, token });
   if (!ok) throw new ApiError(502, `Couldn't load comments from Facebook: ${error?.message || 'unknown error'}`);
   return {
     comments: (data.data || []).map((c) => ({ id: c.id, message: c.message || '', created_time: c.created_time })),
@@ -91,18 +91,17 @@ export async function listComments(platformPostId, { after = null, limit = 25 } 
   };
 }
 
-// Resolve a published post's {page}_{post} feed id from its stored platform id, so
-// shares can be read per-post (lightweight) instead of a heavy bulk query. Text/
-// feed posts already store the {page}_{post}; photo/video posts store an object id
-// whose feed post we find via published_posts (attachments.target.id). Best-effort:
-// returns null if not found yet (e.g. a video still being indexed) — caller retries.
-export async function resolveParentPostId(platformPostId) {
+// Resolve a published post's {page}_{post} feed id from its stored platform id.
+// Best-effort: returns null if not found yet (caller retries).
+export async function resolveParentPostId(platformPostId, { token, fbPageId } = {}) {
   if (!platformPostId) return null;
   if (String(platformPostId).includes('_')) return platformPostId; // already a {page}_{post}
-  if (!env.facebook.pageId) return null;
+  const pageId = fbPageId || env.facebook.pageId;
+  if (!pageId) return null;
   try {
-    const { ok, data } = await graph(`${env.facebook.pageId}/published_posts`, {
+    const { ok, data } = await graph(`${pageId}/published_posts`, {
       fields: { fields: 'id,attachments.limit(1){target{id}}', limit: '25' },
+      token,
     });
     if (!ok) return null;
     for (const p of data.data || []) {
@@ -116,13 +115,9 @@ export async function resolveParentPostId(platformPostId) {
   return null;
 }
 
-// Read engagement for a set of published posts in ONE Graph batch (≤50 sub-
-// requests). Reactions/comments/shares come from the feed story ({page}_{post});
-// video views live on the video object, so a video adds a second sub-request.
-// Best-effort: a failed sub-request is skipped (caller keeps the last-known value)
-// rather than throwing. Returns Map<postId, { reactions?, comments?, shares?,
-// views? }> — a key is present only when that metric was read successfully.
-export async function fetchEngagementBatch(posts = []) {
+// Read engagement for a set of published posts (all from the SAME page) in ONE
+// Graph batch (≤50 sub-requests). Best-effort: a failed sub-request is skipped.
+export async function fetchEngagementBatch(posts = [], token) {
   const subs = []; // parallel to ops: { postId, kind, isFeed }
   const ops = [];
   for (const p of posts) {
@@ -142,7 +137,7 @@ export async function fetchEngagementBatch(posts = []) {
   }
   if (!ops.length) return new Map();
 
-  const results = await graphBatch(ops);
+  const results = await graphBatch(ops, token);
   const out = new Map();
   const bucket = (id) => {
     if (!out.has(id)) out.set(id, {});
@@ -170,15 +165,14 @@ export async function fetchEngagementBatch(posts = []) {
   return out;
 }
 
-// Daily page-level insight time-series from the Graph Insights API (Meta serves
-// the history). `metrics` is an array of metric names; returns
-// { [metricName]: [{ date: 'YYYY-MM-DD', value }] }. Throws on a Graph error.
-export async function fetchPageInsights(metrics = [], since, until) {
-  if (!env.facebook.pageId) throw new ApiError(503, 'Facebook page is not configured (FACEBOOK_PAGE_ID missing)');
+// Daily page-level insight time-series from the Graph Insights API.
+export async function fetchPageInsights(metrics = [], since, until, { token, fbPageId } = {}) {
+  const pageId = fbPageId || env.facebook.pageId;
+  if (!pageId) throw new ApiError(503, 'Facebook page is not configured');
   const fields = { metric: metrics.join(','), period: 'day' };
   if (since) fields.since = String(since);
   if (until) fields.until = String(until);
-  const { ok, error, data } = await graph(`${env.facebook.pageId}/insights`, { fields });
+  const { ok, error, data } = await graph(`${pageId}/insights`, { fields, token });
   if (!ok) throw new ApiError(502, `Couldn't read page insights: ${error?.message || 'unknown error'}`);
   const out = {};
   for (const m of data.data || []) {
@@ -191,9 +185,10 @@ export async function fetchPageInsights(metrics = [], since, until) {
 }
 
 // Current follower/fan count + name from the Page object. null on error.
-export async function fetchPageProfile() {
-  if (!env.facebook.pageId) return null;
-  const { ok, data } = await graph(env.facebook.pageId, { fields: { fields: 'name,fan_count,followers_count' } });
+export async function fetchPageProfile({ token, fbPageId } = {}) {
+  const pageId = fbPageId || env.facebook.pageId;
+  if (!pageId) return null;
+  const { ok, data } = await graph(pageId, { fields: { fields: 'name,fan_count,followers_count' }, token });
   if (!ok) return null;
   return { name: data.name ?? null, fans: data.fan_count ?? null, followers: data.followers_count ?? null };
 }

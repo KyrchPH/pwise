@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS post_pool (
   media_url       TEXT,
   s3_key          TEXT,
   target_platform VARCHAR(100),
+  account_id      INT NULL,                    -- which connected page this post publishes to
   status          VARCHAR(50) NOT NULL DEFAULT 'draft',
   priority        INT NOT NULL DEFAULT 0,
   scheduled_at    DATETIME NULL,
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS post_pool (
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_post_pool_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_post_pool_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE SET NULL,
   CONSTRAINT chk_post_pool_status
     CHECK (status IN ('draft','ready','posting','posted','failed','archived','expired')),
   CONSTRAINT chk_post_pool_media_type
@@ -77,7 +79,8 @@ CREATE TABLE IF NOT EXISTS post_pool (
   -- Supports the scheduler claim query:
   --   WHERE user_id = ? AND status = 'ready'
   --   ORDER BY priority DESC, created_at ASC  ... FOR UPDATE SKIP LOCKED LIMIT 1
-  INDEX idx_post_pool_claim (user_id, status, priority DESC, created_at)
+  INDEX idx_post_pool_claim (user_id, status, priority DESC, created_at),
+  INDEX idx_post_pool_account (account_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- posting_settings — automation config (exactly one row per user) --------
@@ -89,10 +92,12 @@ CREATE TABLE IF NOT EXISTS posting_settings (
   low_pool_alert_threshold INT NOT NULL DEFAULT 3,
   owner_email              VARCHAR(255),
   last_alert_sent_at       DATETIME NULL,
+  selected_account_id      INT NULL,            -- this user's currently-active page
   created_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at               DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_posting_settings_user (user_id),
-  CONSTRAINT fk_posting_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  CONSTRAINT fk_posting_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_posting_settings_account FOREIGN KEY (selected_account_id) REFERENCES platform_accounts(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- posting_logs — every posting attempt (append-only; no updated_at) ------
@@ -112,15 +117,21 @@ CREATE TABLE IF NOT EXISTS posting_logs (
   INDEX idx_posting_logs_post (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- platform_accounts — connected posting channels ------------------------
--- Tokens MUST be encrypted before being written here (see Security in plan).
+-- platform_accounts — connected posting channels (Facebook pages) -------
+-- Sensitive credentials (app_secret, app_client_token, access_token) MUST be
+-- encrypted before being written here — see server/src/utils/crypto.util.js.
+-- The page list is shared/global; user_id records the admin creator (audit).
 CREATE TABLE IF NOT EXISTS platform_accounts (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   user_id          INT NOT NULL,
   platform_name    VARCHAR(100) NOT NULL,
-  account_name     VARCHAR(255),
-  access_token     TEXT,
-  refresh_token    TEXT,
+  account_name     VARCHAR(255),                -- page display name
+  fb_page_id       VARCHAR(255),                -- Facebook Page ID
+  app_id           VARCHAR(255),                -- Facebook App ID (not secret)
+  app_secret       TEXT,                        -- ENCRYPTED
+  app_client_token TEXT,                        -- ENCRYPTED
+  access_token     TEXT,                        -- ENCRYPTED page access token
+  refresh_token    TEXT,                        -- ENCRYPTED (reserved)
   token_expires_at DATETIME NULL,
   is_active        BOOLEAN NOT NULL DEFAULT TRUE,
   created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -188,13 +199,14 @@ CREATE TABLE IF NOT EXISTS post_insight_history (
 -- follows, unfollows. Backfilled from the Graph Insights API, refreshed forward.
 CREATE TABLE IF NOT EXISTS page_insight_daily (
   id          INT AUTO_INCREMENT PRIMARY KEY,
+  account_id  INT NULL,                          -- which connected page (NULL = legacy/env)
   captured_on DATE NOT NULL,
   metric      VARCHAR(64) NOT NULL,
   value       BIGINT NOT NULL DEFAULT 0,
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_page_insight_day_metric (captured_on, metric),
-  INDEX idx_page_insight_metric (metric, captured_on)
+  UNIQUE KEY uq_page_insight_acct_day_metric (account_id, captured_on, metric),
+  INDEX idx_page_insight_acct_metric (account_id, metric, captured_on)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- creatomate_templates — reusable video render configs (Settings) --------------

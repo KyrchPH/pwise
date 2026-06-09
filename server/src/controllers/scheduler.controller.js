@@ -43,6 +43,6 @@ export const alertSent = asyncHandler(async (req, res) => {
 // Insights graph). Batched + scoped server-side; n8n just triggers this on a schedule.
 export const insightsSnapshot = asyncHandler(async (req, res) => {
   const posts = await postPool.snapshotRecentInsights();
-  const page = await analytics.refreshPageInsights(7); // also refresh page-level metrics
+  const page = await analytics.refreshAllPages(7); // refresh page-level metrics for every page
   sendSuccess(res, { posts, page });
 });

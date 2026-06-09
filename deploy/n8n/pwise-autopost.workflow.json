@@ -3,102 +3,283 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [ { "field": "minutes", "minutesInterval": 5 } ] }
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
       },
-      "id": "11111111-1111-1111-1111-111111111111",
-      "name": "Every 5 minutes",
+      "id": "sched-0001-0001-0001-000000000001",
+      "name": "Check Posts Every 5 minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-120, 320]
+      "position": [
+        -1040,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ks-page-id",
+              "name": "PAGE_ID",
+              "value": "YOUR_PAGE_ID",
+              "type": "string"
+            },
+            {
+              "id": "ks-page-token",
+              "name": "PAGE_ACCESS_TOKEN",
+              "value": "YOUR_PAGE_ACCESS_TOKEN",
+              "type": "string"
+            },
+            {
+              "id": "ks-admin-email",
+              "name": "ADMIN_EMAIL",
+              "value": "owner@example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "keystore-0001-0001-000000000002",
+      "name": "Keystore",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -840,
+        320
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "https://pwise-api.sixpent.com/api/scheduler/claim",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "YOUR_SERVICE_TOKEN" } ] },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-service-token",
+              "value": "YOUR_SERVICE_TOKEN"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "{ \"source\": \"n8n\" }",
         "options": {}
       },
-      "id": "22222222-2222-2222-2222-222222222222",
+      "id": "claim-0001-0001-0001-000000000003",
       "name": "Claim next post",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [100, 320]
+      "position": [
+        -640,
+        320
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
           "conditions": [
-            { "id": "cond-claimed", "leftValue": "={{ $json.data.claimed }}", "rightValue": "", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+            {
+              "id": "cond-claimed",
+              "leftValue": "={{ $json.data.claimed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
           ],
           "combinator": "and"
         },
         "options": {}
       },
-      "id": "33333333-3333-3333-3333-333333333333",
+      "id": "claimed-0001-0001-000000000004",
       "name": "Claimed?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [320, 320]
+      "position": [
+        -440,
+        320
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
           "conditions": [
-            { "id": "cond-media", "leftValue": "={{ $json.data.post.media_download_url }}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty", "singleValue": true } }
+            {
+              "id": "cond-media",
+              "leftValue": "={{ $json.data.post.media_download_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
           ],
           "combinator": "and"
         },
         "options": {}
       },
-      "id": "44444444-4444-4444-4444-444444444444",
+      "id": "hasmedia-0001-0001-000000000005",
       "name": "Has media?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [540, 320]
+      "position": [
+        -240,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-video",
+              "leftValue": "={{ $json.data.post.media_type }}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "isvideo-0001-0001-000000000006",
+      "name": "Is video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -20,
+        160
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://graph.facebook.com/v21.0/YOUR_PAGE_ID/photos",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Keystore').item.json.PAGE_ID }}/videos",
         "sendBody": true,
         "contentType": "form-urlencoded",
-        "bodyParameters": { "parameters": [
-          { "name": "url", "value": "={{ $('Claim next post').item.json.data.post.media_download_url }}" },
-          { "name": "caption", "value": "={{ $('Claim next post').item.json.data.post.caption }}" },
-          { "name": "access_token", "value": "YOUR_PAGE_ACCESS_TOKEN" }
-        ] },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file_url",
+              "value": "={{ $('Claim next post').item.json.data.post.media_download_url }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Claim next post').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Keystore').item.json.PAGE_ACCESS_TOKEN }}"
+            }
+          ]
+        },
         "options": {}
       },
-      "id": "55555555-5555-5555-5555-555555555555",
-      "name": "Post photo to Facebook",
+      "id": "fbvideo-0001-0001-000000000007",
+      "name": "Post video to Facebook",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [780, 180],
+      "position": [
+        220,
+        40
+      ],
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://graph.facebook.com/v21.0/YOUR_PAGE_ID/feed",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Keystore').item.json.PAGE_ID }}/photos",
         "sendBody": true,
         "contentType": "form-urlencoded",
-        "bodyParameters": { "parameters": [
-          { "name": "message", "value": "={{ $('Claim next post').item.json.data.post.caption }}" },
-          { "name": "access_token", "value": "YOUR_PAGE_ACCESS_TOKEN" }
-        ] },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $('Claim next post').item.json.data.post.media_download_url }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $('Claim next post').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Keystore').item.json.PAGE_ACCESS_TOKEN }}"
+            }
+          ]
+        },
         "options": {}
       },
-      "id": "66666666-6666-6666-6666-666666666666",
+      "id": "fbphoto-0001-0001-000000000008",
+      "name": "Post photo to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        260
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Keystore').item.json.PAGE_ID }}/feed",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $('Claim next post').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Keystore').item.json.PAGE_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fbtext-0001-0001-0001-000000000009",
       "name": "Post text to Facebook",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [780, 460],
+      "position": [
+        220,
+        480
+      ],
       "onError": "continueErrorOutput"
     },
     {
@@ -106,44 +287,265 @@
         "method": "POST",
         "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Claim next post').item.json.data.post.id }}/posted",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "YOUR_SERVICE_TOKEN" } ] },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-service-token",
+              "value": "YOUR_SERVICE_TOKEN"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"platform_post_id\": \"{{ $json.id }}\", \"response_message\": \"posted via n8n\", \"target_platform\": \"{{ $('Claim next post').item.json.data.post.target_platform }}\" }",
         "options": {}
       },
-      "id": "77777777-7777-7777-7777-777777777777",
+      "id": "markposted-0001-00000000000a",
       "name": "Mark posted",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1020, 240]
+      "position": [
+        520,
+        200
+      ]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Claim next post').item.json.data.post.id }}/failed",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "YOUR_SERVICE_TOKEN" } ] },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-service-token",
+              "value": "YOUR_SERVICE_TOKEN"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"error_message\": \"Facebook post failed via n8n\" }",
         "options": {}
       },
-      "id": "88888888-8888-8888-8888-888888888888",
+      "id": "markfailed-0001-00000000000b",
       "name": "Mark failed",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1020, 480]
+      "position": [
+        520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── pwise: build the result email (success or failure) ───────────────────────\nconst input = $input.first().json;\n\n// IMPORTANT: /posts/:id/posted AND /posts/:id/failed both return { success:true,\n// data:{ post } }, so input.success is ALWAYS true and can't tell them apart.\n// The updated post row carries the real signal — status, ids and failed_reason.\nconst post = input.data?.post ?? $('Claim next post').first().json?.data?.post ?? {};\nconst result = post.status === 'posted';\n\n// Escape so a caption/error can't break the HTML layout.\nconst esc = (s) =>\n  String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nconst caption = esc(post.caption || '(no caption)').replace(/\\n/g, '<br>');\nconst postId = post.id ?? '—';\nconst platform = post.target_platform || 'facebook';\nconst platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);\nconst when = new Date().toLocaleString('en-US', {\n  timeZone: 'Asia/Manila',\n  month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',\n});\nconst appUrl = 'https://pwise.sixpent.com/post-pool';\n\nif (result) {\n  // Linkable feed id the server resolved ({page}_{post}); fall back to the raw id.\n  const fbPostId = post.parent_post_id || post.platform_post_id || '';\n  const postUrl = fbPostId ? `https://facebook.com/${fbPostId}` : 'https://facebook.com/';\n\n  return [\n    {\n      json: {\n        subject: 'Your post is live on Facebook — Wise Cleaner Shop',\n        message: `<!DOCTYPE html>\n<html>\n<body style=\"margin:0;padding:0;background:#e6f3fc;\">\n  <div style=\"display:none;max-height:0;overflow:hidden;opacity:0;\">Your scheduled post just went live on Facebook.</div>\n  <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#e6f3fc;padding:24px 12px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">\n    <tr><td align=\"center\">\n      <table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #d4e6f5;\">\n        <tr><td style=\"height:8px;background:#1f9be6;border-bottom:3px solid #ffc400;font-size:0;line-height:0;\">&nbsp;</td></tr>\n        <tr><td style=\"padding:22px 28px 8px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>\n            <td style=\"font-size:18px;font-weight:800;color:#0f6fbb;\">Wise Cleaner Shop</td>\n            <td align=\"right\" style=\"font-size:12px;color:#5c7f99;\">pwise autoposter</td>\n          </tr></table>\n        </td></tr>\n        <tr><td style=\"padding:8px 28px 0;\">\n          <span style=\"display:inline-block;background:#e7f8ee;color:#1f8f43;font-size:13px;font-weight:700;padding:6px 12px;border-radius:999px;\">&#9679; Posted</span>\n          <h1 style=\"margin:14px 0 6px;font-size:22px;color:#123a57;\">Your post is live on Facebook &#127881;</h1>\n          <p style=\"margin:0;color:#5c7f99;font-size:14px;line-height:1.5;\">Your scheduled content was just published.</p>\n        </td></tr>\n        <tr><td style=\"padding:20px 28px 4px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f1f8fe;border:1px solid #d4e6f5;border-radius:12px;\"><tr><td style=\"padding:16px 18px;\">\n            <p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#5c7f99;text-transform:uppercase;letter-spacing:.05em;\">Caption</p>\n            <p style=\"margin:0 0 16px;font-size:15px;color:#123a57;line-height:1.5;\">${caption}</p>\n            <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"font-size:14px;color:#123a57;\">\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Platform</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${platformLabel}</td></tr>\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Posted</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${when}</td></tr>\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Post ID</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">#${postId}</td></tr>\n            </table>\n          </td></tr></table>\n        </td></tr>\n        <tr><td style=\"padding:22px 28px 28px;\" align=\"center\">\n          <a href=\"${postUrl}\" style=\"display:inline-block;background:#1f9be6;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:999px;\">View on Facebook &#8594;</a>\n        </td></tr>\n        <tr><td style=\"padding:18px 28px;background:#f1f8fe;border-top:1px solid #d4e6f5;\">\n          <p style=\"margin:0;font-size:12px;color:#93afc4;line-height:1.5;\">Automated message from <strong style=\"color:#5c7f99;\">pwise</strong> — the Wise Cleaner Shop autoposter.</p>\n        </td></tr>\n      </table>\n    </td></tr>\n  </table>\n</body>\n</html>`,\n      },\n    },\n  ];\n}\n\n// failure — the /failed response row has failed_reason set by the server.\nconst errorMessage = esc(post.failed_reason || 'Unknown error from Facebook');\n\nreturn [\n  {\n    json: {\n      subject: 'A post failed to publish — Wise Cleaner Shop',\n      message: `<!DOCTYPE html>\n<html>\n<body style=\"margin:0;padding:0;background:#e6f3fc;\">\n  <div style=\"display:none;max-height:0;overflow:hidden;opacity:0;\">A scheduled post couldn't be published to Facebook.</div>\n  <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#e6f3fc;padding:24px 12px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">\n    <tr><td align=\"center\">\n      <table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #d4e6f5;\">\n        <tr><td style=\"height:8px;background:#1f9be6;border-bottom:3px solid #ffc400;font-size:0;line-height:0;\">&nbsp;</td></tr>\n        <tr><td style=\"padding:22px 28px 8px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>\n            <td style=\"font-size:18px;font-weight:800;color:#0f6fbb;\">Wise Cleaner Shop</td>\n            <td align=\"right\" style=\"font-size:12px;color:#5c7f99;\">pwise autoposter</td>\n          </tr></table>\n        </td></tr>\n        <tr><td style=\"padding:8px 28px 0;\">\n          <span style=\"display:inline-block;background:#fdeceb;color:#c52f24;font-size:13px;font-weight:700;padding:6px 12px;border-radius:999px;\">&#9679; Failed</span>\n          <h1 style=\"margin:14px 0 6px;font-size:22px;color:#123a57;\">We couldn't publish your post</h1>\n          <p style=\"margin:0;color:#5c7f99;font-size:14px;line-height:1.5;\">Facebook rejected this one, so it's marked <strong>failed</strong> in pwise. It stays in your pool so you can fix and retry it.</p>\n        </td></tr>\n        <tr><td style=\"padding:20px 28px 4px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f1f8fe;border:1px solid #d4e6f5;border-radius:12px;\"><tr><td style=\"padding:16px 18px;\">\n            <p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#5c7f99;text-transform:uppercase;letter-spacing:.05em;\">Caption</p>\n            <p style=\"margin:0 0 16px;font-size:15px;color:#123a57;line-height:1.5;\">${caption}</p>\n            <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"font-size:14px;color:#123a57;\">\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Platform</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${platformLabel}</td></tr>\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Attempted</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${when}</td></tr>\n              <tr><td style=\"padding:4px 0;color:#5c7f99;\">Post ID</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">#${postId}</td></tr>\n            </table>\n          </td></tr></table>\n        </td></tr>\n        <tr><td style=\"padding:14px 28px 4px;\">\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#fdeceb;border:1px solid #f6c9c5;border-radius:12px;\"><tr><td style=\"padding:14px 18px;\">\n            <p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#c52f24;text-transform:uppercase;letter-spacing:.05em;\">Error</p>\n            <p style=\"margin:0;font-size:14px;color:#8f231c;line-height:1.5;font-family:Consolas,Menlo,monospace;\">${errorMessage}</p>\n          </td></tr></table>\n        </td></tr>\n        <tr><td style=\"padding:16px 28px 0;\">\n          <p style=\"margin:0 0 6px;font-size:13px;font-weight:700;color:#123a57;\">What to check</p>\n          <ul style=\"margin:0;padding-left:18px;color:#5c7f99;font-size:13px;line-height:1.7;\">\n            <li>Your Facebook Page access token hasn't expired</li>\n            <li>The media/caption meets Facebook's requirements</li>\n            <li>Re-post it from the pool once fixed</li>\n          </ul>\n        </td></tr>\n        <tr><td style=\"padding:22px 28px 28px;\" align=\"center\">\n          <a href=\"${appUrl}\" style=\"display:inline-block;background:#e63b2e;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:999px;\">Open Post Pool &#8594;</a>\n        </td></tr>\n        <tr><td style=\"padding:18px 28px;background:#f1f8fe;border-top:1px solid #d4e6f5;\">\n          <p style=\"margin:0;font-size:12px;color:#93afc4;line-height:1.5;\">Automated message from <strong style=\"color:#5c7f99;\">pwise</strong> — the Wise Cleaner Shop autoposter.</p>\n        </td></tr>\n      </table>\n    </td></tr>\n  </table>\n</body>\n</html>`,\n    },\n  },\n];\n"
+      },
+      "id": "emailout-0001-0001-00000000000c",
+      "name": "Assign Email Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Keystore').item.json.ADMIN_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "sendmail-0001-0001-00000000000d",
+      "name": "Send a message",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        320
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
     }
   ],
   "connections": {
-    "Every 5 minutes": { "main": [ [ { "node": "Claim next post", "type": "main", "index": 0 } ] ] },
-    "Claim next post": { "main": [ [ { "node": "Claimed?", "type": "main", "index": 0 } ] ] },
-    "Claimed?": { "main": [ [ { "node": "Has media?", "type": "main", "index": 0 } ], [] ] },
-    "Has media?": { "main": [ [ { "node": "Post photo to Facebook", "type": "main", "index": 0 } ], [ { "node": "Post text to Facebook", "type": "main", "index": 0 } ] ] },
-    "Post photo to Facebook": { "main": [ [ { "node": "Mark posted", "type": "main", "index": 0 } ], [ { "node": "Mark failed", "type": "main", "index": 0 } ] ] },
-    "Post text to Facebook": { "main": [ [ { "node": "Mark posted", "type": "main", "index": 0 } ], [ { "node": "Mark failed", "type": "main", "index": 0 } ] ] }
+    "Check Posts Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Keystore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keystore": {
+      "main": [
+        [
+          {
+            "node": "Claim next post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim next post": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Has media?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Has media?": {
+      "main": [
+        [
+          {
+            "node": "Is video?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post text to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is video?": {
+      "main": [
+        [
+          {
+            "node": "Post video to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post photo to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post video to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post photo to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post text to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark posted": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Email Output": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "active": false
 }

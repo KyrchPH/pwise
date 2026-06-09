@@ -14,6 +14,7 @@ import activityRoutes from './routes/activity.routes.js';
 import contentNotesRoutes from './routes/content_notes.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
+import platformAccountsRoutes from './routes/platform_accounts.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -44,6 +45,7 @@ export function createApp() {
   app.use('/api/content-notes', revalidate, contentNotesRoutes);
   app.use('/api/analytics', revalidate, analyticsRoutes);
   app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
+  app.use('/api/pages', revalidate, platformAccountsRoutes);
 
   // Machine-facing (service-token) routes for n8n.
   app.use('/api/scheduler', schedulerRoutes);

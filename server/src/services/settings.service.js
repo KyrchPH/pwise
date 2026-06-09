@@ -34,3 +34,16 @@ export async function updateForUser(userId, data = {}) {
   const rows = await query('SELECT * FROM posting_settings WHERE user_id = ?', [userId]);
   return rows[0];
 }
+
+// The user's currently-active Facebook page (drives view filtering + new-post
+// targeting). Managed separately from the general settings update.
+export async function getSelectedAccountId(userId) {
+  const s = await getForUser(userId);
+  return s.selected_account_id ?? null;
+}
+
+export async function setSelectedAccount(userId, accountId) {
+  await getForUser(userId); // ensure a row exists
+  await query('UPDATE posting_settings SET selected_account_id = ? WHERE user_id = ?', [accountId ?? null, userId]);
+  return accountId ?? null;
+}

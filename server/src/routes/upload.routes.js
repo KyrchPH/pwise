@@ -7,5 +7,6 @@ const router = Router();
 router.use(requireAuth);
 router.post('/presigned-url', ctrl.presignedUrl);
 router.post('/confirm', ctrl.confirm);
+router.post('/discard', ctrl.discard);
 
 export default router;

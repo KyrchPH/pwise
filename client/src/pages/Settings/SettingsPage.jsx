@@ -3,8 +3,10 @@ import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
 import { invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Card, Button, Field, Toggle, Spinner } from '../../components/ui.jsx';
 import CreatomateTemplates from './CreatomateTemplates.jsx';
+import FacebookPages from './FacebookPages.jsx';
 
 const TIMEZONES = [
   'Asia/Manila',
@@ -21,6 +23,7 @@ const TIMEZONES = [
 
 export default function SettingsPage() {
   const toast = useToast();
+  const { isAdmin } = useAuth();
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -127,6 +130,7 @@ export default function SettingsPage() {
         </Button>
       </form>
 
+      {isAdmin && <FacebookPages />}
       <CreatomateTemplates />
     </>
   );

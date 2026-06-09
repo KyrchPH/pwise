@@ -152,8 +152,21 @@ function localDateStr(d = new Date()) {
 // event-like { target: { value } } to match the rest of the form.
 export function TimeSelect({ value, onChange, date, className = '', placeholder = 'Pick a time' }) {
   const [open, setOpen] = useState(false);
+  const [dropUp, setDropUp] = useState(false);
   const wrapRef = useRef(null);
   const menuRef = useRef(null);
+
+  // Open the menu upward when there isn't room below (e.g. near a modal's bottom),
+  // so it doesn't overflow and force the container to scroll.
+  const toggle = () => {
+    if (!open && wrapRef.current) {
+      const r = wrapRef.current.getBoundingClientRect();
+      const menuH = 280; // ~ max-height (264) + paddings/margin
+      const spaceBelow = window.innerHeight - r.bottom;
+      setDropUp(spaceBelow < menuH && r.top > spaceBelow);
+    }
+    setOpen((o) => !o);
+  };
 
   const now = new Date();
   const isToday = date && date === localDateStr(now);
@@ -192,7 +205,7 @@ export function TimeSelect({ value, onChange, date, className = '', placeholder 
       <button
         type="button"
         className={`timeselect__btn${selected ? '' : ' timeselect__btn--placeholder'}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -213,7 +226,7 @@ export function TimeSelect({ value, onChange, date, className = '', placeholder 
         </svg>
       </button>
       {open && (
-        <div className="timeselect__menu" role="listbox" ref={menuRef}>
+        <div className={`timeselect__menu${dropUp ? ' timeselect__menu--up' : ''}`} role="listbox" ref={menuRef}>
           {HALF_HOUR_SLOTS.map((s) => {
             const past = isPast(s);
             const sel = s.value === value;
@@ -381,10 +394,13 @@ export function Modal({ open, title, onClose, children, footer, dismissable = tr
   // Released while `hidden` (e.g. dragging an item out) so the page behind can scroll.
   useEffect(() => {
     if (!open || hidden) return undefined;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    // Lock the app's scroll container (the content area) so the background
+    // doesn't scroll behind the dialog. Falls back to body on shell-less pages.
+    const scroller = document.querySelector('.content') || document.body;
+    const prev = scroller.style.overflow;
+    scroller.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      scroller.style.overflow = prev;
     };
   }, [open, hidden]);
 

@@ -36,6 +36,23 @@ export const env = {
     graphVersion: process.env.FB_GRAPH_VERSION || 'v21.0',
     pageId: process.env.FACEBOOK_PAGE_ID || '',
   },
+
+  // "Generate with Template" delegates rendering to n8n (the "Post to n8n"
+  // webhook), which holds the Creatomate credential and runs the render — so the
+  // server needs the webhook URL, NOT a Creatomate API key. `videoKey` is the
+  // template element the input video is injected into (Creatomate's docs + the
+  // n8n flow both use "Background-Video").
+  creatomate: {
+    videoKey: process.env.CREATOMATE_VIDEO_KEY || 'Background-Video',
+  },
+  n8n: {
+    generateWebhookUrl: process.env.N8N_GENERATE_WEBHOOK_URL || '',
+    webhookToken: process.env.N8N_WEBHOOK_TOKEN || '', // optional: sent as x-service-token
+  },
+
+  // At-rest encryption key for connected-page credentials (platform_accounts).
+  // 64 hex chars: `openssl rand -hex 32`.
+  encryptionKey: process.env.ENCRYPTION_KEY || '',
 };
 
 // Warn (don't crash) on missing config so the server still boots for partial use.
@@ -46,6 +63,8 @@ export function validateEnv(logger = console) {
   if (!env.serviceToken) warnings.push('SERVICE_TOKEN is not set — /api/scheduler/* endpoints are disabled (503).');
   if (!env.aws.bucket || !env.aws.region) warnings.push('AWS S3 not fully configured — upload + presigned URLs will fail.');
   if (!env.facebook.pageAccessToken) warnings.push('FACEBOOK_PAGE_ACCESS_TOKEN is not set — deleting/editing published posts on Facebook will fail (503).');
+  if (!env.n8n.generateWebhookUrl) warnings.push('N8N_GENERATE_WEBHOOK_URL is not set — "Generate with Template" will fail (503).');
+  if (!env.encryptionKey) warnings.push('ENCRYPTION_KEY is not set — adding/using connected Facebook pages will fail (503).');
   for (const w of warnings) logger.warn(`[env] ${w}`);
   return warnings;
 }

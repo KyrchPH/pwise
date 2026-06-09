@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Button, Logo } from './ui.jsx';
+import { usePages } from '../context/PageContext.jsx';
+import { Button, Dropdown, Logo } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
 // whole nav is consistent — no emojis. Inherits the link's text color.
@@ -130,6 +131,7 @@ const TITLES = {
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
+  const { pages, activeId, switchPage } = usePages();
   const { pathname } = useLocation();
   const title = TITLES[pathname] || 'pwise';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
@@ -186,6 +188,26 @@ export default function AppLayout() {
               </svg>
             </button>
             <div className="topbar__title">{title}</div>
+            {pages.length > 0 ? (
+              <div className="topbar__page" title="Active Facebook page (scopes everything below)">
+                <span className="topbar__page-ico" aria-hidden="true">📄</span>
+                <Dropdown
+                  className="topbar__pageswitch"
+                  ariaLabel="Active Facebook page"
+                  value={activeId != null ? String(activeId) : ''}
+                  options={pages
+                    .filter((p) => p.is_active)
+                    .map((p) => ({ value: String(p.id), label: p.account_name }))}
+                  onChange={(v) => switchPage(Number(v))}
+                />
+              </div>
+            ) : (
+              user?.role === 'admin' && (
+                <Link to="/settings" className="topbar__page-connect">
+                  + Connect a page
+                </Link>
+              )
+            )}
           </div>
           <div className="user-chip">
             <div className="avatar">{initials}</div>
@@ -199,7 +221,9 @@ export default function AppLayout() {
           </div>
         </header>
         <main className="content">
-          <Outlet />
+          <div className="content__inner">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

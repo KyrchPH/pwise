@@ -4,6 +4,7 @@ import { minutesSince } from '../utils/date.util.js';
 import { createDownloadUrl } from './s3.service.js';
 import * as logsService from './logs.service.js';
 import * as fb from './fb.service.js';
+import * as accounts from './platform_accounts.service.js';
 
 async function enabledUserIds() {
   const rows = await query('SELECT user_id FROM posting_settings WHERE is_enabled = 1');
@@ -55,7 +56,22 @@ async function claimAndLock(whereSql, params, orderBy) {
         /* S3 not configured / object missing */
       }
     }
-    return { claimed: true, post: { ...post, status: 'posting', media_download_url: mediaDownloadUrl } };
+
+    // Hand n8n the target page's id + (decrypted) token so it posts to the right
+    // page. Null when the post isn't tagged — n8n falls back to its own creds.
+    let page = null;
+    if (post.account_id) {
+      try {
+        const a = await accounts.getDecrypted(post.account_id);
+        page = { fb_page_id: a.fb_page_id, access_token: a.access_token };
+      } catch {
+        /* page gone / encryption unavailable */
+      }
+    }
+    return {
+      claimed: true,
+      post: { ...post, status: 'posting', media_download_url: mediaDownloadUrl, page },
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -94,8 +110,17 @@ export async function markPosted(postId, { platformPostId = null, responseMessag
 
   // Resolve the {page}_{post} feed id now so shares can be read per-post later.
   // Best-effort: a video's feed story may not be indexed yet (then it's null and
-  // the next engagement refresh backfills it).
-  const parentPostId = await fb.resolveParentPostId(platformPostId);
+  // the next engagement refresh backfills it). Use the post's page credentials.
+  let pageCtx = {};
+  if (post.account_id) {
+    try {
+      const a = await accounts.getDecrypted(post.account_id);
+      pageCtx = { token: a.access_token, fbPageId: a.fb_page_id };
+    } catch {
+      /* fall back to env */
+    }
+  }
+  const parentPostId = await fb.resolveParentPostId(platformPostId, pageCtx);
   await query(
     "UPDATE post_pool SET status = 'posted', posted_at = UTC_TIMESTAMP(), platform_post_id = ?, parent_post_id = ? WHERE id = ?",
     [platformPostId, parentPostId, postId],

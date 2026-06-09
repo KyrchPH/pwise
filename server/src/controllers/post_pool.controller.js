@@ -1,12 +1,14 @@
 import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/post_pool.service.js';
+import * as settings from '../services/settings.service.js';
 
 // Shared pool: reads are not user-scoped (everyone sees every post). Writes pass
 // the acting user (req.user = { id, name, ... }) so the action is audit-logged.
 export const list = asyncHandler(async (req, res) => {
   const { status, scheduled, limit, offset, refresh } = req.query;
-  const { posts, total } = await service.list({ status, scheduled, limit, offset });
+  const accountId = await settings.getSelectedAccountId(req.user.id); // active page scope
+  const { posts, total } = await service.list({ status, scheduled, accountId, limit, offset });
   // `refresh=1` re-reads engagement for this page's published posts from Facebook
   // (stale-only, best-effort) before responding — used by the Post Pool page load.
   if (refresh === '1' || refresh === 'true') await service.refreshEngagement(posts);
@@ -50,7 +52,8 @@ export const remove = asyncHandler(async (req, res) => {
 });
 
 export const counts = asyncHandler(async (req, res) => {
-  const counts = await service.counts();
+  const accountId = await settings.getSelectedAccountId(req.user.id); // active page scope
+  const counts = await service.counts(accountId);
   sendSuccess(res, { counts });
 });
 

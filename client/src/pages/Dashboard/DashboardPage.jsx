@@ -18,7 +18,7 @@ const STAT_DEFS = [
 
 export default function DashboardPage() {
   const toast = useToast();
-  const { data, loading, error } = useCachedResource('dashboard', () =>
+  const { data, loading, error, refresh } = useCachedResource('dashboard', () =>
     Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })]).then(
       ([counts, settings, scheduled]) => ({ counts, settings, scheduled: scheduled.posts }),
     ),
@@ -122,7 +122,7 @@ export default function DashboardPage() {
           <div className="card__title">Content calendar</div>
           <span className="text-sm text-muted">Open days have no post scheduled yet</span>
         </div>
-        <CalendarMonth posts={scheduled} />
+        <CalendarMonth posts={scheduled} onPostsChanged={refresh} />
       </Card>
     </>
   );

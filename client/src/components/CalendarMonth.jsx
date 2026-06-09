@@ -3,6 +3,7 @@ import * as notesService from '../services/content_notes.service.js';
 import { apiError } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import DayNotesModal from './DayNotesModal.jsx';
+import CreatePostModal from './CreatePostModal.jsx';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
@@ -16,7 +17,7 @@ const keyOf = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
  * Month calendar showing how many posts are scheduled on each day.
  * Empty upcoming days (no post set yet) are highlighted as "open".
  */
-export default function CalendarMonth({ posts = [] }) {
+export default function CalendarMonth({ posts = [], onPostsChanged }) {
   const toast = useToast();
   const today = new Date();
   const [view, setView] = useState({ year: today.getFullYear(), month: today.getMonth() });
@@ -25,6 +26,7 @@ export default function CalendarMonth({ posts = [] }) {
   const [draggingNote, setDraggingNote] = useState(null);
   const [dragOverKey, setDragOverKey] = useState(null);
   const [notesRefreshToken, setNotesRefreshToken] = useState(0);
+  const [creatingForDate, setCreatingForDate] = useState(null);
 
   // Per-day note counts for the visible month → drives the calendar's note badges.
   useEffect(() => {
@@ -64,18 +66,30 @@ export default function CalendarMonth({ posts = [] }) {
     }
   };
 
-  // Bucket scheduled posts by their LOCAL calendar day.
-  const counts = useMemo(() => {
+  // Bucket scheduled posts by their LOCAL calendar day → drives both the per-day
+  // count badges and the list shown in the day dialog.
+  const postsByDay = useMemo(() => {
     const map = {};
     for (const p of posts) {
       if (!p.scheduled_at) continue;
       const d = new Date(p.scheduled_at);
       if (Number.isNaN(d.getTime())) continue;
       const k = keyOf(d.getFullYear(), d.getMonth(), d.getDate());
-      map[k] = (map[k] || 0) + 1;
+      if (!map[k]) map[k] = [];
+      map[k].push(p);
     }
     return map;
   }, [posts]);
+  const counts = useMemo(() => {
+    const m = {};
+    for (const k of Object.keys(postsByDay)) m[k] = postsByDay[k].length;
+    return m;
+  }, [postsByDay]);
+
+  // The selected day's posts (earliest first) — shown alongside notes in the dialog.
+  const dayPosts = selectedDate
+    ? (postsByDay[selectedDate] || []).slice().sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
+    : [];
 
   const { year, month } = view;
   const startDow = new Date(year, month, 1).getDay();
@@ -136,6 +150,7 @@ export default function CalendarMonth({ posts = [] }) {
           if (d === null) return <div key={`b${i}`} className="calendar__cell calendar__cell--blank" />;
           const k = keyOf(year, month, d);
           const count = counts[k] || 0;
+          const cellPosts = postsByDay[k] || [];
           const cell = new Date(year, month, d);
           const isPast = cell < todayMidnight;
           const isToday = k === todayKey;
@@ -190,9 +205,21 @@ export default function CalendarMonth({ posts = [] }) {
                 </span>
               )}
               {count > 0 && (
-                <span className="calendar__count" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
-                  {count}
-                  <span className="calendar__count-unit">{count === 1 ? 'post' : 'posts'}</span>
+                <span className="calendar__thumbs" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
+                  {cellPosts.slice(0, 3).map((p, idx) => (
+                    <span className="calendar__thumb" key={p.id} style={{ zIndex: 5 - idx }}>
+                      {p.media_preview_url ? (
+                        p.media_type === 'video' ? (
+                          <video src={p.media_preview_url} muted preload="metadata" />
+                        ) : (
+                          <img src={p.media_preview_url} alt="" />
+                        )
+                      ) : (
+                        <span className="calendar__thumb-ph" aria-hidden="true">📝</span>
+                      )}
+                    </span>
+                  ))}
+                  {count > 3 && <span className="calendar__thumb calendar__thumb--more">+{count - 3}</span>}
                 </span>
               )}
             </div>
@@ -214,14 +241,25 @@ export default function CalendarMonth({ posts = [] }) {
 
       <DayNotesModal
         dateKey={selectedDate}
-        hidden={!!draggingNote}
+        hidden={!!draggingNote || !!creatingForDate}
         refreshToken={notesRefreshToken}
+        posts={dayPosts}
+        onCreatePost={(k) => setCreatingForDate(k)}
         onClose={() => setSelectedDate(null)}
         onChanged={refreshNoteCounts}
         onNoteDragStart={(note) => setDraggingNote(note)}
         onNoteDragEnd={() => {
           setDraggingNote(null);
           setDragOverKey(null);
+        }}
+      />
+
+      <CreatePostModal
+        dateKey={creatingForDate}
+        onClose={() => setCreatingForDate(null)}
+        onCreated={() => {
+          setCreatingForDate(null);
+          onPostsChanged?.(); // refresh dashboard data so the new post shows
         }}
       />
     </div>

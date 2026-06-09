@@ -46,6 +46,14 @@ export async function createDownloadUrl(s3Key, expiresIn = env.downloadUrlTtl) {
   return url;
 }
 
+// Server-side upload of in-memory bytes (used to ingest a finished Creatomate
+// render into our bucket so it can be published like any other media).
+export async function putObject(s3Key, body, contentType) {
+  ensureConfigured();
+  await s3Client.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: s3Key, Body: body, ContentType: contentType }));
+  return { s3Key, mediaUrl: publicObjectUrl(s3Key) };
+}
+
 // Verify an uploaded object exists (used by /upload/confirm).
 export async function headObject(s3Key) {
   ensureConfigured();
