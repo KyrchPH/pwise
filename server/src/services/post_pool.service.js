@@ -103,20 +103,20 @@ export async function isSlotFree(scheduledAt, excludeId = null) {
 // Shared pool: every user sees every post. A row's `user_id` records its creator
 // (for the audit trail), not access control.
 export async function list({ status, scheduled, accountId = null, limit = 50, offset = 0 } = {}) {
-  const where = [];
-  const params = [];
+  // Page-scoped view: every post belongs to a connected page, so with no active
+  // page selected there is nothing in scope. (A null account used to mean "no
+  // filter" → a fresh deploy with no connected page still listed every post.)
+  if (accountId == null) return { posts: [], total: 0 };
+
+  const where = ['account_id = ?'];
+  const params = [accountId];
   if (status) {
     if (!ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status filter: ${status}`);
     where.push('status = ?');
     params.push(status);
   }
   if (truthy(scheduled)) where.push('scheduled_at IS NOT NULL');
-  // Scope to the caller's active page (per-user). Null = no page selected → no filter.
-  if (accountId != null) {
-    where.push('account_id = ?');
-    params.push(accountId);
-  }
-  const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  const whereSql = ' WHERE ' + where.join(' AND ');
 
   // Total for the same filter, so the client can paginate (page X of Y).
   const [{ total }] = await query(`SELECT COUNT(*) AS total FROM post_pool${whereSql}`, params);
@@ -280,10 +280,12 @@ export async function remove(id, actor = {}) {
 
 // Status breakdown for the dashboard, scoped to the caller's active page.
 export async function counts(accountId = null) {
-  const where = accountId != null ? ' WHERE account_id = ?' : '';
-  const params = accountId != null ? [accountId] : [];
-  const rows = await query(`SELECT status, COUNT(*) AS count FROM post_pool${where} GROUP BY status`, params);
   const out = { draft: 0, ready: 0, posting: 0, posted: 0, failed: 0, archived: 0, total: 0 };
+  if (accountId == null) return out; // no active page → all zero (see list())
+  const rows = await query(
+    'SELECT status, COUNT(*) AS count FROM post_pool WHERE account_id = ? GROUP BY status',
+    [accountId],
+  );
   for (const r of rows) {
     out[r.status] = Number(r.count);
     out.total += Number(r.count);

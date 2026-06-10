@@ -27,6 +27,12 @@ export const stats = asyncHandler(async (req, res) => {
   sendSuccess(res, { stats: await pages.getStats(req.params.id) });
 });
 
+// Re-sync all pages' name/followers from Facebook (the switcher's refresh
+// button). Corrects stale names and flags pages whose token failed.
+export const refresh = asyncHandler(async (req, res) => {
+  sendSuccess(res, { results: await pages.refreshAll() });
+});
+
 // Switch the current user's active page.
 export const select = asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};

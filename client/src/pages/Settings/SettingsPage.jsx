@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
 import { invalidateCache } from '../../hooks/useCachedResource.js';
@@ -129,6 +130,20 @@ export default function SettingsPage() {
           {saving ? 'Saving…' : 'Save settings'}
         </Button>
       </form>
+
+      <Card className="card--pad" style={{ maxWidth: 640, marginTop: 24 }}>
+        <div className="row row--between" style={{ gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Password</div>
+            <div className="text-sm text-muted">
+              Change your account password. We&rsquo;ll email you a verification code to confirm.
+            </div>
+          </div>
+          <Button as={Link} to="/settings/change-password" variant="subtle" size="sm">
+            Change password
+          </Button>
+        </div>
+      </Card>
 
       {isAdmin && <FacebookPages />}
       <CreatomateTemplates />

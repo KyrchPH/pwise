@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
+import { useToast } from '../context/ToastContext.jsx';
+import * as pagesService from '../services/pages.service.js';
 import { Button, Modal } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
@@ -20,6 +23,28 @@ function Ico({ children }) {
       aria-hidden="true"
     >
       {children}
+    </svg>
+  );
+}
+
+// Circular-arrows refresh icon; spins while a sync is in flight.
+function RefreshIcon({ spinning = false }) {
+  return (
+    <svg
+      className={`spin-icon${spinning ? ' is-spinning' : ''}`}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M23 4v6h-6" />
+      <path d="M1 20v-6h6" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
     </svg>
   );
 }
@@ -156,15 +181,46 @@ function PageAvatar({ page, className = '' }) {
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
-  const { pages, activeId, activePage, activeFollowers, switchPage } = usePages();
+  const { theme, toggle: toggleTheme } = useTheme();
+  const { pages, activeId, activePage, activeFollowers, switchPage, refresh: refreshPages } = usePages();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const isAdmin = user?.role === 'admin';
   const title = TITLES[pathname] || 'pwise';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false); // page-switcher dialog
+  const [syncing, setSyncing] = useState(false); // refreshing page data from Facebook
+  const [expiredIds, setExpiredIds] = useState(() => new Set()); // pages whose token failed to refresh
   useEffect(() => setNavOpen(false), [pathname]);
+
+  // Pull fresh name/followers for every page from Facebook; flag any whose token
+  // failed so the tile can show "Expired" + an Update shortcut.
+  const syncPages = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const results = await pagesService.refreshAll();
+      const failed = results.filter((r) => !r.ok);
+      setExpiredIds(new Set(failed.map((r) => r.id)));
+      await refreshPages(); // reload names + followers into the switcher/sidebar
+      if (failed.length === 0) toast.success('Pages up to date');
+      else toast.error(`${failed.length} page${failed.length === 1 ? '' : 's'} need a new token`);
+    } catch (e) {
+      toast.error('Could not refresh pages');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Expired tile → Settings, scrolled to the Facebook Pages section (admins only).
+  const goFixPage = () => {
+    setPickerOpen(false);
+    navigate('/settings#facebook-pages');
+  };
   useEffect(() => {
     if (!navOpen) return undefined;
     const onKey = (e) => e.key === 'Escape' && setNavOpen(false);
@@ -247,6 +303,31 @@ export default function AppLayout() {
             <div className="topbar__title">{title}</div>
           </div>
           <div className="user-chip">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              {theme === 'dark' ? (
+                <Ico>
+                  <circle cx="12" cy="12" r="5" />
+                  <line x1="12" y1="1" x2="12" y2="3" />
+                  <line x1="12" y1="21" x2="12" y2="23" />
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                  <line x1="1" y1="12" x2="3" y2="12" />
+                  <line x1="21" y1="12" x2="23" y2="12" />
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                </Ico>
+              ) : (
+                <Ico>
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </Ico>
+              )}
+            </button>
             <div className="avatar">{initials}</div>
             <div className="col" style={{ lineHeight: 1.2 }}>
               {user?.name && <span className="text-sm">{user.name}</span>}
@@ -269,9 +350,21 @@ export default function AppLayout() {
         title="Switch page"
         onClose={() => setPickerOpen(false)}
         className="modal--pagepicker"
+        headerActions={
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon"
+            onClick={syncPages}
+            disabled={syncing}
+            title="Refresh page data from Facebook"
+            aria-label="Refresh page data from Facebook"
+          >
+            <RefreshIcon spinning={syncing} />
+          </button>
+        }
         footer={
-          user?.role === 'admin' ? (
-            <Link to="/settings" className="btn btn--primary" onClick={() => setPickerOpen(false)}>
+          isAdmin ? (
+            <Link to="/settings#facebook-pages" className="btn btn--primary" onClick={() => setPickerOpen(false)}>
               + Add page
             </Link>
           ) : null
@@ -280,26 +373,35 @@ export default function AppLayout() {
         <ul className="page-picker">
           {pages
             .filter((p) => p.is_active)
-            .map((p) => (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  className={`page-picker__item${p.id === activeId ? ' is-active' : ''}`}
-                  onClick={() => {
-                    switchPage(p.id);
-                    setPickerOpen(false);
-                  }}
-                >
-                  <PageAvatar page={p} className="page-picker__photo" />
-                  <span className="page-picker__name">{p.account_name}</span>
-                  {p.id === activeId && (
-                    <span className="page-picker__check" aria-hidden="true">
-                      ✓
-                    </span>
+            .map((p) => {
+              const expired = expiredIds.has(p.id);
+              return (
+                <li key={p.id} className="page-picker__row">
+                  <button
+                    type="button"
+                    className={`page-picker__item${p.id === activeId ? ' is-active' : ''}${expired ? ' is-expired' : ''}`}
+                    onClick={() => {
+                      switchPage(p.id);
+                      setPickerOpen(false);
+                    }}
+                  >
+                    <PageAvatar page={p} className="page-picker__photo" />
+                    <span className="page-picker__name">{p.account_name}</span>
+                    {expired && <span className="badge badge--expired page-picker__badge">Expired</span>}
+                    {p.id === activeId && !expired && (
+                      <span className="page-picker__check" aria-hidden="true">
+                        ✓
+                      </span>
+                    )}
+                  </button>
+                  {expired && isAdmin && (
+                    <button type="button" className="btn btn--subtle btn--sm page-picker__update" onClick={goFixPage}>
+                      Update
+                    </button>
                   )}
-                </button>
-              </li>
-            ))}
+                </li>
+              );
+            })}
         </ul>
       </Modal>
     </div>

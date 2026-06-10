@@ -70,6 +70,14 @@ async function warehouseEmpty(accountId) {
 // series for the range, the current follower count, and a top-posts ranking.
 // On first use for a page (empty warehouse) it backfills ~90 days from Meta.
 export async function overview({ rangeDays = 28, accountId = null, token = null, fbPageId = null } = {}) {
+  // No active page → no page analytics. Don't fall back to the whole warehouse
+  // (which would surface another page's or orphaned data when nothing is connected).
+  if (accountId == null) {
+    const empty = {};
+    for (const m of PAGE_METRICS) empty[m] = [];
+    return { rangeDays, followers: null, pageName: null, series: empty, ranking: [] };
+  }
+
   if (await warehouseEmpty(accountId)) {
     await refreshPageInsights(90, { accountId, token, fbPageId }); // one-time backfill for this page
   }

@@ -10,4 +10,10 @@ router.get('/invite/:token', ctrl.validateInvite); // public: check an invite li
 router.get('/me', requireAuth, ctrl.me);
 router.post('/logout', requireAuth, ctrl.logout);
 
+// Email-verified password change (signed-in user). 3 steps: confirm current
+// password → verify emailed code → set new password.
+router.post('/password/start', requireAuth, ctrl.startPasswordChange);
+router.post('/password/verify', requireAuth, ctrl.verifyPasswordCode);
+router.post('/password/complete', requireAuth, ctrl.completePasswordChange);
+
 export default router;

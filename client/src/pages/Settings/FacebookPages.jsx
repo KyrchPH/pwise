@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import * as pagesService from '../../services/pages.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -24,6 +25,7 @@ const BLANK = { account_name: '', fb_page_id: '', app_id: '', app_secret: '', ap
 
 export default function FacebookPages() {
   const toast = useToast();
+  const { hash } = useLocation();
   const { refresh: refreshSwitcher } = usePages();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +44,18 @@ export default function FacebookPages() {
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
+
+  // Deep-link from the switcher's "Update" button: scroll this section into view
+  // and briefly highlight it when navigated to with #facebook-pages.
+  useEffect(() => {
+    if (hash !== '#facebook-pages') return undefined;
+    const el = document.getElementById('facebook-pages');
+    if (!el) return undefined;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('flash-highlight');
+    const t = setTimeout(() => el.classList.remove('flash-highlight'), 1800);
+    return () => clearTimeout(t);
+  }, [hash]);
 
   const resetTest = () => {
     setTested(false);
@@ -144,7 +158,7 @@ export default function FacebookPages() {
   const secretHint = (label) => (editing?.id ? 'leave blank to keep current' : label);
 
   return (
-    <Card className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>
+    <Card id="facebook-pages" className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>
       <div className="row row--between" style={{ marginBottom: 14, gap: 12 }}>
         <div>
           <div style={{ fontWeight: 600 }}>Facebook Pages</div>

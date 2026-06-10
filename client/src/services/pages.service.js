@@ -23,6 +23,13 @@ export async function select(accountId) {
   return data.data;
 }
 
+// Re-sync every page's name/followers from Facebook. Returns per-page results
+// [{ id, ok, name, followers }]; ok:false means the token failed (expired).
+export async function refreshAll() {
+  const { data } = await api.post('/pages/refresh');
+  return data.data.results;
+}
+
 // Validate credentials against Facebook before saving (the "Connect" step).
 export async function test(payload) {
   const { data } = await api.post('/pages/test', payload);

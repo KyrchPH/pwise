@@ -154,3 +154,39 @@ export async function getStats(accountId) {
   statsCache.set(id, { at: Date.now(), data });
   return data;
 }
+
+// Re-sync every connected page's display data from Facebook: pull the live
+// name + followers with the stored token, correct a stale account_name (e.g.
+// the "Imported page" placeholder), refresh the stats cache, and report which
+// pages failed so the UI can flag them. Best-effort per page — one expired
+// token doesn't abort the rest. Returns [{ id, ok, name, followers }].
+export async function refreshAll() {
+  const rows = await query(
+    "SELECT id, account_name FROM platform_accounts WHERE platform_name = 'facebook' ORDER BY created_at ASC",
+  );
+  const results = [];
+  for (const row of rows) {
+    const id = Number(row.id);
+    let ok = false;
+    let name = null;
+    let followers = null;
+    try {
+      const a = await getDecrypted(id);
+      const profile = await fb.fetchPageProfile({ token: a.access_token, fbPageId: a.fb_page_id });
+      if (profile && profile.name) {
+        ok = true;
+        name = profile.name;
+        followers = profile.followers ?? profile.fans ?? null;
+        if (name !== row.account_name) {
+          await query('UPDATE platform_accounts SET account_name = ? WHERE id = ?', [name, id]);
+        }
+        statsCache.set(id, { at: Date.now(), data: { followers, name } });
+      }
+    } catch {
+      /* token rejected / network error — reported as ok:false below */
+    }
+    if (!ok) statsCache.set(id, { at: Date.now(), data: null }); // drop stale followers for a dead token
+    results.push({ id, ok, name, followers });
+  }
+  return results;
+}

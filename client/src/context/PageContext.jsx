@@ -36,6 +36,17 @@ export function PageProvider({ children }) {
         pagesService.select(sel).catch(() => {});
       }
       setActiveId(sel);
+      // Re-pull followers for the active page. The activeId effect below only
+      // fires when the selection changes, so a manual refresh (same page, fresh
+      // data after a sync) wouldn't otherwise update the sidebar count.
+      if (sel != null) {
+        pagesService
+          .stats(sel)
+          .then((s) => setActiveFollowers(s?.followers ?? null))
+          .catch(() => setActiveFollowers(null));
+      } else {
+        setActiveFollowers(null);
+      }
     } catch {
       /* pages not configured yet — leave empty */
     } finally {

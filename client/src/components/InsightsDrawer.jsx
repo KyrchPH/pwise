@@ -12,12 +12,58 @@ const METRICS = [
   { key: 'views', label: 'Views', color: '#7c3aed' },
 ];
 
-const latest = (points) => (points.length ? points[points.length - 1].value : null);
+const fmtNum = (v) => v.toLocaleString();
+
+// "1.63x"-style growth multiple; only meaningful when the window started > 0.
+const fmtGrowth = (first, current) => {
+  if (!(first > 0)) return null;
+  const g = current / first;
+  return `${parseFloat(g >= 10 ? g.toFixed(1) : g.toFixed(2))}x`;
+};
+
+/**
+ * Stats header (total / gained / growth, like a finance chart) + line chart
+ * for one metric's history. Exported separately from the dialog so it can be
+ * rendered with ready-made points.
+ */
+export function InsightsPanel({ points, metric }) {
+  const n = points.length;
+  const first = points[0].value;
+  const current = points[n - 1].value;
+  const delta = current - first;
+  const growth = fmtGrowth(first, current);
+
+  return (
+    <>
+      <div className="insights-stats">
+        <div className="insights-stat">
+          <div className="insights-stat__label">Total {metric.label.toLowerCase()}</div>
+          <div className="insights-stat__value">{fmtNum(current)}</div>
+        </div>
+        <div className="insights-stat">
+          <div className="insights-stat__label">Gained</div>
+          <div className={`insights-stat__value${n > 1 && delta > 0 ? ' is-up' : ''}${n > 1 && delta < 0 ? ' is-down' : ''}`}>
+            {n > 1 ? `${delta > 0 ? '+' : ''}${fmtNum(delta)}` : '—'}
+          </div>
+        </div>
+        <div className="insights-stat">
+          <div className="insights-stat__label">Growth</div>
+          <div className="insights-stat__value">{(n > 1 && growth) || '—'}</div>
+        </div>
+      </div>
+
+      <div className="insights__chart">
+        <LineChart points={points} color={metric.color} />
+      </div>
+    </>
+  );
+}
 
 /**
  * Insights dialog for a single post: a centered popup with a metric filter
- * (reactions/comments/shares/views) and a Day/Month toggle driving a line chart
- * of the post's recorded engagement history. Renders nothing when closed.
+ * (reactions/comments/shares/views) and an Hour/Day/Month toggle driving the
+ * stats + line chart panel of the post's recorded engagement history. Renders
+ * nothing when closed.
  */
 export default function InsightsDrawer({ post, open, onClose }) {
   const toast = useToast();
@@ -52,7 +98,6 @@ export default function InsightsDrawer({ post, open, onClose }) {
 
   const points = data?.points ?? [];
   const activeMetric = METRICS.find((m) => m.key === metric) || METRICS[0];
-  const current = latest(points);
 
   return (
     <Modal
@@ -60,27 +105,31 @@ export default function InsightsDrawer({ post, open, onClose }) {
       onClose={onClose}
       className="modal--insights"
       title={post ? <>Insights <span className="text-muted">· #{post.id}</span></> : 'Insights'}
+      headerActions={
+        <Dropdown
+          ariaLabel="Chart options"
+          sections={[
+            {
+              label: 'Metric',
+              value: metric,
+              onChange: setMetric,
+              options: METRICS.map((m) => ({ value: m.key, label: m.label, disabled: m.key === 'views' && !isVideo })),
+            },
+            {
+              label: 'Granularity',
+              value: granularity,
+              onChange: setGranularity,
+              options: [
+                { value: 'hour', label: 'Hour' },
+                { value: 'day', label: 'Day' },
+                { value: 'month', label: 'Month' },
+              ],
+            },
+          ]}
+        />
+      }
     >
       <div className="insights">
-        <div className="insights__toolbar">
-          <Dropdown
-            ariaLabel="Metric"
-            value={metric}
-            onChange={setMetric}
-            options={METRICS.map((m) => ({ value: m.key, label: m.label, disabled: m.key === 'views' && !isVideo }))}
-          />
-          <Dropdown
-            ariaLabel="Granularity"
-            value={granularity}
-            onChange={setGranularity}
-            options={[
-              { value: 'hour', label: 'Hour' },
-              { value: 'day', label: 'Day' },
-              { value: 'month', label: 'Month' },
-            ]}
-          />
-        </div>
-
         <div className="insights__body">
           {loading ? (
             <div className="insights__placeholder">
@@ -97,20 +146,7 @@ export default function InsightsDrawer({ post, open, onClose }) {
               </div>
             </div>
           ) : (
-            <>
-              <div className="insights-summary">
-                <span className="insights-summary__dot" style={{ background: activeMetric.color }} />
-                <strong>{current ?? '—'}</strong>
-                <span className="text-muted">
-                  {activeMetric.label.toLowerCase()} · latest of {points.length}{' '}
-                  {granularity === 'hour' ? 'hour' : granularity === 'month' ? 'month' : 'day'}
-                  {points.length === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div className="insights__chart">
-                <LineChart points={points} color={activeMetric.color} />
-              </div>
-            </>
+            <InsightsPanel points={points} metric={activeMetric} />
           )}
         </div>
       </div>

@@ -5,6 +5,7 @@ import { query, getConnection } from '../config/db.js';
 import { env } from '../config/env.js';
 import ApiError from '../utils/ApiError.js';
 import * as invitesService from './invites.service.js';
+import * as mail from './mail.service.js';
 
 let jwtSecret = env.jwtSecret;
 if (!jwtSecret) {
@@ -86,4 +87,95 @@ export async function findActiveById(id) {
   const row = rows[0];
   if (!row || row.deleted_at || !row.is_active) return null;
   return { id: row.id, name: row.name, email: row.email, role: row.role, is_active: !!row.is_active };
+}
+
+// ── Email-verified password change ───────────────────────────────────────────
+// Three steps, all for the signed-in user: confirm current password (emails a
+// code), verify the code, then set the new password. The code lives hashed in
+// password_change_codes (one pending row per user), expiring after CODE_TTL_MIN.
+const CODE_TTL_MIN = 10;
+const MAX_CODE_ATTEMPTS = 5;
+
+function generateCode() {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'); // 6 digits
+}
+
+// "demo@example.com" -> "de***@example.com" (for a reassuring "sent to …" message).
+function maskEmail(email) {
+  const [user, domain] = String(email || '').split('@');
+  if (!domain) return email || '';
+  const head = user.length <= 2 ? user.slice(0, 1) : user.slice(0, 2);
+  return `${head}${'*'.repeat(3)}@${domain}`;
+}
+
+// Step 1 — verify the current password, then generate + email a one-time code.
+export async function startPasswordChange(userId, currentPassword) {
+  if (!currentPassword) throw ApiError.badRequest('your current password is required');
+  const rows = await query('SELECT * FROM users WHERE id = ?', [userId]);
+  const user = rows[0];
+  if (!user) throw ApiError.unauthorized('not authenticated');
+  const ok = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!ok) throw ApiError.badRequest('your current password is incorrect');
+
+  const code = generateCode();
+  const codeHash = await bcrypt.hash(code, 10);
+  const expiresAt = new Date(Date.now() + CODE_TTL_MIN * 60 * 1000);
+  // One pending code per user — a fresh request replaces any previous one.
+  await query(
+    `INSERT INTO password_change_codes (user_id, code_hash, expires_at, verified, attempts)
+       VALUES (?, ?, ?, 0, 0)
+     ON DUPLICATE KEY UPDATE code_hash = VALUES(code_hash), expires_at = VALUES(expires_at), verified = 0, attempts = 0`,
+    [userId, codeHash, expiresAt],
+  );
+
+  const subject = 'Your pwise password-change code';
+  const text = `Hi ${user.name || ''},\n\nYour password-change verification code is ${code}.\nIt expires in ${CODE_TTL_MIN} minutes.\n\nIf you didn't request a password change, ignore this email — your password stays the same.`;
+  const html = `<p>Hi ${user.name || ''},</p><p>Your password-change verification code is:</p><p style="font-size:26px;font-weight:bold;letter-spacing:4px;margin:8px 0">${code}</p><p>It expires in ${CODE_TTL_MIN} minutes. If you didn't request a password change, you can ignore this email.</p>`;
+  try {
+    await mail.sendMail({ to: user.email, subject, text, html });
+  } catch (err) {
+    if (mail.mailEnabled()) throw err; // SMTP configured but the send failed → surface it
+    // No SMTP (dev): log the code so the flow is still testable locally.
+    console.warn(`[auth] SMTP not configured — password-change code for ${user.email} is ${code}`);
+  }
+  return { sent: true, email: maskEmail(user.email), expiresInMinutes: CODE_TTL_MIN };
+}
+
+// Step 2 — verify the emailed code (marks the pending request as verified).
+export async function verifyPasswordCode(userId, code) {
+  const value = String(code ?? '').trim();
+  if (!value) throw ApiError.badRequest('enter the code from your email');
+  const rows = await query('SELECT * FROM password_change_codes WHERE user_id = ?', [userId]);
+  const row = rows[0];
+  if (!row) throw ApiError.badRequest('no active request — confirm your current password again');
+  if (new Date(row.expires_at) < new Date()) throw new ApiError(410, 'this code has expired — start again');
+  if (row.attempts >= MAX_CODE_ATTEMPTS) throw new ApiError(429, 'too many incorrect attempts — start again');
+  const ok = await bcrypt.compare(value, row.code_hash);
+  if (!ok) {
+    await query('UPDATE password_change_codes SET attempts = attempts + 1 WHERE user_id = ?', [userId]);
+    throw ApiError.badRequest('that code is incorrect');
+  }
+  await query('UPDATE password_change_codes SET verified = 1 WHERE user_id = ?', [userId]);
+  return { verified: true };
+}
+
+// Step 3 — set the new password (requires a verified, unexpired code).
+export async function completePasswordChange(userId, newPassword) {
+  const pw = String(newPassword ?? '');
+  if (pw.length < 8) throw ApiError.badRequest('your new password must be at least 8 characters');
+  const rows = await query('SELECT * FROM password_change_codes WHERE user_id = ?', [userId]);
+  const row = rows[0];
+  if (!row || !row.verified) throw ApiError.badRequest('verify the emailed code first');
+  if (new Date(row.expires_at) < new Date()) throw new ApiError(410, 'your verification expired — start again');
+
+  const users = await query('SELECT password_hash FROM users WHERE id = ?', [userId]);
+  if (!users.length) throw ApiError.unauthorized('not authenticated');
+  if (await bcrypt.compare(pw, users[0].password_hash)) {
+    throw ApiError.badRequest('your new password must be different from your current one');
+  }
+
+  const hash = await bcrypt.hash(pw, 10);
+  await query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId]);
+  await query('DELETE FROM password_change_codes WHERE user_id = ?', [userId]);
+  return { changed: true };
 }

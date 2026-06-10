@@ -53,6 +53,18 @@ export const env = {
   // At-rest encryption key for connected-page credentials (platform_accounts).
   // 64 hex chars: `openssl rand -hex 32`.
   encryptionKey: process.env.ENCRYPTION_KEY || '',
+
+  // SMTP for transactional email (the password-change verification code). When
+  // unset, the change-password flow can't email — in dev it logs the code to
+  // the server console; in production it returns 503.
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: bool(process.env.SMTP_SECURE, false), // true for port 465
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || process.env.SMTP_USER || '',
+  },
 };
 
 // Warn (don't crash) on missing config so the server still boots for partial use.
@@ -65,6 +77,7 @@ export function validateEnv(logger = console) {
   if (!env.facebook.pageAccessToken) warnings.push('FACEBOOK_PAGE_ACCESS_TOKEN is not set — deleting/editing published posts on Facebook will fail (503).');
   if (!env.n8n.generateWebhookUrl) warnings.push('N8N_GENERATE_WEBHOOK_URL is not set — "Generate with Template" will fail (503).');
   if (!env.encryptionKey) warnings.push('ENCRYPTION_KEY is not set — adding/using connected Facebook pages will fail (503).');
+  if (!env.smtp.host) warnings.push('SMTP_HOST is not set — password-change codes are logged to the console in dev and fail (503) in production.');
   for (const w of warnings) logger.warn(`[env] ${w}`);
   return warnings;
 }

@@ -29,3 +29,19 @@ export const validateInvite = asyncHandler(async (req, res) => {
   await invitesService.findUsable(req.params.token);
   sendSuccess(res, { valid: true });
 });
+
+// Email-verified password change (all authenticated; act on req.user.id).
+export const startPasswordChange = asyncHandler(async (req, res) => {
+  const result = await authService.startPasswordChange(req.user.id, (req.body || {}).currentPassword);
+  sendSuccess(res, result);
+});
+
+export const verifyPasswordCode = asyncHandler(async (req, res) => {
+  const result = await authService.verifyPasswordCode(req.user.id, (req.body || {}).code);
+  sendSuccess(res, result);
+});
+
+export const completePasswordChange = asyncHandler(async (req, res) => {
+  const result = await authService.completePasswordChange(req.user.id, (req.body || {}).newPassword);
+  sendSuccess(res, result);
+});

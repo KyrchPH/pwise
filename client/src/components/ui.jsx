@@ -263,10 +263,20 @@ export function Toggle({ checked, onChange, label }) {
 
 // Compact custom dropdown with a styled menu (a native <select> can't style its
 // options). `options` = [{ value, label, disabled }]. Closes on outside-click / Esc.
-export function Dropdown({ value, options = [], onChange, ariaLabel, className = '' }) {
+/**
+ * Custom dropdown. Two shapes:
+ *  - single list: `value` / `options` / `onChange` (a styled <select>);
+ *  - `sections`: [{ label, value, options, onChange }, …] — one trigger whose
+ *    menu stacks several radio groups separated by dividers (e.g. the insights
+ *    metric + granularity picker). The trigger shows each section's current
+ *    selection joined with "·".
+ */
+export function Dropdown({ value, options = [], onChange, ariaLabel, className = '', sections = null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  const current = options.find((o) => o.value === value);
+  const triggerLabel = sections
+    ? sections.map((s) => s.options.find((o) => o.value === s.value)?.label ?? '—').join(' · ')
+    : options.find((o) => o.value === value)?.label ?? '—';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -284,6 +294,29 @@ export function Dropdown({ value, options = [], onChange, ariaLabel, className =
     };
   }, [open]);
 
+  const renderOpt = (o, selected, pick) => (
+    <button
+      key={o.value}
+      type="button"
+      role="option"
+      aria-selected={selected}
+      disabled={o.disabled}
+      className={`dropdown__opt${selected ? ' is-selected' : ''}`}
+      onClick={() => {
+        if (o.disabled) return;
+        pick(o.value);
+        setOpen(false);
+      }}
+    >
+      <span>{o.label}</span>
+      {selected && (
+        <span className="dropdown__check" aria-hidden="true">
+          ✓
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <div className={`dropdown${open ? ' is-open' : ''} ${className}`.trim()} ref={ref}>
       <button
@@ -294,35 +327,22 @@ export function Dropdown({ value, options = [], onChange, ariaLabel, className =
         aria-expanded={open}
         aria-label={ariaLabel}
       >
-        <span>{current?.label ?? '—'}</span>
+        <span>{triggerLabel}</span>
         <svg className="dropdown__caret" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
       {open && (
         <div className="dropdown__menu" role="listbox">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="option"
-              aria-selected={o.value === value}
-              disabled={o.disabled}
-              className={`dropdown__opt${o.value === value ? ' is-selected' : ''}`}
-              onClick={() => {
-                if (o.disabled) return;
-                onChange?.(o.value);
-                setOpen(false);
-              }}
-            >
-              <span>{o.label}</span>
-              {o.value === value && (
-                <span className="dropdown__check" aria-hidden="true">
-                  ✓
-                </span>
-              )}
-            </button>
-          ))}
+          {sections
+            ? sections.map((s, si) => (
+                <div className="dropdown__group" key={s.label ?? si}>
+                  {si > 0 && <div className="dropdown__sep" aria-hidden="true" />}
+                  {s.label && <div className="dropdown__caption">{s.label}</div>}
+                  {s.options.map((o) => renderOpt(o, o.value === s.value, (v) => s.onChange?.(v)))}
+                </div>
+              ))
+            : options.map((o) => renderOpt(o, o.value === value, (v) => onChange?.(v)))}
         </div>
       )}
     </div>
@@ -389,7 +409,7 @@ export function EmptyState({ icon = '📭', title, message, action }) {
   );
 }
 
-export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '', hidden = false }) {
+export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '', hidden = false, headerActions = null }) {
   // Lock background page scroll while the dialog is open; restore on close/unmount.
   // Released while `hidden` (e.g. dragging an item out) so the page behind can scroll.
   useEffect(() => {
@@ -413,10 +433,15 @@ export function Modal({ open, title, onClose, children, footer, dismissable = tr
       <div className={`card modal ${className}`} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="card__head">
           <div className="card__title">{title}</div>
-          {dismissable && (
-            <button className="btn btn--ghost btn--icon" onClick={onClose} aria-label="Close">
-              ✕
-            </button>
+          {(headerActions || dismissable) && (
+            <div className="card__head-end">
+              {headerActions}
+              {dismissable && (
+                <button className="btn btn--ghost btn--icon" onClick={onClose} aria-label="Close">
+                  ✕
+                </button>
+              )}
+            </div>
           )}
         </div>
         <div className="card--pad">{children}</div>

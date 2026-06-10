@@ -12,6 +12,19 @@
       href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply the saved (or OS-preferred) theme before first paint so dark-mode
+      // users don't get a light flash; ThemeContext takes over once React boots.
+      (function () {
+        try {
+          var t = localStorage.getItem('pwise-theme');
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) { /* default to light */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

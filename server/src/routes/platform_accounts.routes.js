@@ -11,6 +11,9 @@ router.get('/', ctrl.list);
 router.get('/active', ctrl.active);
 router.get('/:id/stats', ctrl.stats);
 router.post('/select', ctrl.select);
+// Sync display name/followers from Facebook; only touches account_name, so it's
+// not gated to admins like the credential writes below.
+router.post('/refresh', ctrl.refresh);
 
 // Manage credentials — admins only.
 router.post('/test', requireAdmin, ctrl.test);

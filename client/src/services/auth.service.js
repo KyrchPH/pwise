@@ -23,3 +23,19 @@ export async function me() {
 export async function logout() {
   await api.post('/auth/logout');
 }
+
+// Email-verified password change, 3 steps.
+export async function startPasswordChange(currentPassword) {
+  const { data } = await api.post('/auth/password/start', { currentPassword });
+  return data.data; // { sent, email (masked), expiresInMinutes }
+}
+
+export async function verifyPasswordCode(code) {
+  const { data } = await api.post('/auth/password/verify', { code });
+  return data.data; // { verified: true }
+}
+
+export async function completePasswordChange(newPassword) {
+  const { data } = await api.post('/auth/password/complete', { newPassword });
+  return data.data; // { changed: true }
+}

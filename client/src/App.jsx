@@ -10,6 +10,7 @@ import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import SettingsPage from './pages/Settings/SettingsPage.jsx';
+import ChangePasswordPage from './pages/Settings/ChangePasswordPage.jsx';
 import LogsPage from './pages/Logs/LogsPage.jsx';
 import ActivityPage from './pages/Activity/ActivityPage.jsx';
 import AccountsPage from './pages/Accounts/AccountsPage.jsx';
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/post-pool" element={<PostPoolPage />} />
         <Route path="/upload" element={<UploadPostPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/change-password" element={<ChangePasswordPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/accounts" element={<AdminRoute><AccountsPage /></AdminRoute>} />
