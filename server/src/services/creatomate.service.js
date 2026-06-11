@@ -157,6 +157,7 @@ export async function startRender(templateDbId, { videoS3Key = null, caption = n
       method: 'POST',
       headers,
       body: JSON.stringify({
+        for_automation: true, // routes n8n's "Is For Automated Editing?" IF to the render branch
         template_id: cfg.template_id,
         video_url: videoUrl,
         caption,

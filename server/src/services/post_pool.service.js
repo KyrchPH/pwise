@@ -1,4 +1,5 @@
 import { query } from '../config/db.js';
+import env from '../config/env.js';
 import ApiError from '../utils/ApiError.js';
 import { createDownloadUrl, deleteObject } from './s3.service.js';
 import * as fb from './fb.service.js';
@@ -159,15 +160,26 @@ export async function create(actor = {}, data = {}) {
     scheduled_at = null,
     immediate = false,
   } = data;
-  if (!caption || !String(caption).trim()) throw ApiError.badRequest('caption is required');
+  // A post needs at least one of media or caption — only one may be empty.
+  // Caption is required only for a text-only post (no media); when media is
+  // present the caption is optional.
+  const hasMedia = !!(media_url || s3_key);
+  const hasCaption = !!(caption && String(caption).trim());
+  if (!hasMedia && !hasCaption) throw ApiError.badRequest('a caption or media is required');
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
 
-  // "Post now": due immediately, so the n8n posting poll claims it on its next run.
-  // Otherwise require a valid, free :00/:30 slot.
+  // "Post now" (immediate) is handed straight to n8n via the webhook below, NOT
+  // the scheduled claim: scheduled_at stays NULL so claimNext / expireOverdue skip
+  // it, and it goes in as 'posting' (in-flight) until n8n marks it posted/failed.
+  // Scheduled posts keep the slot-checked :00/:30 path.
+  const isImmediate = truthy(immediate);
   let schedule;
-  if (truthy(immediate)) {
-    schedule = new Date();
+  if (isImmediate) {
+    if (!env.n8n.postWebhookUrl) {
+      throw new ApiError(503, 'Immediate posting is disabled: N8N_POST_WEBHOOK_URL (or N8N_GENERATE_WEBHOOK_URL) is not configured');
+    }
+    schedule = null;
   } else {
     schedule = normalizeScheduledAt(scheduled_at);
     if (!schedule) throw ApiError.badRequest('a schedule date and time is required');
@@ -180,16 +192,73 @@ export async function create(actor = {}, data = {}) {
   const result = await query(
     `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, target_platform, account_id, status, priority, scheduled_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [actor.id, caption, media_type, media_url, s3_key, target_platform, accountId, status, Number(priority) || 0, schedule],
+    [actor.id, caption, media_type, media_url, s3_key, target_platform, accountId, isImmediate ? 'posting' : status, Number(priority) || 0, schedule],
   );
   await activity.log({
     postId: result.insertId,
     userId: actor.id,
     userName: actor.name,
     action: 'created',
-    details: String(caption).slice(0, 120),
+    details: hasCaption ? String(caption).slice(0, 120) : '(media only)',
   });
+
+  // Immediate posts: fire the n8n publish webhook now. A trigger failure must not
+  // strand the post in 'posting' (it's invisible to the scheduled claim) — mark it
+  // failed and surface the error to the caller.
+  if (isImmediate) {
+    try {
+      await triggerImmediatePost({ id: result.insertId, caption, media_type, s3_key, accountId, target_platform });
+    } catch (err) {
+      await query("UPDATE post_pool SET status = 'failed', failed_reason = ? WHERE id = ?", [
+        String(`n8n trigger failed: ${err.message}`).slice(0, 1000),
+        result.insertId,
+      ]);
+      throw new ApiError(502, `couldn't reach the posting webhook: ${err.message}`);
+    }
+  }
+
   return getById(result.insertId);
+}
+
+// Push a "Post now" post to the n8n "Post to n8n" webhook for immediate
+// publishing. Mirrors the shape claimNext hands n8n (data.post with a presigned
+// media URL + the page's decrypted creds) so the same posting nodes consume it;
+// `for_automation: false` routes n8n's IF to the publish branch (not generate).
+async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId, target_platform }) {
+  let media_download_url = null;
+  if (s3_key) {
+    try {
+      media_download_url = await createDownloadUrl(s3_key);
+    } catch {
+      /* S3 not configured / object missing — n8n will fail the media post */
+    }
+  }
+  let page = null;
+  if (accountId) {
+    try {
+      const a = await accounts.getDecrypted(accountId);
+      page = { fb_page_id: a.fb_page_id, access_token: a.access_token };
+    } catch {
+      /* page gone / encryption unavailable — n8n falls back to its own creds */
+    }
+  }
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (env.n8n.webhookToken) headers['x-service-token'] = env.n8n.webhookToken;
+
+  const res = await fetch(env.n8n.postWebhookUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      for_automation: false,
+      data: { claimed: true, post: { id, caption, media_type, media_download_url, target_platform, page } },
+    }),
+    signal: AbortSignal.timeout(30 * 1000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`webhook ${res.status}: ${String(body).slice(0, 200)}`);
+  }
 }
 
 // `actor` = { id, name } of the editor (logged to the activity trail).

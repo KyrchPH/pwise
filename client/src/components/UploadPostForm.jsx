@@ -241,7 +241,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       invalidateCache('post-pool');
       invalidateCache('dashboard');
 
-      toast.success(scheduled ? 'Post added to the pool' : 'Posting now — it’ll publish on the next run');
+      toast.success(scheduled ? 'Post added to the pool' : 'Posting now — sending it to Facebook');
       onCreated?.(post);
     } catch (err) {
       setErrorDialog(apiError(err)); // e.g. "A post is already scheduled for that date and time"

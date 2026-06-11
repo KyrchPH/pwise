@@ -47,6 +47,10 @@ export const env = {
   },
   n8n: {
     generateWebhookUrl: process.env.N8N_GENERATE_WEBHOOK_URL || '',
+    // "Post now" pushes immediate posts to the same "Post to n8n" webhook (its IF
+    // branches on for_automation). Same endpoint, so this falls back to the
+    // generate URL unless split out via N8N_POST_WEBHOOK_URL.
+    postWebhookUrl: process.env.N8N_POST_WEBHOOK_URL || process.env.N8N_GENERATE_WEBHOOK_URL || '',
     webhookToken: process.env.N8N_WEBHOOK_TOKEN || '', // optional: sent as x-service-token
   },
 
