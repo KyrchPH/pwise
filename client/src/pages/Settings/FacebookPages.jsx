@@ -21,7 +21,7 @@ const TrashIcon = () => (
   </svg>
 );
 
-const BLANK = { account_name: '', fb_page_id: '', app_id: '', app_secret: '', app_client_token: '', access_token: '' };
+const BLANK = { account_name: '', fb_page_id: '', access_token: '' };
 
 export default function FacebookPages() {
   const toast = useToast();
@@ -67,7 +67,7 @@ export default function FacebookPages() {
   };
   const startEdit = (p) => {
     resetTest();
-    setEditing({ ...BLANK, id: p.id, account_name: p.account_name || '', fb_page_id: p.fb_page_id || '', app_id: p.app_id || '' });
+    setEditing({ ...BLANK, id: p.id, account_name: p.account_name || '', fb_page_id: p.fb_page_id || '' });
   };
   const cancel = () => {
     resetTest();
@@ -116,10 +116,7 @@ export default function FacebookPages() {
       const payload = {
         account_name: name,
         fb_page_id: fbPageId,
-        app_id: editing.app_id.trim(),
-        // Secrets are write-only: send only when filled (blank on edit = keep).
-        ...(editing.app_secret.trim() ? { app_secret: editing.app_secret.trim() } : {}),
-        ...(editing.app_client_token.trim() ? { app_client_token: editing.app_client_token.trim() } : {}),
+        // Token is write-only: send only when filled (blank on edit = keep current).
         ...(editing.access_token.trim() ? { access_token: editing.access_token.trim() } : {}),
       };
       if (editing.id) await pagesService.update(editing.id, payload);
@@ -181,17 +178,8 @@ export default function FacebookPages() {
           <Field label="Facebook Page ID">
             <input className="input" value={editing.fb_page_id} onChange={setField('fb_page_id')} placeholder="722625860935626" />
           </Field>
-          <Field label="App ID" hint="optional">
-            <input className="input" value={editing.app_id} onChange={setField('app_id')} />
-          </Field>
           <Field label="Page access token" hint={secretHint('required')}>
             <input className="input" type="password" value={editing.access_token} onChange={setField('access_token')} autoComplete="new-password" placeholder={editing.id ? '••••••••' : ''} />
-          </Field>
-          <Field label="App Secret" hint={secretHint('optional')}>
-            <input className="input" type="password" value={editing.app_secret} onChange={setField('app_secret')} autoComplete="new-password" placeholder={editing.id ? '••••••••' : ''} />
-          </Field>
-          <Field label="App Client Token" hint={secretHint('optional')}>
-            <input className="input" type="password" value={editing.app_client_token} onChange={setField('app_client_token')} autoComplete="new-password" placeholder={editing.id ? '••••••••' : ''} />
           </Field>
           {tested && (
             <div className="fb-test-ok">

@@ -182,7 +182,7 @@ function PageAvatar({ page, className = '' }) {
 export default function AppLayout() {
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
-  const { pages, activeId, activePage, activeFollowers, switchPage, refresh: refreshPages } = usePages();
+  const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages } = usePages();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
@@ -255,17 +255,24 @@ export default function AppLayout() {
                   type="button"
                   className="sidebar__page-btn"
                   onClick={() => setPickerOpen(true)}
-                  title="Switch page"
+                  disabled={switching}
+                  title={switching ? 'Switching page…' : 'Switch page'}
                   aria-label="Switch active page"
                 >
                   <PageAvatar page={activePage} className="sidebar__page-photo" />
                   <span className="sidebar__page-switch" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="17 1 21 5 17 9" />
-                      <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                      <polyline points="7 23 3 19 7 15" />
-                      <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-                    </svg>
+                    {switching ? (
+                      <svg className="spin-icon is-spinning" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="17 1 21 5 17 9" />
+                        <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                        <polyline points="7 23 3 19 7 15" />
+                        <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                      </svg>
+                    )}
                   </span>
                 </button>
                 <span className="sidebar__page-name">{activePage?.account_name || 'Select a page'}</span>
@@ -339,7 +346,9 @@ export default function AppLayout() {
           </div>
         </header>
         <main className="content">
-          <div className="content__inner">
+          {/* Keyed on the active page: switching pages remounts the routed screen
+              so it reloads its data for the newly-selected page. */}
+          <div className="content__inner" key={activeId ?? 'no-page'}>
             <Outlet />
           </div>
         </main>

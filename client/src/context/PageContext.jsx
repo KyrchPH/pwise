@@ -17,6 +17,7 @@ export function PageProvider({ children }) {
   const [activeId, setActiveId] = useState(null);
   const [activeFollowers, setActiveFollowers] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [switching, setSwitching] = useState(false); // a page switch is in flight
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
@@ -76,15 +77,21 @@ export function PageProvider({ children }) {
   }, [activeId]);
 
   const switchPage = useCallback(async (id) => {
-    await pagesService.select(id);
-    setActiveId(id);
-    invalidateCache('dashboard');
-    invalidateCache('post-pool');
-    invalidateCache('analytics');
+    setSwitching(true);
+    try {
+      await pagesService.select(id);
+      setActiveId(id);
+      // Every page-scoped view (Pool, Dashboard, Analytics, Logs…) is now stale,
+      // so drop the whole cache. The active id also keys the AppLayout content, so
+      // the screen you're on remounts and reloads its data for the new page.
+      invalidateCache();
+    } finally {
+      setSwitching(false);
+    }
   }, []);
 
   const activePage = pages.find((p) => p.id === activeId) || null;
-  const value = { pages, activePage, activeId, activeFollowers, loading, refresh, switchPage };
+  const value = { pages, activePage, activeId, activeFollowers, loading, switching, refresh, switchPage };
   return <PageContext.Provider value={value}>{children}</PageContext.Provider>;
 }
 

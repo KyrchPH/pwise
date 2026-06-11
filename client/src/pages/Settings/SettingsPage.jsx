@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
+import env from '../../config/env.js';
 import { invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -146,7 +147,7 @@ export default function SettingsPage() {
       </Card>
 
       {isAdmin && <FacebookPages />}
-      <CreatomateTemplates />
+      {env.templatesEnabled && <CreatomateTemplates />}
     </>
   );
 }

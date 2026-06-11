@@ -4,6 +4,7 @@ import * as upload from '../services/upload.service.js';
 import * as postPool from '../services/post_pool.service.js';
 import * as creatomate from '../services/creatomate.service.js';
 import { apiError } from '../services/api.js';
+import env from '../config/env.js';
 import { invalidateCache, useCachedResource } from '../hooks/useCachedResource.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { Card, Button, Field, Modal, Toggle, TimeSelect, ProgressBar, Dropdown, Spinner } from './ui.jsx';
@@ -256,19 +257,21 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
 
   const fieldsEl = (
     <>
-      <div className="field">
-        <div className="row row--between" style={{ gap: 12 }}>
-          <div>
-            <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
-              Use template
-            </span>
-            <span className="text-sm text-muted">
-              Build this post from a saved Creatomate template instead of uploading media.
-            </span>
+      {env.templatesEnabled && (
+        <div className="field">
+          <div className="row row--between" style={{ gap: 12 }}>
+            <div>
+              <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
+                Use template
+              </span>
+              <span className="text-sm text-muted">
+                Build this post from a saved Creatomate template instead of uploading media.
+              </span>
+            </div>
+            <Toggle checked={useTemplate} onChange={setUseTemplate} />
           </div>
-          <Toggle checked={useTemplate} onChange={setUseTemplate} />
         </div>
-      </div>
+      )}
 
       {useTemplate ? (
         <>
