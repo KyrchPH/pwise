@@ -1,0 +1,1055 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/scheduler/insights/snapshot",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "f07f2357-2cdc-43e6-b035-946930a848ff",
+      "name": "Snapshot insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        -592
+      ],
+      "retryOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "d6628761-2bb5-42ce-b733-f3e6e8a7742b",
+      "name": "Every hour1",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "ef5ea1b9-a82f-4efc-82c2-5604972b78a8",
+      "name": "Check Posts Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "98ef0e36-fef8-4a01-84a5-baffe81caf74",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        400,
+        -320
+      ],
+      "id": "cdbbd921-6daa-4d54-9590-54e79c3b212c",
+      "name": "Post to n8n",
+      "webhookId": "98ef0e36-fef8-4a01-84a5-baffe81caf74"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "08bade43-e61a-4eba-9545-c9bdb10c0dfc",
+              "leftValue": "={{ $json.for_automation }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1056,
+        -464
+      ],
+      "id": "ca3e5524-e165-4e08-b776-ccb7bf5f5e12",
+      "name": "Is For Automated Editing?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "37871d53-a5c4-4ab6-a9ae-a4fe4214fbf0",
+              "leftValue": "={{ typeof $json.for_automation }}",
+              "rightValue": "boolean",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        736,
+        -320
+      ],
+      "id": "c10aa7a6-dc6f-47ae-9490-ef97c80b9c28",
+      "name": "Is Valid?"
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Creatomate render failed: {{ $json.error_message }}"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2512,
+        -576
+      ],
+      "id": "13b6da9b-8f12-4f77-b83b-ea9bd86df168",
+      "name": "Render Failed"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "render_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "video_url",
+              "value": "={{ $json.url }}",
+              "type": "string"
+            },
+            {
+              "id": "r3",
+              "name": "snapshot_url",
+              "value": "={{ $json.snapshot_url }}",
+              "type": "string"
+            },
+            {
+              "id": "r4",
+              "name": "context",
+              "value": "={{ JSON.parse($json.metadata || '{}') }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2512,
+        -816
+      ],
+      "id": "c9702fe7-f5a8-4294-8260-ecc19235c656",
+      "name": "Render Result"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "succeeded",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Succeeded"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Failed"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Still Rendering"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2272,
+        -688
+      ],
+      "id": "871c9241-433b-4c68-996f-70bac799ffaa",
+      "name": "Render Finished?"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.creatomate.com/v2/renders/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2064,
+        -688
+      ],
+      "id": "c7894b92-09f3-4ad9-bdb9-7bca457e3c2e",
+      "name": "Get Render Status",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FL0J5ul0IijrDCGt",
+          "name": "CreatoMate API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1840,
+        -688
+      ],
+      "id": "46ff03fb-3b3d-46a7-be8e-47a3757e945b",
+      "name": "Wait 10s",
+      "webhookId": "creatomate-poll-wait"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.creatomate.com/v2/renders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { template_id: $json.template_id, modifications: $json.modifications, metadata: JSON.stringify($json.context) } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1616,
+        -688
+      ],
+      "id": "3dc8e959-34b1-4f43-997f-6c2880cd55c6",
+      "name": "Start Creatomate Render",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FL0J5ul0IijrDCGt",
+          "name": "CreatoMate API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "template_id",
+              "value": "={{ $json.template_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "modifications",
+              "value": "={{ $json.modifications }}",
+              "type": "object"
+            },
+            {
+              "id": "a3",
+              "name": "context",
+              "value": "={{ { \"caption\": $json.caption, \"page_id\": $json.page_id } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1392,
+        -688
+      ],
+      "id": "044ee92c-089b-43df-8f64-9cc9d7c0c648",
+      "name": "Map AI → Creatomate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── pwise: build the result email (success or failure) ────────────────────────\nconst input = $json;\n\n// IMPORTANT: /posts/:id/posted AND /posts/:id/failed both return { success:true,\n// data:{ post } }, so input.success is ALWAYS true and can't tell them apart.\n// The updated post row carries the real signal — status, ids and failed_reason.\nconst post = input.data?.post ?? {};\nconst result = post.status === 'posted';\n\n// Escape so a caption/error can't break the HTML layout.\nconst esc = (s) =>\n  String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nconst caption = esc(post.caption || '(no caption)').replace(/\\n/g, '<br>');\nconst postId = post.id ?? '—';\nconst platform = post.target_platform || 'facebook';\nconst platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);\nconst when = new Date().toLocaleString('en-US', {\n  timeZone: 'Asia/Manila',\n  month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',\n});\nconst appUrl = 'https://pwise.sixpent.com/post-pool';\n\nif (result) {\n  // Linkable feed id the server resolved ({page}_{post}); fall back to the raw id.\n  const fbPostId = post.parent_post_id || post.platform_post_id || '';\n  const postUrl = fbPostId ? `https://facebook.com/${fbPostId}` : 'https://facebook.com/';\n\n  return { json: {\n        subject: 'Your post is live on Facebook — Wise Cleaner Shop',\n        message: `<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:#e6f3fc;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#e6f3fc;padding:24px 12px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\"><tr><td align=\"center\"><table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #d4e6f5;\"><tr><td style=\"height:8px;background:#1f9be6;border-bottom:3px solid #ffc400;font-size:0;line-height:0;\">&nbsp;</td></tr><tr><td style=\"padding:22px 28px 8px;\"><span style=\"display:inline-block;background:#e7f8ee;color:#1f8f43;font-size:13px;font-weight:700;padding:6px 12px;border-radius:999px;\">&#9679; Posted</span><h1 style=\"margin:14px 0 6px;font-size:22px;color:#123a57;\">Your post is live on Facebook &#127881;</h1></td></tr><tr><td style=\"padding:8px 28px 4px;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f1f8fe;border:1px solid #d4e6f5;border-radius:12px;\"><tr><td style=\"padding:16px 18px;\"><p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#5c7f99;text-transform:uppercase;letter-spacing:.05em;\">Caption</p><p style=\"margin:0 0 16px;font-size:15px;color:#123a57;line-height:1.5;\">${caption}</p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"font-size:14px;color:#123a57;\"><tr><td style=\"padding:4px 0;color:#5c7f99;\">Platform</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${platformLabel}</td></tr><tr><td style=\"padding:4px 0;color:#5c7f99;\">Posted</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">${when}</td></tr><tr><td style=\"padding:4px 0;color:#5c7f99;\">Post ID</td><td align=\"right\" style=\"padding:4px 0;font-weight:700;\">#${postId}</td></tr></table></td></tr></table></td></tr><tr><td style=\"padding:22px 28px 28px;\" align=\"center\"><a href=\"${postUrl}\" style=\"display:inline-block;background:#1f9be6;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:999px;\">View on Facebook &#8594;</a></td></tr></table></td></tr></table></body></html>`,\n       } };\n}\n\n// failure — the /failed response row has failed_reason set by the server.\nconst errorMessage = esc(post.failed_reason || 'Unknown error from Facebook');\n\nreturn { json: {\n      subject: 'A post failed to publish — Wise Cleaner Shop',\n      message: `<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:#e6f3fc;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#e6f3fc;padding:24px 12px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\"><tr><td align=\"center\"><table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #d4e6f5;\"><tr><td style=\"height:8px;background:#1f9be6;border-bottom:3px solid #ffc400;font-size:0;line-height:0;\">&nbsp;</td></tr><tr><td style=\"padding:22px 28px 8px;\"><span style=\"display:inline-block;background:#fdeceb;color:#c52f24;font-size:13px;font-weight:700;padding:6px 12px;border-radius:999px;\">&#9679; Failed</span><h1 style=\"margin:14px 0 6px;font-size:22px;color:#123a57;\">We couldn't publish your post</h1></td></tr><tr><td style=\"padding:8px 28px 4px;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f1f8fe;border:1px solid #d4e6f5;border-radius:12px;\"><tr><td style=\"padding:16px 18px;\"><p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#5c7f99;text-transform:uppercase;letter-spacing:.05em;\">Caption</p><p style=\"margin:0 0 16px;font-size:15px;color:#123a57;line-height:1.5;\">${caption}</p></td></tr></table></td></tr><tr><td style=\"padding:14px 28px 4px;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#fdeceb;border:1px solid #f6c9c5;border-radius:12px;\"><tr><td style=\"padding:14px 18px;\"><p style=\"margin:0 0 4px;font-size:11px;font-weight:700;color:#c52f24;text-transform:uppercase;letter-spacing:.05em;\">Error</p><p style=\"margin:0;font-size:14px;color:#8f231c;line-height:1.5;font-family:Consolas,Menlo,monospace;\">${errorMessage}</p></td></tr></table></td></tr><tr><td style=\"padding:22px 28px 28px;\" align=\"center\"><a href=\"${appUrl}\" style=\"display:inline-block;background:#e63b2e;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:999px;\">Open Post Pool &#8594;</a></td></tr></table></td></tr></table></body></html>`,\n     } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3008,
+        16
+      ],
+      "id": "4d0f4f29-e2f4-483b-92a9-930f4dd3a42a",
+      "name": "Assign Email Output"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Keystore').item.json.ADMIN_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3264,
+        16
+      ],
+      "id": "5603dd0e-bffb-4fe3-a12c-0ba0fae00c96",
+      "name": "Send a message",
+      "webhookId": "d1cb81d2-afea-44e3-bcb3-0155c83d170e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "eJv6b9AmjATYCiWG",
+          "name": "Sixpent 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1b69ea02-f948-413f-a32f-c860622eab21",
+              "name": "ADMIN_EMAIL",
+              "value": "archie.sevillano29@gmail.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1280,
+        -192
+      ],
+      "id": "a1d2223c-a501-4f3d-8c6a-7e4bebc75600",
+      "name": "Keystore"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.id : $('Split posts').item.json.data.post.id }}/failed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"error_message\": \"Facebook post failed via n8n\" }",
+        "options": {}
+      },
+      "id": "44e7da7c-ae21-4b7d-906b-3ee5c3748691",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        272
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.id : $('Split posts').item.json.data.post.id }}/posted",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"platform_post_id\": \"{{ $json.id }}\", \"response_message\": \"posted via n8n\", \"target_platform\": \"{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.target_platform : $('Split posts').item.json.data.post.target_platform }}\" }",
+        "options": {}
+      },
+      "id": "cbb467ba-80bc-46f4-aeb4-4c93936e0a8b",
+      "name": "Mark posted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.fb_page_id : $('Split posts').item.json.data.post.page.fb_page_id }}/feed",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.caption : $('Split posts').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "25979ba1-80a2-4edf-814f-141e051861a9",
+      "name": "Post text to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1776,
+        272
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.fb_page_id : $('Split posts').item.json.data.post.page.fb_page_id }}/photos",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.media_download_url : $('Split posts').item.json.data.post.media_download_url }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.caption : $('Split posts').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "426134a5-bc98-4b6e-a124-cc975227f828",
+      "name": "Post photo to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2176,
+        -80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.fb_page_id : $('Split posts').item.json.data.post.page.fb_page_id }}/videos",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file_url",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.media_download_url : $('Split posts').item.json.data.post.media_download_url }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.caption : $('Split posts').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "51787f0c-3ad9-4b37-9464-70a96490a5bd",
+      "name": "Post video to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2176,
+        -368
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-video",
+              "leftValue": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.media_type :  $('Split posts').item.json.data.post.media_type }}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "753d0b94-fbc0-433d-b72f-44ab08479fad",
+      "name": "Is video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1776,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-media",
+              "leftValue": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.media_download_url : $('Split posts').item.json.data.post.media_download_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5f92e059-6465-4915-b920-44b9b4f9e541",
+      "name": "Has media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-claimed",
+              "leftValue": "={{ $json.data.claimed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fa11b1d7-7694-477f-b863-015bdc19e8dc",
+      "name": "Claimed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        736,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/scheduler/claim-batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"source\": \"n8n\", \"limit\": 10 }",
+        "options": {}
+      },
+      "id": "31198d36-e9b4-40eb-bd72-0887d977fa9e",
+      "name": "Claim next post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        576,
+        -112
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => ({ json: i.json.body ?? i.json }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        576,
+        -320
+      ],
+      "id": "3580c405-dac6-4e3c-9d4e-303ed8fa6b42",
+      "name": "Parse body"
+    },
+    {
+      "parameters": {
+        "jsCode": "const posts = $input.first().json.data.posts || [];\nreturn posts.map((p) => ({ json: { data: { post: p } }, pairedItem: { item: 0 } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        -192
+      ],
+      "id": "01aff532-87eb-4f8a-bdaa-dc10cabccfd3",
+      "name": "Split posts"
+    }
+  ],
+  "connections": {
+    "Every hour1": {
+      "main": [
+        [
+          {
+            "node": "Snapshot insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Posts Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Claim next post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to n8n": {
+      "main": [
+        [
+          {
+            "node": "Parse body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is For Automated Editing?": {
+      "main": [
+        [
+          {
+            "node": "Map AI → Creatomate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Keystore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "Is For Automated Editing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Finished?": {
+      "main": [
+        [
+          {
+            "node": "Render Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Render Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 10s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Render Status": {
+      "main": [
+        [
+          {
+            "node": "Render Finished?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 10s": {
+      "main": [
+        [
+          {
+            "node": "Get Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Creatomate Render": {
+      "main": [
+        [
+          {
+            "node": "Wait 10s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map AI → Creatomate": {
+      "main": [
+        [
+          {
+            "node": "Start Creatomate Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Email Output": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keystore": {
+      "main": [
+        [
+          {
+            "node": "Has media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark posted": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post text to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post photo to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post video to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is video?": {
+      "main": [
+        [
+          {
+            "node": "Post video to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post photo to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has media?": {
+      "main": [
+        [
+          {
+            "node": "Is video?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post text to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Split posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim next post": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse body": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split posts": {
+      "main": [
+        [
+          {
+            "node": "Keystore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "65920e30f382a1064e38243457955455c5337d9c4dd5c8a89a6e793460e8da22"
+  },
+  "name": "pwise — Auto Post + Generate (multi-page, batch drain)"
+}

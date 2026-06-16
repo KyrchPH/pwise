@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Logo } from '../../components/ui.jsx';
 
 // Edit these two as needed.
-const LAST_UPDATED = 'June 10, 2026';
+const LAST_UPDATED = 'June 11, 2026';
 const CONTACT_EMAIL = 'sixpent3@gmail.com';
 
 export default function PrivacyPolicyPage() {
@@ -16,11 +16,13 @@ export default function PrivacyPolicyPage() {
         </div>
 
         <p>
-          This Privacy Policy explains how <strong>Wise Cleaner Shop</strong> (&ldquo;we&rdquo;, &ldquo;us&rdquo;,
-          &ldquo;our&rdquo;) collects, uses, and protects your information when you use <strong>pwise</strong> (the
-          &ldquo;App&rdquo;), our social-media post scheduling tool available at{' '}
-          <a href="https://pwise.sixpent.com">pwise.sixpent.com</a>. The App is intended for internal and personal use
-          only and is not offered as a public or commercial service. By using the App, you agree to this policy.
+          This Privacy Policy explains how <strong>pwise</strong> (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;,
+          the &ldquo;App&rdquo;) collects, uses, and protects your information. pwise is a social-media post scheduling
+          tool available at <a href="https://pwise.sixpent.com">pwise.sixpent.com</a> that lets you connect and manage
+          one or more Facebook Pages you own or administer; any such Page can be bound to your account. This policy
+          applies to every Page you connect, regardless of its name or brand. The App is intended for internal and
+          personal use only and is not offered as a public or commercial service. By using the App, you agree to this
+          policy.
         </p>
 
         <h2>1. Information We Collect</h2>
@@ -33,10 +35,13 @@ export default function PrivacyPolicyPage() {
             notes, and video templates you create in the App.
           </li>
           <li>
-            <strong>Facebook Page data</strong> — when you connect one or more Facebook Pages, we access only the data
-            needed to operate: each Page&rsquo;s name and follower count (to display your Pages and let you switch
-            between them), and engagement (reactions, comments, shares, and video views) on the posts the App publishes
-            on your behalf. We record these engagement figures over time so we can show you historical trends.
+            <strong>Facebook Page data</strong> — you may connect one or more Facebook Pages that you manage. For each
+            connected Page we access only the data needed to operate: which Pages you manage, so you can choose the ones
+            to connect; each Page&rsquo;s name and follower count (to display your Pages and let you switch the active
+            Page); engagement (reactions, comments, shares, and video views) on the posts the App publishes on your
+            behalf; and Page-level insights such as reach and impressions. We record these figures over time so we can
+            show you historical trends for each Page. Every connected Page is handled the same way and kept separate from
+            your other Pages.
           </li>
           <li>
             <strong>Usage and logs</strong> — records of posting attempts and their results, used to operate and
@@ -50,7 +55,8 @@ export default function PrivacyPolicyPage() {
           <li>To schedule and publish your content to your connected Facebook Page(s).</li>
           <li>To display your connected Pages, let you switch the active Page, and show its follower count.</li>
           <li>
-            To record engagement over time and show you analytics and historical trends for posts the App published.
+            To record engagement and Page-level insights (such as reach and impressions) over time and show you
+            analytics and historical trends, per Page, for the content the App published.
           </li>
           <li>To send you operational emails, such as posting results and low-content alerts.</li>
         </ul>
@@ -58,18 +64,23 @@ export default function PrivacyPolicyPage() {
         <h2>3. Facebook / Meta Platform Data</h2>
         <p>
           The App uses the Facebook Graph API. With your explicit permission, it requests only the access needed to
-          operate — for example, to publish content to your Page(s), to read each Page&rsquo;s name and follower count,
-          and to read engagement on your own Pages&rsquo; posts (permissions such as <code>pages_manage_posts</code>,{' '}
-          <code>pages_read_engagement</code>, and <code>read_insights</code>). We do not access your private messages,
-          your friends, or any data beyond what is required to provide the service, and we use Facebook/Meta data only in
-          accordance with Meta&rsquo;s Platform Terms and Developer Policies.
+          operate: to see the list of Pages you manage so you can choose which to connect (<code>pages_show_list</code>);
+          to publish content to the Pages you connect (<code>pages_manage_posts</code>); to read each Page&rsquo;s name,
+          follower count, and the engagement on posts the App published (<code>pages_read_engagement</code>); and to read
+          Page-level insights such as reach and impressions (<code>read_insights</code>). We access only Pages you manage
+          and explicitly connect, and only Page-level data — we do not access your personal profile beyond the list of
+          Pages you manage, your friends, or your private messages, and we request no data beyond what is required to
+          provide the service. We use Facebook/Meta Platform Data solely to provide the App&rsquo;s features; we do not
+          sell it, and we do not use it for advertising or any unrelated purpose. Our use complies with Meta&rsquo;s
+          Platform Terms and Developer Policies.
         </p>
 
         <h2>4. How We Store and Protect Your Data</h2>
         <p>
           Your account data is stored in a secured database, and your uploaded media is stored privately on Amazon Web
           Services (Amazon S3). Facebook Page access tokens and related credentials are encrypted at rest and used only
-          to perform actions you have authorized. Data is transmitted over encrypted (HTTPS) connections.
+          to perform actions you have authorized; they are deleted when you disconnect the Page or delete your account.
+          Data is transmitted over encrypted (HTTPS) connections.
         </p>
 
         <h2>5. How We Share Your Information</h2>
@@ -87,8 +98,9 @@ export default function PrivacyPolicyPage() {
           deletion of your data at any time. To request deletion, email{' '}
           <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> with the subject line &ldquo;Delete my data&rdquo; from
           the address associated with your account, and we will delete your account and its associated content from our
-          systems. You can also revoke the App&rsquo;s access to your Facebook Page at any time from your Facebook
-          settings (Settings &rarr; Business Integrations).
+          systems. You can also revoke the App&rsquo;s access to any connected Facebook Page at any time from your
+          Facebook settings (Settings &rarr; Business Integrations); revoking access stops the App from accessing that
+          Page.
         </p>
 
         <h2>7. Cookies and Local Storage</h2>

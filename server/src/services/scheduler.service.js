@@ -80,6 +80,58 @@ async function claimAndLock(whereSql, params, orderBy) {
   }
 }
 
+// Batch variant of claimAndLock: atomically claim up to `limit` rows matching
+// `whereSql`/`orderBy`, flip them all to 'posting', and return each enriched with
+// a presigned media URL + the target page's decrypted creds. SKIP LOCKED still
+// guarantees two concurrent runs can't grab the same row. Enrichment runs after
+// commit so a slow S3/decrypt call doesn't hold the row locks.
+async function claimAndLockBatch(whereSql, params, orderBy, limit) {
+  const conn = await getConnection();
+  let claimed = [];
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      `SELECT * FROM post_pool WHERE ${whereSql} ORDER BY ${orderBy} LIMIT ? FOR UPDATE SKIP LOCKED`,
+      [...params, limit],
+    );
+    if (!rows.length) {
+      await conn.commit();
+      return [];
+    }
+    await conn.query("UPDATE post_pool SET status = 'posting' WHERE id IN (?)", [rows.map((r) => r.id)]);
+    await conn.commit();
+    claimed = rows;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+
+  const out = [];
+  for (const post of claimed) {
+    let mediaDownloadUrl = null;
+    if (post.s3_key) {
+      try {
+        mediaDownloadUrl = await createDownloadUrl(post.s3_key);
+      } catch {
+        /* S3 not configured / object missing */
+      }
+    }
+    let page = null;
+    if (post.account_id) {
+      try {
+        const a = await accounts.getDecrypted(post.account_id);
+        page = { fb_page_id: a.fb_page_id, access_token: a.access_token };
+      } catch {
+        /* page gone / encryption unavailable — n8n falls back to its own creds */
+      }
+    }
+    out.push({ ...post, status: 'posting', media_download_url: mediaDownloadUrl, page });
+  }
+  return out;
+}
+
 /**
  * Claim the next post to publish: a DUE scheduled post (scheduled_at <= now) for
  * an enabled user, earliest scheduled time first. Every post is scheduled to an
@@ -101,6 +153,48 @@ export async function claimNext({ userId = null } = {}) {
     'scheduled_at ASC, priority DESC, created_at ASC',
   );
   return claimed ? { ...claimed, via: 'scheduled' } : { claimed: false, reason: 'no scheduled post due' };
+}
+
+/**
+ * Drain variant of claimNext: claim up to `limit` DUE scheduled posts in one
+ * atomic batch (earliest first), each flipped to 'posting' and returned with its
+ * own page creds + media URL. Lets n8n publish a whole due slot in a single run
+ * (e.g. several pages scheduled at the same time) instead of one post per trigger.
+ * Returns { claimed, count, posts }. `limit` is clamped to 1..50.
+ */
+export async function claimNextBatch({ userId = null, limit = 10 } = {}) {
+  await expireOverdue(); // overdue posts are skipped (expired), never posted late
+  const enabled = await enabledUserIds();
+
+  let schedUsers = enabled;
+  if (userId != null) schedUsers = enabled.includes(Number(userId)) ? [Number(userId)] : [];
+  if (!schedUsers.length) {
+    return { claimed: false, count: 0, posts: [], reason: 'no enabled users' };
+  }
+
+  const lim = Math.min(Math.max(Number(limit) || 10, 1), 50);
+  const posts = await claimAndLockBatch(
+    "status = 'ready' AND scheduled_at IS NOT NULL AND scheduled_at <= UTC_TIMESTAMP() AND user_id IN (?)",
+    [schedUsers],
+    'scheduled_at ASC, priority DESC, created_at ASC',
+    lim,
+  );
+
+  // Trim to exactly what n8n needs (mirrors the single-claim post shape + the
+  // immediate webhook payload), so page tokens aren't padded with extra columns.
+  return {
+    claimed: posts.length > 0,
+    count: posts.length,
+    via: 'scheduled',
+    posts: posts.map((p) => ({
+      id: p.id,
+      caption: p.caption,
+      media_type: p.media_type,
+      media_download_url: p.media_download_url,
+      target_platform: p.target_platform,
+      page: p.page,
+    })),
+  };
 }
 
 export async function markPosted(postId, { platformPostId = null, responseMessage = null, targetPlatform = null } = {}) {

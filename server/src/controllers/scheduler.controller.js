@@ -11,6 +11,17 @@ export const claim = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+// n8n: claim up to N due posts in one atomic batch (the drain loop). Same auth +
+// semantics as /claim, but returns { claimed, count, posts: [...] } so a single
+// run can publish every post due for a slot. `limit` (body or query) is clamped
+// server-side to 1..50; defaults to 10.
+export const claimBatch = asyncHandler(async (req, res) => {
+  const userId = req.body?.user_id ?? req.query.user_id ?? null;
+  const limit = req.body?.limit ?? req.query.limit ?? 10;
+  const result = await service.claimNextBatch({ userId, limit });
+  sendSuccess(res, result);
+});
+
 // n8n: finalize after a successful publish to Meta.
 export const markPosted = asyncHandler(async (req, res) => {
   const post = await service.markPosted(req.params.id, {

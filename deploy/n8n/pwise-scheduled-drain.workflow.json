@@ -1,0 +1,564 @@
+{
+  "name": "pwise — Scheduled Drain (batch)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "drain-trigger-0001",
+      "name": "Check Posts Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-admin-email",
+              "name": "ADMIN_EMAIL",
+              "value": "archie.sevillano29@gmail.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "drain-config-0001",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/scheduler/claim-batch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"source\": \"n8n\", \"limit\": 10 }",
+        "options": {}
+      },
+      "id": "drain-claim-0001",
+      "name": "Claim batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-claimed",
+              "leftValue": "={{ $json.data.claimed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "drain-claimed-0001",
+      "name": "Claimed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data.posts",
+        "include": "noOtherFields",
+        "options": {}
+      },
+      "id": "drain-split-0001",
+      "name": "Split posts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-media",
+              "leftValue": "={{ $json.media_download_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "drain-hasmedia-0001",
+      "name": "Has media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-video",
+              "leftValue": "={{ $json.media_type }}",
+              "rightValue": "video",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "drain-isvideo-0001",
+      "name": "Is video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.page.fb_page_id }}/videos",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file_url",
+              "value": "={{ $json.media_download_url }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "drain-fbvideo-0001",
+      "name": "Post video to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -240
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.page.fb_page_id }}/photos",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.media_download_url }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $json.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "drain-fbphoto-0001",
+      "name": "Post photo to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -40
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.page.fb_page_id }}/feed",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $json.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "drain-fbtext-0001",
+      "name": "Post text to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        160
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Split posts').item.json.id }}/posted",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"platform_post_id\": \"{{ $json.id }}\", \"response_message\": \"posted via n8n (batch)\", \"target_platform\": \"{{ $('Split posts').item.json.target_platform }}\" }",
+        "options": {}
+      },
+      "id": "drain-markposted-0001",
+      "name": "Mark posted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        -80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Split posts').item.json.id }}/failed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"error_message\": \"Facebook post failed via n8n\" }",
+        "options": {}
+      },
+      "id": "drain-markfailed-0001",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        160
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const post = $json.data?.post ?? {};\nconst ok = post.status === 'posted';\nconst esc = (s) => String(s ?? '').split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');\nconst caption = esc(post.caption || '(no caption)').split('\\n').join('<br>');\nconst id = post.id ?? '-';\nconst when = new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });\nconst card = (badge, color, title, body) => `<div style='font-family:Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:0 auto;background:#fff;border:1px solid #d4e6f5;border-radius:14px;overflow:hidden'><div style='height:6px;background:#1f9be6;border-bottom:3px solid #ffc400'></div><div style='padding:20px 24px'><span style='display:inline-block;background:#eef6f0;color:${color};font-size:12px;font-weight:700;padding:5px 10px;border-radius:999px'>${badge}</span><h2 style='margin:12px 0 6px;color:#123a57;font-size:20px'>${title}</h2>${body}<div style='margin-top:14px;background:#f1f8fe;border:1px solid #d4e6f5;border-radius:10px;padding:12px 14px'><p style='margin:0 0 4px;font-size:11px;font-weight:700;color:#5c7f99'>CAPTION</p><p style='margin:0;color:#123a57;font-size:14px;line-height:1.5'>${caption}</p></div><p style='margin:12px 0 0;font-size:13px;color:#5c7f99'>Post #${id} | ${when} | Asia/Manila</p></div></div>`;\nif (ok) {\n  const fb = post.parent_post_id || post.platform_post_id || '';\n  const url = fb ? `https://facebook.com/${fb}` : 'https://facebook.com/';\n  return { json: { subject: 'Your post is live on Facebook - Wise Cleaner Shop', message: card('Posted', '#1f8f43', 'Your post is live', `<p style='margin:0;color:#5c7f99;font-size:14px'>Published via the batch drain.</p><p style='margin:12px 0 0'><a href='${url}' style='display:inline-block;background:#1f9be6;color:#fff;font-weight:700;text-decoration:none;padding:10px 22px;border-radius:999px;font-size:14px'>View on Facebook</a></p>`) } };\n}\nconst err = esc(post.failed_reason || 'Unknown error from Facebook');\nreturn { json: { subject: 'A post failed to publish - Wise Cleaner Shop', message: card('Failed', '#c52f24', 'We could not publish your post', `<p style='margin:0;color:#5c7f99;font-size:14px'>Facebook rejected this one - it is marked failed and stays in your pool to retry.</p><div style='margin-top:12px;background:#fdeceb;border:1px solid #f6c9c5;border-radius:10px;padding:12px 14px'><p style='margin:0 0 4px;font-size:11px;font-weight:700;color:#c52f24'>ERROR</p><p style='margin:0;color:#8f231c;font-size:13px;font-family:Consolas,monospace'>${err}</p></div>`) } };"
+      },
+      "id": "drain-email-0001",
+      "name": "Assign Email Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Config').first().json.ADMIN_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "drain-sendmail-0001",
+      "name": "Send a message",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "webhookId": "drain-gmail-webhook-0001",
+      "position": [
+        2280,
+        40
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "eJv6b9AmjATYCiWG",
+          "name": "Sixpent 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Check Posts Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Claim batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim batch": {
+      "main": [
+        [
+          {
+            "node": "Claimed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claimed?": {
+      "main": [
+        [
+          {
+            "node": "Split posts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split posts": {
+      "main": [
+        [
+          {
+            "node": "Has media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has media?": {
+      "main": [
+        [
+          {
+            "node": "Is video?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post text to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is video?": {
+      "main": [
+        [
+          {
+            "node": "Post video to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post photo to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post video to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post photo to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post text to Facebook": {
+      "main": [
+        [
+          {
+            "node": "Mark posted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark posted": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Email Output": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
