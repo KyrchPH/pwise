@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
+import {
+  buildConversations,
+  buildPageCards,
+  formatTotal,
+  resolveSelectedPageId,
+} from '../pages/Messaging/messagingData.js';
 import * as pagesService from '../services/pages.service.js';
 import { Modal } from './ui.jsx';
 
@@ -172,13 +178,15 @@ function formatCount(n) {
 // A connected page's photo (the Facebook page picture) with a letter fallback.
 function PageAvatar({ page, className = '' }) {
   const [broken, setBroken] = useState(false);
-  const src = page?.fb_page_id
-    ? `https://graph.facebook.com/v21.0/${page.fb_page_id}/picture?type=square&width=96&height=96`
+  const pagePictureId = page?.fb_page_id || page?.fbPageId;
+  const pageLabel = page?.account_name || page?.name || '?';
+  const src = pagePictureId
+    ? `https://graph.facebook.com/v21.0/${pagePictureId}/picture?type=square&width=96&height=96`
     : null;
   if (!src || broken) {
     return (
       <span className={`page-avatar page-avatar--fallback ${className}`} aria-hidden="true">
-        {(page?.account_name || '?').charAt(0).toUpperCase()}
+        {pageLabel.charAt(0).toUpperCase()}
       </span>
     );
   }
@@ -190,10 +198,30 @@ export default function AppLayout() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages } = usePages();
   const { pathname } = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const toast = useToast();
   const isAdmin = user?.role === 'admin';
+  const isMessagingPage = pathname === '/messages';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
+  const connectedMessagingPages = pages.filter((page) => page.is_active !== false);
+  const messagingPageCards = buildPageCards(connectedMessagingPages);
+  const messagingConversations = buildConversations(messagingPageCards);
+  const requestedMessagingPageId = searchParams.get('page');
+  const preferredMessagingPageId = activePage?.id != null ? String(activePage.id) : null;
+  const selectedMessagingPageId = resolveSelectedPageId(
+    messagingPageCards,
+    requestedMessagingPageId,
+    preferredMessagingPageId,
+  );
+  const messagingPageSummaries = messagingPageCards.map((page) => {
+    const pageConversations = messagingConversations.filter((conversation) => conversation.pageId === page.id);
+    return {
+      ...page,
+      aiAgentMessages: formatTotal(pageConversations, 'AI Agent'),
+      liveAgentMessages: formatTotal(pageConversations, 'Live Agent'),
+    };
+  });
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
@@ -287,6 +315,12 @@ export default function AppLayout() {
         </NavLink>
       ));
 
+  const selectMessagingPage = (pageId) => {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.set('page', pageId);
+    setSearchParams(nextSearchParams);
+  };
+
   return (
     <div className="app-shell">
       <aside className={`sidebar${navOpen ? ' is-open' : ''}${collapsed ? ' is-collapsed' : ''}`}>
@@ -313,11 +347,12 @@ export default function AppLayout() {
         <div className="nav-group">
           <div className="nav__title">General</div>
           <nav className="nav">
-            <button
-              type="button"
-              className="nav__link sidebar__messages"
-              onClick={() => navigate('/messages')}
+            <NavLink
+              to="/messages"
               title={collapsed ? 'Messaging' : undefined}
+              className={({ isActive }) =>
+                isActive ? 'nav__link sidebar__messages active' : 'nav__link sidebar__messages'
+              }
             >
               <span className="nav__icon">
                 <Ico>
@@ -328,7 +363,7 @@ export default function AppLayout() {
               {messageCount > 0 && (
                 <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
               )}
-            </button>
+            </NavLink>
             {renderNavLinks(SECONDARY_NAV)}
           </nav>
         </div>
@@ -379,7 +414,7 @@ export default function AppLayout() {
       {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
 
       <div className="main">
-        <header className="topbar">
+        <header className={`topbar${isMessagingPage ? ' topbar--messages' : ''}`}>
           <div className="topbar__left">
             <button className="topbar__menu" onClick={() => setNavOpen(true)} aria-label="Open menu">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
@@ -388,6 +423,36 @@ export default function AppLayout() {
                 <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
+            {isMessagingPage && messagingPageSummaries.length > 0 && (
+              <div className="msg-page-grid msg-page-grid--topbar" aria-label="Connected pages">
+                {messagingPageSummaries.map((page) => (
+                  <button
+                    key={page.id}
+                    type="button"
+                    className={`card msg-page-card msg-page-card--topbar${page.id === selectedMessagingPageId ? ' is-active' : ''}`}
+                    onClick={() => selectMessagingPage(page.id)}
+                    aria-pressed={page.id === selectedMessagingPageId}
+                  >
+                    <div className="msg-page-card__top">
+                      <PageAvatar page={page} className="msg-page-card__avatar" />
+                      <div className="msg-page-card__copy">
+                        <strong className="msg-page-card__title">{page.name}</strong>
+                        <div className="msg-page-card__stats">
+                          <span className="msg-counter-badge msg-counter-badge--ai">
+                            <span className="msg-counter-badge__label">AI Agent</span>
+                            <strong className="msg-counter-badge__value">{page.aiAgentMessages}</strong>
+                          </span>
+                          <span className="msg-counter-badge msg-counter-badge--live">
+                            <span className="msg-counter-badge__label">Live Agent</span>
+                            <strong className="msg-counter-badge__value">{page.liveAgentMessages}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="usermenu" ref={menuRef}>
             <button
@@ -456,10 +521,10 @@ export default function AppLayout() {
             )}
           </div>
         </header>
-        <main className="content">
+        <main className={`content${isMessagingPage ? ' content--messages' : ''}`}>
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
-          <div className="content__inner" key={activeId ?? 'no-page'}>
+          <div className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}`} key={activeId ?? 'no-page'}>
             <Outlet />
           </div>
         </main>

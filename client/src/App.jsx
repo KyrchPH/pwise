@@ -15,6 +15,7 @@ import ChangePasswordPage from './pages/Settings/ChangePasswordPage.jsx';
 import LogsPage from './pages/Logs/LogsPage.jsx';
 import ActivityPage from './pages/Activity/ActivityPage.jsx';
 import AccountsPage from './pages/Accounts/AccountsPage.jsx';
+import MessagingPage from './pages/Messaging/MessagingPage.jsx';
 
 export default function App() {
   return (
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/accounts" element={<AdminRoute><AccountsPage /></AdminRoute>} />
+        <Route path="/messages" element={<MessagingPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
