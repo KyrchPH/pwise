@@ -169,9 +169,13 @@ export function TimeSelect({ value, onChange, date, className = '', placeholder 
   };
 
   const now = new Date();
-  const isToday = date && date === localDateStr(now);
+  const today = localDateStr(now);
+  const isPastDay = !!date && date < today; // the whole selected day is already gone
+  const isToday = !!date && date === today;
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const isPast = (slot) => isToday && slot.minutes <= nowMinutes && slot.value !== value;
+  // A slot is past if its day has fully passed, or it's today and the time already
+  // went by. The current selection is exempt so an existing pick stays visible.
+  const isPast = (slot) => slot.value !== value && (isPastDay || (isToday && slot.minutes <= nowMinutes));
   const selected = HALF_HOUR_SLOTS.find((s) => s.value === value);
 
   useEffect(() => {

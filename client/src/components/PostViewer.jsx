@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from './ui.jsx';
+import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon, Button } from './ui.jsx';
 import InsightsDrawer from './InsightsDrawer.jsx';
 import * as postPool from '../services/post_pool.service.js';
 import { apiError } from '../services/api.js';
@@ -111,8 +111,9 @@ function CommentsSection({ post }) {
  * left, with a white info panel (author, caption, scheduling details) docked
  * full-height on the right. Renders nothing when `post` is null.
  */
-export default function PostViewer({ post, onClose, onEdit }) {
+export default function PostViewer({ post, onClose, onEdit, onRetry }) {
   const [showInsights, setShowInsights] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
 
   // Close on Escape and lock background scroll while open.
   useEffect(() => {
@@ -129,9 +130,10 @@ export default function PostViewer({ post, onClose, onEdit }) {
     };
   }, [post, onClose]);
 
-  // Reset the insights drawer when switching to a different post.
+  // Reset transient UI (insights drawer, retry button) when switching posts.
   useEffect(() => {
     setShowInsights(false);
+    setRetryBusy(false);
   }, [post?.id]);
 
   if (!post) return null;
@@ -141,6 +143,17 @@ export default function PostViewer({ post, onClose, onEdit }) {
     : post.scheduled_at
       ? `Scheduled ${fmt(post.scheduled_at)}`
       : 'Not scheduled';
+
+  const retryable = post.status === 'failed' || post.status === 'expired';
+  const onRetryClick = async () => {
+    if (retryBusy || !onRetry) return;
+    setRetryBusy(true);
+    try {
+      await onRetry(post);
+    } finally {
+      setRetryBusy(false);
+    }
+  };
 
   return (
     <div className="post-viewer" role="dialog" aria-modal="true" aria-label={`Post ${post.id}`}>
@@ -222,6 +235,20 @@ export default function PostViewer({ post, onClose, onEdit }) {
             </svg>
           </button>
         </div>
+
+        {/* Failure notice + retry, for posts that didn't go out */}
+        {retryable && (
+          <div className="post-view__retry" style={{ marginBottom: 12 }}>
+            {post.failed_reason && (
+              <div className="error-text" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+                {post.failed_reason}
+              </div>
+            )}
+            <Button variant="ghost" onClick={onRetryClick} disabled={retryBusy}>
+              {retryBusy ? 'Retrying…' : '↻ Retry now'}
+            </Button>
+          </div>
+        )}
 
         {/* Caption — the post body */}
         <div className="post-view__caption">

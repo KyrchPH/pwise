@@ -46,6 +46,13 @@ export const update = asyncHandler(async (req, res) => {
   sendSuccess(res, { post });
 });
 
+// Retry a failed/expired post immediately (re-publish via the n8n webhook, ignoring
+// the schedule). Returns the post flipped to 'posting'.
+export const retry = asyncHandler(async (req, res) => {
+  const post = await service.retryNow(req.params.id, req.user);
+  sendSuccess(res, { post });
+});
+
 export const remove = asyncHandler(async (req, res) => {
   const result = await service.remove(req.params.id, req.user);
   sendSuccess(res, result);

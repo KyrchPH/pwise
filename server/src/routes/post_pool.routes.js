@@ -13,6 +13,7 @@ router.get('/:id', ctrl.get);
 router.get('/:id/comments', ctrl.comments); // live Facebook comments (paged / lazy)
 router.get('/:id/insights', ctrl.insights); // per-day/month engagement series for the graph
 router.patch('/:id', ctrl.update);
+router.post('/:id/retry', ctrl.retry); // re-publish a failed/expired post now (immediate webhook)
 router.delete('/:id', ctrl.remove);
 
 export default router;

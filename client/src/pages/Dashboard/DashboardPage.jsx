@@ -6,7 +6,6 @@ import { apiError } from '../../services/api.js';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Spinner, Button, StatusBadge } from '../../components/ui.jsx';
-import CalendarMonth from '../../components/CalendarMonth.jsx';
 
 const STAT_DEFS = [
   { key: 'total', label: 'Total posts', color: 'var(--primary)' },
@@ -18,7 +17,7 @@ const STAT_DEFS = [
 
 export default function DashboardPage() {
   const toast = useToast();
-  const { data, loading, error, refresh } = useCachedResource('dashboard', () =>
+  const { data, loading, error } = useCachedResource('dashboard', () =>
     Promise.all([postPool.counts(), settingsService.get(), postPool.list({ scheduled: 1 })]).then(
       ([counts, settings, scheduled]) => ({ counts, settings, scheduled: scheduled.posts }),
     ),
@@ -117,13 +116,6 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <Card className="card--pad mt-lg">
-        <div className="row row--between" style={{ marginBottom: 16 }}>
-          <div className="card__title">Content calendar</div>
-          <span className="text-sm text-muted">Open days have no post scheduled yet</span>
-        </div>
-        <CalendarMonth posts={scheduled} onPostsChanged={refresh} />
-      </Card>
     </>
   );
 }

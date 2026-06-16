@@ -183,6 +183,7 @@ export async function create(actor = {}, data = {}) {
   } else {
     schedule = normalizeScheduledAt(scheduled_at);
     if (!schedule) throw ApiError.badRequest('a schedule date and time is required');
+    if (schedule.getTime() <= Date.now()) throw ApiError.badRequest('the scheduled time must be in the future');
     await assertSlotFree(schedule);
   }
 
@@ -261,6 +262,49 @@ async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId
   }
 }
 
+// Retry a failed/expired post by re-publishing it NOW through the n8n webhook —
+// the same immediate path as "Post now". This bypasses the scheduler's slot +
+// overdue rules, so a post whose scheduled time already passed can still go out
+// without picking a new future slot. Flips it to 'posting' up front (clearing the
+// old failure) so a duplicate click can't double-publish and the scheduler never
+// eyes it; n8n reports the outcome back via /posts/:id/posted|failed.
+export async function retryNow(id, actor = {}) {
+  const post = await getById(id); // 404 if missing
+  if (post.status !== 'failed' && post.status !== 'expired') {
+    throw ApiError.badRequest(`only failed or expired posts can be retried (this one is '${post.status}')`);
+  }
+  if (!env.n8n.postWebhookUrl) {
+    throw new ApiError(503, 'Retry is disabled: N8N_POST_WEBHOOK_URL (or N8N_GENERATE_WEBHOOK_URL) is not configured');
+  }
+
+  await query("UPDATE post_pool SET status = 'posting', failed_reason = NULL WHERE id = ?", [id]);
+  try {
+    await triggerImmediatePost({
+      id: post.id,
+      caption: post.caption,
+      media_type: post.media_type,
+      s3_key: post.s3_key,
+      accountId: post.account_id,
+      target_platform: post.target_platform,
+    });
+  } catch (err) {
+    await query("UPDATE post_pool SET status = 'failed', failed_reason = ? WHERE id = ?", [
+      String(`n8n retry trigger failed: ${err.message}`).slice(0, 1000),
+      id,
+    ]);
+    throw new ApiError(502, `couldn't reach the posting webhook: ${err.message}`);
+  }
+
+  await activity.log({
+    postId: id,
+    userId: actor.id,
+    userName: actor.name,
+    action: 'edited',
+    details: 'retried (immediate publish)',
+  });
+  return getById(id);
+}
+
 // `actor` = { id, name } of the editor (logged to the activity trail).
 export async function update(id, data = {}, actor = {}) {
   const existing = await getById(id); // existence check
@@ -282,6 +326,13 @@ export async function update(id, data = {}, actor = {}) {
     if (key === 'scheduled_at') {
       value = normalizeScheduledAt(data.scheduled_at);
       if (!value) throw ApiError.badRequest('a schedule date and time is required');
+      // Moving the schedule to a past slot is rejected — the scheduler could never
+      // run it. Re-saving the SAME time is allowed, so caption edits on an already-
+      // posted or failed post (which carry their original past time) still go through.
+      const moved = !existing.scheduled_at || value.getTime() !== new Date(existing.scheduled_at).getTime();
+      if (moved && value.getTime() <= Date.now()) {
+        throw ApiError.badRequest('the scheduled time must be in the future');
+      }
       await assertSlotFree(value, id);
       newSchedule = value;
     }
@@ -303,11 +354,18 @@ export async function update(id, data = {}, actor = {}) {
     await fb.editCaption(existing.platform_post_id, existing.media_type, data.caption, token);
   }
 
-  // Rescheduling an expired post to a future time revives it to 'ready' so the
-  // scheduler will pick it up again (unless the caller set an explicit status).
-  if (existing.status === 'expired' && !('status' in data) && newSchedule && newSchedule.getTime() > Date.now()) {
+  // Reviving a failed or expired post: when an edit leaves it with a future
+  // scheduled time (just rescheduled, or already future) and the caller didn't set
+  // an explicit status, flip it back to 'ready' so the scheduler retries it — and
+  // clear the now-stale failure reason. A post still timed in the past isn't revived
+  // (it would only expire again): reschedule it to a future slot to retry.
+  const effectiveSchedule = newSchedule || existing.scheduled_at;
+  const retryable = existing.status === 'failed' || existing.status === 'expired';
+  if (retryable && !('status' in data) && effectiveSchedule && new Date(effectiveSchedule).getTime() > Date.now()) {
     fields.push('status = ?');
     params.push('ready');
+    fields.push('failed_reason = ?');
+    params.push(null);
     changed.push('status:revived');
   }
 

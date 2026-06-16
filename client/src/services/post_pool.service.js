@@ -22,6 +22,14 @@ export async function update(id, payload) {
   return data.data.post;
 }
 
+// Re-publish a failed/expired post immediately via the n8n webhook — ignores the
+// schedule, so it works even when the post's time already passed. Returns the post
+// (now 'posting'; n8n reports the final result back asynchronously).
+export async function retry(id) {
+  const { data } = await api.post(`/post-pool/${id}/retry`);
+  return data.data.post;
+}
+
 export async function remove(id) {
   const { data } = await api.delete(`/post-pool/${id}`);
   return data.data;

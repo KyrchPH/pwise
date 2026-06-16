@@ -155,7 +155,9 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
           const isPast = cell < todayMidnight;
           const isToday = k === todayKey;
           const isOpen = count === 0 && !isPast; // no post set yet (upcoming)
-          const noteCount = noteCounts[k] || 0;
+          const noteEntry = noteCounts[k];
+          const noteCount = noteEntry?.count || 0;
+          const noteChips = noteEntry?.notes || [];
           const cls = [
             'calendar__cell',
             count > 0 && 'is-scheduled',
@@ -198,11 +200,17 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
               }}
             >
               <span className="calendar__day">{d}</span>
-              {noteCount > 0 && (
-                <span className="calendar__notes" title={`${noteCount} note${noteCount === 1 ? '' : 's'} planned`}>
-                  <span className="calendar__notes-ico" aria-hidden="true">📋</span>
-                  {noteCount}
-                </span>
+              {noteChips.length > 0 && (
+                <div className="calendar__notechips">
+                  {noteChips.map((n, idx) => (
+                    <span key={idx} className={`notechip notechip--${n.status || 'pending'}`} title={n.text}>
+                      {n.text}
+                    </span>
+                  ))}
+                  {noteCount > noteChips.length && (
+                    <span className="notechip notechip--more">+{noteCount - noteChips.length} more</span>
+                  )}
+                </div>
               )}
               {count > 0 && (
                 <span className="calendar__thumbs" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>

@@ -48,6 +48,7 @@ export default function PostPoolPage() {
   const [deleting, setDeleting] = useState(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [retrying, setRetrying] = useState(null); // id of the post currently being retried
 
   const {
     data,
@@ -127,6 +128,25 @@ export default function PostPoolPage() {
       toast.error(apiError(e));
     } finally {
       setDeletingBusy(false);
+    }
+  };
+
+  // Retry a failed/expired post: re-publish it now via the webhook (ignores the
+  // schedule, so a passed time is fine). It flips to 'posting' immediately; n8n
+  // reports the final result back, so a later refresh shows posted/failed.
+  const retryPost = async (post) => {
+    if (retrying) return false; // one at a time; guards double-clicks
+    setRetrying(post.id);
+    try {
+      await postPool.retry(post.id);
+      toast.success('Retrying — publishing now');
+      reload();
+      return true;
+    } catch (e) {
+      toast.error(apiError(e));
+      return false;
+    } finally {
+      setRetrying(null);
     }
   };
 
@@ -211,6 +231,21 @@ export default function PostPoolPage() {
               </div>
               {/* stopPropagation so the action buttons don't also open the viewer */}
               <div className="post-card__actions" onClick={(e) => e.stopPropagation()}>
+                {(post.status === 'failed' || post.status === 'expired') && (
+                  <button
+                    type="button"
+                    className="card-iconbtn"
+                    onClick={() => retryPost(post)}
+                    disabled={retrying === post.id}
+                    aria-label="Retry now"
+                    title="Retry now (publish immediately)"
+                  >
+                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+                      <path d="M3 3v5h5" />
+                    </svg>
+                  </button>
+                )}
                 <button type="button" className="card-iconbtn" onClick={() => openEdit(post)} aria-label="Edit post" title="Edit">
                   <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M12 20h9" />
@@ -263,6 +298,9 @@ export default function PostPoolPage() {
           setViewing(null);
           openEdit(p);
         }}
+        onRetry={async (p) => {
+          if (await retryPost(p)) setViewing(null);
+        }}
       />
 
       {/* Edit modal */}
@@ -287,12 +325,12 @@ export default function PostPoolPage() {
               <textarea className="textarea" value={editing.caption || ''} onChange={editField('caption')} />
             </Field>
             <div className="field">
-              <span className="field__label">Schedule (optional)</span>
+              <span className="field__label">Schedule</span>
               <div className="grid-2">
                 <input className="input" type="date" value={editing._schedDate || ''} onChange={editField('_schedDate')} />
                 <TimeSelect value={editing._schedTime || ''} onChange={editField('_schedTime')} date={editing._schedDate} />
               </div>
-              <span className="field__hint">Clear both to fall back to the interval. One post per slot.</span>
+              <span className="field__hint">Pick a future date and time. One post per slot.</span>
             </div>
             {editError && <div className="error-text">{editError}</div>}
           </form>

@@ -6,7 +6,8 @@ export async function listByDate(date) {
   return data.data.notes;
 }
 
-// Per-day note counts for a month → { 'YYYY-MM-DD': n }. `month` is 1-12.
+// Per-day note summary for a month → { 'YYYY-MM-DD': { count, notes } }, where
+// `notes` is the first few [{ text, status }] for that day. `month` is 1-12.
 export async function monthCounts(year, month) {
   const { data } = await api.get('/content-notes/month', { params: { year, month } });
   return data.data.counts;

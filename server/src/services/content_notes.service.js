@@ -48,21 +48,28 @@ export async function listByDate(date) {
   );
 }
 
-// Per-day note counts for a month → { 'YYYY-MM-DD': n }, for the calendar badges.
+// Per-day note summary for a month → { 'YYYY-MM-DD': { count, notes } }, for the
+// calendar chips. `notes` is the first few notes that day ({ text (truncated), status })
+// so each renders as its own chip; `count` is the day's full total (drives "+N more").
 export async function monthCounts(year, month) {
   const y = Number(year);
   const m = Number(month);
   if (!Number.isInteger(y) || y < 1970 || y > 9999) throw ApiError.badRequest('invalid year');
   if (!Number.isInteger(m) || m < 1 || m > 12) throw ApiError.badRequest('invalid month (1-12)');
+  const CHIPS_PER_DAY = 3;
   const rows = await query(
-    `SELECT DATE_FORMAT(note_date, '%Y-%m-%d') AS d, COUNT(*) AS c
+    `SELECT DATE_FORMAT(note_date, '%Y-%m-%d') AS d, LEFT(content, 80) AS text, status
        FROM content_notes
       WHERE YEAR(note_date) = ? AND MONTH(note_date) = ?
-      GROUP BY note_date`,
+      ORDER BY note_date ASC, created_at ASC, id ASC`,
     [y, m],
   );
   const counts = {};
-  for (const r of rows) counts[r.d] = Number(r.c);
+  for (const r of rows) {
+    const e = counts[r.d] || (counts[r.d] = { count: 0, notes: [] });
+    e.count += 1;
+    if (e.notes.length < CHIPS_PER_DAY) e.notes.push({ text: r.text, status: r.status });
+  }
   return counts;
 }
 
