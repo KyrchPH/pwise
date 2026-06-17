@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   email         VARCHAR(255) NOT NULL,
   password_hash TEXT NOT NULL,
   role          VARCHAR(20) NOT NULL DEFAULT 'user',
+  module_access JSON NULL,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   deleted_at    DATETIME NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS invites (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   token       VARCHAR(64) NOT NULL,
   created_by  INT NOT NULL,                 -- the admin who generated the link
+  module_access JSON NULL,                  -- selected feature modules granted by the link
   used_by     INT NULL,                     -- the account created with it
   used_at     DATETIME NULL,
   expires_at  DATETIME NULL,                -- optional; NULL = no time limit
@@ -230,4 +232,47 @@ CREATE TABLE IF NOT EXISTS creatomate_templates (
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_creatomate_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- conversations — customer chat threads per connected page (Messaging inbox) ----
+-- Shared/global like the rest of the app: every signed-in user sees all threads.
+-- account_id links the page; page_name is a denormalized snapshot for display.
+-- handled_by toggles AI Agent vs Live Agent; unread is the chat-level unseen count.
+CREATE TABLE IF NOT EXISTS conversations (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  account_id      INT NULL,
+  page_name       VARCHAR(255),
+  customer_name   VARCHAR(255) NOT NULL,
+  customer_handle VARCHAR(255),
+  customer_avatar TEXT,
+  origin          VARCHAR(50),                              -- Messenger | Instagram | WhatsApp | Telegram
+  handled_by      VARCHAR(20) NOT NULL DEFAULT 'AI Agent',  -- 'AI Agent' | 'Live Agent'
+  status          VARCHAR(80),
+  tags            JSON NULL,
+  summary         TEXT,
+  unread          INT NOT NULL DEFAULT 0,
+  last_message_at DATETIME NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_conversations_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT chk_conversations_handled CHECK (handled_by IN ('AI Agent', 'Live Agent')),
+  INDEX idx_conversations_account (account_id, last_message_at),
+  INDEX idx_conversations_activity (last_message_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- messages — individual bubbles within a conversation -------------------------
+-- Messenger-style: a bubble holds text OR media (never both). media/reply_to are
+-- JSON; body is the text. created_at drives both ordering and the displayed time.
+CREATE TABLE IF NOT EXISTS messages (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  conversation_id INT NOT NULL,
+  side            VARCHAR(10) NOT NULL,                     -- 'incoming' | 'outgoing'
+  sender          VARCHAR(255),
+  body            TEXT NULL,
+  media           JSON NULL,                                -- [{ type, url, name }]
+  reply_to        JSON NULL,                                -- { id, sender, text }
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  CONSTRAINT chk_messages_side CHECK (side IN ('incoming', 'outgoing')),
+  INDEX idx_messages_conversation (conversation_id, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

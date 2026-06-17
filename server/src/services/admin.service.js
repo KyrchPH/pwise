@@ -1,13 +1,15 @@
 import { query } from '../config/db.js';
+import { moduleAccessForUser } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
 // All accounts for the admin Accounts tab (password hash never exposed).
 export async function listUsers() {
-  return query(
-    `SELECT id, name, email, role, is_active, deleted_at, created_at
+  const rows = await query(
+    `SELECT id, name, email, role, is_active, deleted_at, created_at, module_access
      FROM users
      ORDER BY created_at DESC`,
   );
+  return rows.map((row) => ({ ...row, module_access: moduleAccessForUser(row) }));
 }
 
 export async function setActive(id, active) {

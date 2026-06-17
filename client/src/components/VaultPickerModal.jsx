@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Modal } from './ui.jsx';
 import { VaultThumb } from './VaultThumb.jsx';
-import { formatBytes, useVault } from '../context/VaultContext.jsx';
+import { formatBytes, getVaultMediaType, useVault } from '../context/VaultContext.jsx';
 
 const MAX = 5;
 
@@ -21,15 +21,19 @@ export default function VaultPickerModal({ open, onClose, onAttach }) {
   const files = items.filter((it) => it.type === 'file');
   const trail = pathTo(folderId);
 
-  const selType = selected[0]?.mediaType || null;
+  const selType = selected[0] ? getVaultMediaType(selected[0]) : null;
   const isSelected = (file) => selected.some((s) => s.id === file.id);
-  const isMedia = (file) => file.mediaType === 'image' || file.mediaType === 'video';
+  const isMedia = (file) => {
+    const mediaType = getVaultMediaType(file);
+    return mediaType === 'image' || mediaType === 'video';
+  };
 
   // Why a file can't be picked right now (empty string = it can).
   const blockReason = (file) => {
     if (isSelected(file)) return '';
     if (!isMedia(file)) return 'Only photos and videos can be attached';
-    if (selType && file.mediaType !== selType) return `You can only attach one type at a time (${selType}s)`;
+    const mediaType = getVaultMediaType(file);
+    if (selType && mediaType !== selType) return `You can only attach one type at a time (${selType}s)`;
     if (selected.length >= MAX) return `You can attach up to ${MAX} items`;
     return '';
   };
@@ -40,8 +44,8 @@ export default function VaultPickerModal({ open, onClose, onAttach }) {
     setSelected((cur) => {
       if (cur.some((s) => s.id === file.id)) return cur.filter((s) => s.id !== file.id);
       if (!isMedia(file)) return cur;
-      const curType = cur[0]?.mediaType || null;
-      if (curType && file.mediaType !== curType) return cur;
+      const curType = cur[0] ? getVaultMediaType(cur[0]) : null;
+      if (curType && getVaultMediaType(file) !== curType) return cur;
       if (cur.length >= MAX) return cur;
       return [...cur, file];
     });

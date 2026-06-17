@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { query } from '../config/db.js';
 import { env } from '../config/env.js';
+import { moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
 function generateToken() {
@@ -8,16 +9,33 @@ function generateToken() {
 }
 
 // Admin generates a single-use sign-up link, recorded against their account.
-export async function create(adminId) {
+export async function create(adminId, modules) {
+  const creatorRows = await query('SELECT id, role, module_access FROM users WHERE id = ?', [adminId]);
+  const creator = creatorRows[0];
+  if (!creator) throw ApiError.unauthorized('not authenticated');
+
+  const requested = normalizeModuleAccess(modules);
+  if (!requested || requested.length === 0) throw ApiError.badRequest('select at least one module');
+
+  const creatorAccess = new Set(moduleAccessForUser(creator));
+  const invalid = requested.some((id) => !creatorAccess.has(id));
+  if (invalid) throw ApiError.forbidden("you can't grant access to a module you do not have");
+  if (requested.includes('accounts')) throw ApiError.badRequest("admin-only modules can't be granted by login link");
+
   const token = generateToken();
-  await query('INSERT INTO invites (token, created_by) VALUES (?, ?)', [token, adminId]);
-  return { token, link: `${env.clientUrl}/signup?token=${token}` };
+  await query('INSERT INTO invites (token, created_by, module_access) VALUES (?, ?, ?)', [
+    token,
+    adminId,
+    serializeModuleAccess(requested),
+  ]);
+  return { token, link: `${env.clientUrl}/signup?token=${token}`, module_access: requested };
 }
 
 // All invites with creator + redeemer info (for the admin Accounts tab).
 export async function list() {
-  return query(
+  const rows = await query(
     `SELECT i.id, i.token, i.created_at, i.used_at, i.expires_at,
+            i.module_access,
             c.email AS created_by_email, c.name AS created_by_name,
             u.email AS used_by_email
      FROM invites i
@@ -25,6 +43,7 @@ export async function list() {
      LEFT JOIN users u ON u.id = i.used_by
      ORDER BY i.created_at DESC`,
   );
+  return rows.map((row) => ({ ...row, module_access: moduleAccessForUser(row) }));
 }
 
 // Delete an UNUSED invite (race-safe: only deletes while used_by IS NULL).

@@ -1,25 +1,93 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Card, EmptyState } from '../../components/ui.jsx';
+import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { usePages } from '../../context/PageContext.jsx';
-import {
-  buildConversations,
-  buildPageCards,
-  messagePreview,
-  resolveSelectedPageId,
-} from './messagingData.js';
+import * as messaging from '../../services/messaging.service.js';
+import { buildPageCards, messagePreview, resolveSelectedPageId } from './messagingData.js';
 
-function CustomerAvatar({ name }) {
+// Apply an SSE message:new event to a conversation: append any not-yet-seen
+// bubbles (deduped by id, so the sender's own echo is ignored) and merge the
+// conversation patch (summary / unread / handledBy / lastActivity).
+function mergeIncoming(conversation, event) {
+  const seen = new Set(conversation.messages.map((m) => m.id));
+  const added = (event.messages || []).filter((m) => !seen.has(m.id));
+  return {
+    ...conversation,
+    ...(event.conversation || {}),
+    messages: added.length ? [...conversation.messages, ...added] : conversation.messages,
+  };
+}
+
+function platformKey(origin) {
+  const value = String(origin || '').toLowerCase();
+  if (value.includes('telegram')) return 'telegram';
+  if (value.includes('instagram')) return 'instagram';
+  if (value.includes('whatsapp')) return 'whatsapp';
+  if (value.includes('messenger') || value.includes('facebook')) return 'facebook';
+  return 'other';
+}
+
+function PlatformLogo({ origin }) {
+  const key = platformKey(origin);
+  if (key === 'telegram') {
+    return (
+      <span className="msg-platform-logo msg-platform-logo--telegram" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M21.7 4.3 18.5 19c-.2.9-.8 1.1-1.6.7l-4.7-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.4-4.9 8.9-8c.4-.4-.1-.6-.6-.3L6.5 12.6 1.8 11c-1-.3-1-1 .2-1.5l18.3-7c.8-.3 1.6.2 1.4 1.8Z" />
+        </svg>
+      </span>
+    );
+  }
+  if (key === 'instagram') {
+    return (
+      <span className="msg-platform-logo msg-platform-logo--instagram" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2">
+          <rect x="5" y="5" width="14" height="14" rx="4" />
+          <circle cx="12" cy="12" r="3" />
+          <circle cx="16.8" cy="7.2" r="0.8" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+  if (key === 'whatsapp') {
+    return (
+      <span className="msg-platform-logo msg-platform-logo--whatsapp" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7.5 19.5 4 20.5l1-3.4A8 8 0 1 1 7.5 19.5Z" />
+          <path d="M9 8.8c.4 2.6 2.5 4.7 5.1 5.2l1.2-1.2 2 1.1c-.3 1.5-1.4 2.3-2.8 2-3.9-.8-6.6-3.4-7.4-7.3-.3-1.4.6-2.5 2-2.8l1.1 2Z" />
+        </svg>
+      </span>
+    );
+  }
+  return <span className="msg-platform-logo msg-platform-logo--facebook" aria-hidden="true">f</span>;
+}
+
+function CustomerAvatar({ name, origin, avatarUrl }) {
+  const [broken, setBroken] = useState(false);
+  const initials = (name || '?')
+    .split(' ')
+    .map((part) => part[0] || '')
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
+  useEffect(() => {
+    setBroken(false);
+  }, [avatarUrl]);
+
+  const showPhoto = avatarUrl && !broken;
+
   return (
-    <span className="msg-customer-avatar" aria-hidden="true">
-      {(name || '?')
-        .split(' ')
-        .map((part) => part[0] || '')
-        .slice(0, 2)
-        .join('')
-        .toUpperCase()}
+    <span className={`msg-customer-avatar${showPhoto ? ' msg-customer-avatar--photo' : ''}`} aria-hidden="true">
+      {showPhoto ? (
+        <img className="msg-customer-avatar__img" src={avatarUrl} alt="" onError={() => setBroken(true)} />
+      ) : (
+        <span>{initials}</span>
+      )}
+      <PlatformLogo origin={origin} />
     </span>
   );
 }
@@ -29,25 +97,63 @@ export default function MessagingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const connectedPages = pages.filter((page) => page.is_active !== false);
   const pageCards = buildPageCards(connectedPages);
-  const pageSnapshot = pageCards.map((page) => `${page.id}:${page.name}:${page.fbPageId}`).join('|');
   const requestedPageId = searchParams.get('page');
   const preferredPageId = activePage?.id != null ? String(activePage.id) : null;
   const filterRef = useRef(null);
   const copyTimerRef = useRef(null);
+  const composerInputRef = useRef(null);
 
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState([]); // vault media staged for the next message
   const [pickerOpen, setPickerOpen] = useState(false); // vault attach dialog
+  const [templateOpen, setTemplateOpen] = useState(false); // template drawer
+  const [dropActive, setDropActive] = useState(false); // template being dragged over the thread
   const [replyTo, setReplyTo] = useState(null);
   const [agentView, setAgentView] = useState('ai'); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
   const [copiedId, setCopiedId] = useState(null); // message whose copy just succeeded
-  const [conversations, setConversations] = useState(() => buildConversations(buildPageCards([])));
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
+  // Load the shared inbox once on mount.
   useEffect(() => {
-    setConversations(buildConversations(pageCards));
-  }, [pageSnapshot]);
+    let active = true;
+    setLoading(true);
+    messaging
+      .listConversations()
+      .then((list) => {
+        if (active) {
+          setConversations(list);
+          setLoadError(null);
+        }
+      })
+      .catch((err) => {
+        if (active) setLoadError(messaging.apiError(err));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Keep it live: SSE pushes new messages and thread changes (sent by any user).
+  useEffect(() => {
+    return messaging.subscribe((event) => {
+      if (event.type === 'message:new') {
+        setConversations((cur) =>
+          cur.map((c) => (c.id === event.conversationId ? mergeIncoming(c, event) : c)),
+        );
+      } else if (event.type === 'conversation:updated' && event.conversation) {
+        setConversations((cur) =>
+          cur.map((c) => (c.id === event.conversation.id ? { ...c, ...event.conversation } : c)),
+        );
+      }
+    });
+  }, []);
 
   // The page filter targets a single page or all of them ('all'); with no request
   // it resolves to the active page so the inbox opens where you left off.
@@ -105,6 +211,21 @@ export default function MessagingPage() {
   // read-only until the user takes over (then they become live-agent threads).
   const isLiveAgent = activeConversation?.handledBy === 'Live Agent';
 
+  // Unread "chats" = conversations not yet seen (unread > 0). These drive the
+  // page-filter badges — a per-page count and a grand total.
+  const unreadTotal = conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
+  const unreadForPage = (pageId) =>
+    conversations.reduce((sum, c) => sum + (c.pageId === pageId && c.unread > 0 ? 1 : 0), 0);
+
+  // Opening a conversation marks it seen: clears its unread badge and trims the
+  // filter counters by one.
+  useEffect(() => {
+    const id = activeConversation?.id;
+    if (!id || !(activeConversation.unread > 0)) return;
+    setConversations((cur) => cur.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
+    messaging.markSeen(id).catch(() => {});
+  }, [activeConversation?.id]);
+
   const filterLabel = isAllPages
     ? 'All pages'
     : pageCards.find((page) => page.id === selectedPageId)?.name || 'All pages';
@@ -127,42 +248,32 @@ export default function MessagingPage() {
     setAttachments([]);
   }, [activeConversation?.id]);
 
-  const handleSend = (event) => {
+  const handleSend = async (event) => {
     event.preventDefault();
     const text = draft.trim();
     if ((!text && attachments.length === 0) || !activeConversation || !isLiveAgent) return;
 
-    const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const media = attachments.map((a) => ({ type: a.mediaType, url: a.url, name: a.name }));
+    const conversationId = activeConversation.id;
+    const sentAttachments = attachments;
+    const media = sentAttachments.map((a) => ({ type: a.mediaType, url: a.url, name: a.name }));
+    const replyRef = replyTo ? { id: replyTo.id, sender: replyTo.sender, text: replyTo.text } : null;
 
-    setConversations((current) =>
-      current.map((conversation) =>
-        conversation.id === activeConversation.id
-          ? {
-              ...conversation,
-              summary: text || `${media.length} attachment${media.length === 1 ? '' : 's'}`,
-              lastActivity: 'Just now',
-              messages: [
-                ...conversation.messages,
-                {
-                  id: `${conversation.id}-message-${conversation.messages.length + 1}`,
-                  side: 'outgoing',
-                  replyTo: replyTo
-                    ? { id: replyTo.id, sender: replyTo.sender, text: replyTo.text }
-                    : null,
-                  sender: 'You',
-                  time,
-                  text,
-                  media: media.length ? media : undefined,
-                },
-              ],
-            }
-          : conversation,
-      ),
-    );
+    // Clear the composer immediately; the server splits media + text into bubbles
+    // and returns them (SSE echoes to other clients — deduped by id here).
     setDraft('');
     setAttachments([]);
     setReplyTo(null);
+
+    try {
+      const result = await messaging.sendMessage(conversationId, { text, media, replyTo: replyRef });
+      setConversations((cur) => cur.map((c) => (c.id === conversationId ? mergeIncoming(c, result) : c)));
+    } catch (err) {
+      // Restore the composer so nothing is lost.
+      setDraft(text);
+      setAttachments(sentAttachments);
+      setReplyTo(replyRef ? replyTo : null);
+      setLoadError(messaging.apiError(err));
+    }
   };
 
   // Stage vault media above the composer (merged, deduped, max 5, single type).
@@ -180,6 +291,44 @@ export default function MessagingPage() {
     setPickerOpen(false);
   };
 
+  // Drop a template's text into the composer (appended to any existing draft),
+  // close the drawer and refocus the input so the agent can edit before sending.
+  const insertTemplateText = (body) => {
+    if (!body) return;
+    setDraft((current) => (current.trim() ? `${current} ${body}` : body));
+    setTemplateOpen(false);
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  };
+  const handleUseTemplate = (template) => insertTemplateText(template.body);
+
+  const hasTemplateDrag = (event) =>
+    Array.from(event.dataTransfer?.types || []).includes('application/x-pwise-template');
+
+  const handleTemplateDragOver = (event) => {
+    if (!isLiveAgent || !hasTemplateDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (!dropActive) setDropActive(true);
+  };
+
+  const handleTemplateDragLeave = (event) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setDropActive(false);
+  };
+
+  // Drag-and-drop: drop a template anywhere on the live thread to fill the composer.
+  const handleTemplateDrop = (event) => {
+    if (!isLiveAgent || !hasTemplateDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDropActive(false);
+    insertTemplateText(
+      event.dataTransfer.getData('application/x-pwise-template') ||
+        event.dataTransfer.getData('text/plain'),
+    );
+  };
+
   // Take over an AI-agent thread: mark it Live Agent (enabling the composer) and
   // surface it in the "For You" tab with the same thread kept open.
   const handleTakeOver = () => {
@@ -192,6 +341,7 @@ export default function MessagingPage() {
     );
     setAgentView('foryou');
     setSelectedConversationId(id);
+    messaging.takeOver(id).catch(() => {});
   };
 
   // Copy a message's text; briefly flag the bubble so its icon shows a check.
@@ -210,7 +360,7 @@ export default function MessagingPage() {
   useEffect(() => () => clearTimeout(copyTimerRef.current), []);
 
   return (
-    <div className="messaging-page">
+    <div className={`messaging-page${templateOpen ? ' is-template-open' : ''}`}>
       <section className="msg-workspace">
         <Card className="msg-panel msg-panel--list">
           <div className="card__head">
@@ -229,6 +379,11 @@ export default function MessagingPage() {
                   <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                 </svg>
                 <span className="msg-filter__label">{filterLabel}</span>
+                {unreadTotal > 0 && (
+                  <span className="msg-filter__count" title={`${unreadTotal} unread chats`}>
+                    {unreadTotal}
+                  </span>
+                )}
                 <svg className="msg-filter__caret" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M6 9l6 6 6-6" />
                 </svg>
@@ -243,14 +398,15 @@ export default function MessagingPage() {
                     onClick={() => applyPageFilter('all')}
                   >
                     <span>All pages</span>
-                    {isAllPages && (
-                      <span className="dropdown__check" aria-hidden="true">
-                        ✓
+                    {unreadTotal > 0 && (
+                      <span className="msg-filter__opt-end">
+                        <span className="msg-filter__opt-count">{unreadTotal}</span>
                       </span>
                     )}
                   </button>
                   {pageCards.map((page) => {
                     const selected = !isAllPages && page.id === selectedPageId;
+                    const pageUnread = unreadForPage(page.id);
                     return (
                       <button
                         key={page.id}
@@ -261,9 +417,9 @@ export default function MessagingPage() {
                         onClick={() => applyPageFilter(page.id)}
                       >
                         <span>{page.name}</span>
-                        {selected && (
-                          <span className="dropdown__check" aria-hidden="true">
-                            ✓
+                        {pageUnread > 0 && (
+                          <span className="msg-filter__opt-end">
+                            <span className="msg-filter__opt-count">{pageUnread}</span>
                           </span>
                         )}
                       </button>
@@ -297,7 +453,15 @@ export default function MessagingPage() {
             </div>
           </div>
 
-          {visibleConversations.length === 0 ? (
+          {loading ? (
+            <div className="card--pad">
+              <EmptyState icon="…" title="Loading conversations" message="Fetching the latest inbox." />
+            </div>
+          ) : loadError ? (
+            <div className="card--pad">
+              <EmptyState icon="!" title="Couldn’t load messages" message={loadError} />
+            </div>
+          ) : visibleConversations.length === 0 ? (
             <div className="card--pad">
               <EmptyState
                 icon="..."
@@ -314,7 +478,11 @@ export default function MessagingPage() {
                     className={`msg-conversation${conversation.id === activeConversation?.id ? ' is-active' : ''}`}
                     onClick={() => setSelectedConversationId(conversation.id)}
                   >
-                    <CustomerAvatar name={conversation.customerName} />
+                    <CustomerAvatar
+                      name={conversation.customerName}
+                      origin={conversation.origin}
+                      avatarUrl={conversation.avatarUrl}
+                    />
                     <div className="msg-conversation__main">
                       <div className="msg-conversation__row">
                         <strong className="msg-conversation__name">{conversation.customerName}</strong>
@@ -322,17 +490,8 @@ export default function MessagingPage() {
                       </div>
                       <div className="msg-conversation__row">
                         <span className="msg-conversation__mode">{conversation.handledBy}</span>
-                        {conversation.unread > 0 && (
-                          <span className="msg-conversation__unread">{conversation.unread}</span>
-                        )}
                       </div>
                       <p className="msg-conversation__preview">{conversation.summary}</p>
-                      <div className="msg-conversation__foot">
-                        <span className="msg-pill msg-pill--soft">{conversation.status}</span>
-                        <span className="msg-conversation__count">
-                          {conversation.activeMessages} active messages
-                        </span>
-                      </div>
                     </div>
                   </button>
                 </li>
@@ -341,16 +500,26 @@ export default function MessagingPage() {
           )}
         </Card>
 
-        <Card className="msg-panel msg-panel--thread">
+        <Card
+          className={`msg-panel msg-panel--thread${dropActive && isLiveAgent ? ' is-template-drop' : ''}`}
+          onDragOver={handleTemplateDragOver}
+          onDragLeave={handleTemplateDragLeave}
+          onDrop={handleTemplateDrop}
+        >
           {activeConversation ? (
             <>
               <div className="card__head msg-thread__head">
                 <div className="msg-thread__identity">
-                  <CustomerAvatar name={activeConversation.customerName} />
+                  <CustomerAvatar
+                    name={activeConversation.customerName}
+                    origin={activeConversation.origin}
+                    avatarUrl={activeConversation.avatarUrl}
+                  />
                   <div>
                     <div className="card__title">{activeConversation.customerName}</div>
-                    <div className="msg-panel__sub">
-                      Last message {activeConversation.lastActivity} · {activeConversation.origin}
+                    <div className="msg-panel__sub msg-thread__sub">
+                      <span>Last message {activeConversation.lastActivity}</span>
+                      <span className="msg-thread__page">{activeConversation.pageName}</span>
                     </div>
                   </div>
                 </div>
@@ -392,24 +561,26 @@ export default function MessagingPage() {
                         )}
                         {message.text && <div className="msg-bubble__text">{message.text}</div>}
                         <div className="msg-bubble__foot">
-                          <button
-                            type="button"
-                            className={`msg-bubble__copy${copiedId === message.id ? ' is-copied' : ''}`}
-                            onClick={() => handleCopy(message)}
-                            aria-label={copiedId === message.id ? 'Copied' : 'Copy message'}
-                            title={copiedId === message.id ? 'Copied' : 'Copy message'}
-                          >
-                            {copiedId === message.id ? (
-                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                            ) : (
-                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                              </svg>
-                            )}
-                          </button>
+                          {message.text && (
+                            <button
+                              type="button"
+                              className={`msg-bubble__copy${copiedId === message.id ? ' is-copied' : ''}`}
+                              onClick={() => handleCopy(message)}
+                              aria-label={copiedId === message.id ? 'Copied' : 'Copy message'}
+                              title={copiedId === message.id ? 'Copied' : 'Copy message'}
+                            >
+                              {copiedId === message.id ? (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                </svg>
+                              )}
+                            </button>
+                          )}
                           <span className="msg-bubble__time">{message.time}</span>
                         </div>
                       </div>
@@ -509,7 +680,8 @@ export default function MessagingPage() {
                   </button>
                   <button
                     type="button"
-                    className="msg-composer__iconbtn"
+                    className={`msg-composer__iconbtn${templateOpen ? ' is-active' : ''}`}
+                    onClick={() => setTemplateOpen(true)}
                     aria-label="Templates"
                     title="Templates"
                   >
@@ -532,7 +704,8 @@ export default function MessagingPage() {
                   </button>
                   <div className="msg-composer__inputwrap">
                     <input
-                      className="input msg-composer__input"
+                      ref={composerInputRef}
+                      className={`input msg-composer__input${dropActive ? ' is-drop' : ''}`}
                       value={draft}
                       onChange={(event) => setDraft(event.target.value)}
                       placeholder="Type a message..."
@@ -619,6 +792,7 @@ export default function MessagingPage() {
       </section>
 
       <VaultPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} onAttach={handleAttach} />
+      <TemplateDrawer open={templateOpen} onClose={() => setTemplateOpen(false)} onUse={handleUseTemplate} />
     </div>
   );
 }

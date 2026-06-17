@@ -10,6 +10,8 @@ const schemaPath = resolve(__dirname, '../../database/schema.sql');
 // FK checks are disabled so table drop order doesn't matter.
 const DROP_SQL = `
   SET FOREIGN_KEY_CHECKS = 0;
+  DROP TABLE IF EXISTS messages;
+  DROP TABLE IF EXISTS conversations;
   DROP TABLE IF EXISTS posting_logs;
   DROP TABLE IF EXISTS post_pool;
   DROP TABLE IF EXISTS posting_settings;

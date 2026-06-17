@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getVaultMediaType } from '../context/VaultContext.jsx';
 
 function Ico({ size = 26, children }) {
   return (
@@ -110,6 +111,7 @@ function fileKind(item) {
 
 export function VaultThumb({ item }) {
   const [broken, setBroken] = useState(false);
+  const mediaType = getVaultMediaType(item);
 
   if (item.type === 'folder') {
     return (
@@ -119,11 +121,11 @@ export function VaultThumb({ item }) {
     );
   }
 
-  if (item.mediaType === 'image' && item.url && !broken) {
+  if (mediaType === 'image' && item.url && !broken) {
     return <img className="vault-thumb__img" src={item.url} alt="" onError={() => setBroken(true)} />;
   }
 
-  if (item.mediaType === 'video' && item.url && !broken) {
+  if (mediaType === 'video' && item.url && !broken) {
     return (
       <>
         <video
@@ -143,7 +145,7 @@ export function VaultThumb({ item }) {
 
   const kind = fileKind(item);
   const icon =
-    kind === 'pdf' ? <PdfFileIcon /> : kind === 'docx' ? <DocxFileIcon /> : item.mediaType === 'image' ? <ImageIcon /> : item.mediaType === 'video' ? <VideoIcon /> : <FileIcon />;
+    kind === 'pdf' ? <PdfFileIcon /> : kind === 'docx' ? <DocxFileIcon /> : mediaType === 'image' ? <ImageIcon /> : mediaType === 'video' ? <VideoIcon /> : <FileIcon />;
 
   return <span className="vault-thumb__icon">{icon}</span>;
 }

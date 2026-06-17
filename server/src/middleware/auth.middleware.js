@@ -3,7 +3,7 @@ import ApiError from '../utils/ApiError.js';
 
 // Verifies the Bearer JWT, then loads the user from the DB so deactivated /
 // deleted accounts are rejected immediately (their existing token stops working).
-// Sets req.user = { id, name, email, role, is_active }.
+// Sets req.user = { id, name, email, role, is_active, module_access }.
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');

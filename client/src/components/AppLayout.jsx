@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
+import { canAccessModule } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
 import { Modal } from './ui.jsx';
 
@@ -50,10 +51,32 @@ function RefreshIcon({ spinning = false }) {
 }
 
 // Page-scoped views — their content changes with the active page (top group).
+function LockIcon() {
+  return (
+    <svg
+      className="nav__lock"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+// Page-scoped views; their content changes with the active page.
 const PRIMARY_NAV = [
   {
     to: '/dashboard',
     label: 'Dashboard',
+    moduleId: 'dashboard',
     icon: (
       <Ico>
         <rect x="3" y="3" width="7" height="7" />
@@ -66,6 +89,7 @@ const PRIMARY_NAV = [
   {
     to: '/content-calendar',
     label: 'Content Calendar',
+    moduleId: 'content-calendar',
     icon: (
       <Ico>
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -78,6 +102,7 @@ const PRIMARY_NAV = [
   {
     to: '/analytics',
     label: 'Analytics',
+    moduleId: 'analytics',
     icon: (
       <Ico>
         <line x1="18" y1="20" x2="18" y2="10" />
@@ -89,6 +114,7 @@ const PRIMARY_NAV = [
   {
     to: '/post-pool',
     label: 'Post Pool',
+    moduleId: 'post-pool',
     icon: (
       <Ico>
         <path d="M12 2 2 7l10 5 10-5-10-5z" />
@@ -100,6 +126,7 @@ const PRIMARY_NAV = [
   {
     to: '/upload',
     label: 'Upload',
+    moduleId: 'upload',
     icon: (
       <Ico>
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -115,6 +142,7 @@ const SECONDARY_NAV = [
   {
     to: '/vault',
     label: 'Vault',
+    moduleId: 'vault',
     icon: (
       <Ico>
         <polyline points="21 8 21 21 3 21 3 8" />
@@ -126,6 +154,7 @@ const SECONDARY_NAV = [
   {
     to: '/logs',
     label: 'Logs',
+    moduleId: 'logs',
     icon: (
       <Ico>
         <line x1="8" y1="6" x2="21" y2="6" />
@@ -140,6 +169,7 @@ const SECONDARY_NAV = [
   {
     to: '/activity',
     label: 'Activity',
+    moduleId: 'activity',
     icon: (
       <Ico>
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
@@ -149,6 +179,7 @@ const SECONDARY_NAV = [
   {
     to: '/accounts',
     label: 'Accounts',
+    moduleId: 'accounts',
     admin: true,
     icon: (
       <Ico>
@@ -162,6 +193,7 @@ const SECONDARY_NAV = [
   {
     to: '/settings',
     label: 'Settings',
+    moduleId: 'settings',
     icon: (
       <Ico>
         <circle cx="12" cy="12" r="3" />
@@ -310,20 +342,40 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navOpen]);
 
-  const renderNavLinks = (items) =>
-    items
-      .filter((n) => !n.admin || isAdmin)
-      .map((n) => (
-        <NavLink
-          key={n.to}
-          to={n.to}
-          title={collapsed ? n.label : undefined}
-          className={({ isActive }) => (isActive ? 'nav__link active' : 'nav__link')}
-        >
-          <span className="nav__icon">{n.icon}</span>
-          <span className="nav__label">{n.label}</span>
-        </NavLink>
-      ));
+  const renderNavItem = (n, extraClass = '') => {
+    const locked = !canAccessModule(user, n.moduleId) || (n.admin && !isAdmin);
+    const label = locked ? `${n.label} locked` : n.label;
+    const className = ['nav__link', extraClass, locked && 'is-locked'].filter(Boolean).join(' ');
+    const content = (
+      <>
+        <span className="nav__icon">{n.icon}</span>
+        <span className="nav__label">{n.label}</span>
+        {locked && <LockIcon />}
+        {!locked && n.badge}
+      </>
+    );
+
+    if (locked) {
+      return (
+        <span key={n.to} className={className} title={label} aria-disabled="true">
+          {content}
+        </span>
+      );
+    }
+
+    return (
+      <NavLink
+        key={n.to}
+        to={n.to}
+        title={collapsed ? n.label : undefined}
+        className={({ isActive }) => [className, isActive && 'active'].filter(Boolean).join(' ')}
+      >
+        {content}
+      </NavLink>
+    );
+  };
+
+  const renderNavLinks = (items) => items.map((n) => renderNavItem(n));
 
   return (
     <div className="app-shell">
@@ -353,23 +405,23 @@ export default function AppLayout() {
           <div className="nav-group">
             <div className="nav__title">General</div>
             <nav className="nav">
-              <NavLink
-                to="/messages"
-                title={collapsed ? 'Messaging' : undefined}
-                className={({ isActive }) =>
-                  isActive ? 'nav__link sidebar__messages active' : 'nav__link sidebar__messages'
-                }
-              >
-                <span className="nav__icon">
-                  <Ico>
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </Ico>
-                </span>
-                <span className="nav__label">Messaging</span>
-                {messageCount > 0 && (
-                  <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
-                )}
-              </NavLink>
+              {renderNavItem(
+                {
+                  to: '/messages',
+                  label: 'Messaging',
+                  moduleId: 'messages',
+                  icon: (
+                    <Ico>
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </Ico>
+                  ),
+                  badge:
+                    messageCount > 0 ? (
+                      <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
+                    ) : null,
+                },
+                'sidebar__messages',
+              )}
               {renderNavLinks(SECONDARY_NAV)}
             </nav>
           </div>

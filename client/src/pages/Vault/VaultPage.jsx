@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Modal } from '../../components/ui.jsx';
+import { Button, Dropdown, Modal } from '../../components/ui.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
-import { downloadVaultItem, formatBytes, useVault } from '../../context/VaultContext.jsx';
+import { downloadVaultItem, formatBytes, getVaultMediaType, useVault } from '../../context/VaultContext.jsx';
 
 function DownloadIcon() {
   return (
@@ -31,6 +31,63 @@ function PlusIcon() {
   );
 }
 
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+const DOCUMENT_EXTS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv']);
+const TYPE_FILTER_OPTIONS = [
+  { value: 'all', label: 'All items' },
+  { value: 'folders', label: 'Folders' },
+  { value: 'images', label: 'Images' },
+  { value: 'videos', label: 'Videos' },
+  { value: 'documents', label: 'Documents' },
+  { value: 'files', label: 'Other files' },
+];
+const SORT_OPTIONS = [
+  { value: 'name', label: 'Name A-Z' },
+  { value: 'newest', label: 'Newest first' },
+  { value: 'largest', label: 'Largest first' },
+];
+
+function extensionOf(name) {
+  return String(name || '')
+    .trim()
+    .split('.')
+    .pop()
+    .toLowerCase();
+}
+
+function vaultFilterKind(item) {
+  if (item.type === 'folder') return 'folder';
+  const mediaType = getVaultMediaType(item);
+  if (mediaType === 'image' || mediaType === 'video') return mediaType;
+  return DOCUMENT_EXTS.has(extensionOf(item.name)) ? 'document' : 'file';
+}
+
+function matchesTypeFilter(item, typeFilter) {
+  if (typeFilter === 'all') return true;
+  if (typeFilter === 'folders') return item.type === 'folder';
+  if (typeFilter === 'images') return vaultFilterKind(item) === 'image';
+  if (typeFilter === 'videos') return vaultFilterKind(item) === 'video';
+  if (typeFilter === 'documents') return vaultFilterKind(item) === 'document';
+  if (typeFilter === 'files') return item.type === 'file' && vaultFilterKind(item) === 'file';
+  return true;
+}
+
+function sortVaultItems(items, sortMode) {
+  return [...items].sort((a, b) => {
+    if (sortMode === 'newest') return (b.createdAt || 0) - (a.createdAt || 0);
+    if (sortMode === 'largest') return (b.size || 0) - (a.size || 0);
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+  });
+}
+
 export default function VaultPage() {
   const { childrenOf, pathTo, createFolder, uploadFiles, deleteItem } = useVault();
   const [folderId, setFolderId] = useState(null);
@@ -39,13 +96,31 @@ export default function VaultPage() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [sortMode, setSortMode] = useState('name');
   const fileInputRef = useRef(null);
   const addMenuRef = useRef(null);
 
   const items = childrenOf(folderId);
-  const folders = items.filter((it) => it.type === 'folder');
-  const files = items.filter((it) => it.type === 'file');
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const itemMatchesSearch = (item) =>
+    !normalizedQuery ||
+    String(item.name || '').toLowerCase().includes(normalizedQuery) ||
+    String(item.uploadedBy || '').toLowerCase().includes(normalizedQuery);
+  const visibleItems = items.filter((item) => itemMatchesSearch(item) && matchesTypeFilter(item, typeFilter));
+  const folders = sortVaultItems(
+    visibleItems.filter((it) => it.type === 'folder'),
+    sortMode,
+  );
+  const files = sortVaultItems(
+    visibleItems.filter((it) => it.type === 'file'),
+    sortMode,
+  );
   const trail = pathTo(folderId);
+  const currentFolderName = trail[trail.length - 1]?.name || 'Main';
+  const visibleCount = folders.length + files.length;
+  const filtersActive = Boolean(normalizedQuery) || typeFilter !== 'all';
 
   useEffect(() => {
     if (!addMenuOpen) return undefined;
@@ -91,6 +166,11 @@ export default function VaultPage() {
     setAddMenuOpen(false);
     fileInputRef.current?.click();
   };
+  const clearFilters = () => {
+    setSearchQuery('');
+    setTypeFilter('all');
+  };
+  const previewType = preview ? getVaultMediaType(preview) : null;
 
   return (
     <div className="vault">
@@ -102,21 +182,80 @@ export default function VaultPage() {
       </div>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleUpload} />
 
-      <nav className="vault__crumbs" aria-label="Folder path">
-        <button type="button" className="vault__crumb" onClick={() => setFolderId(null)}>
-          Main
-        </button>
-        {trail.map((folder) => (
-          <span key={folder.id} className="vault__crumb-wrap">
-            <span className="vault__crumb-sep" aria-hidden="true">/</span>
-            <button type="button" className="vault__crumb" onClick={() => setFolderId(folder.id)}>
-              {folder.name}
+      <section className="vault-browser" aria-label="Vault content">
+        <div className="vault-browser__top">
+          <nav className="vault__crumbs" aria-label="Folder path">
+            <button type="button" className="vault__crumb" onClick={() => setFolderId(null)}>
+              Main
             </button>
-          </span>
-        ))}
-      </nav>
+            {trail.map((folder) => (
+              <span key={folder.id} className="vault__crumb-wrap">
+                <span className="vault__crumb-sep" aria-hidden="true">/</span>
+                <button type="button" className="vault__crumb" onClick={() => setFolderId(folder.id)}>
+                  {folder.name}
+                </button>
+              </span>
+            ))}
+          </nav>
+          <div className="vault-browser__count">
+            {filtersActive ? `${visibleCount} of ${items.length} shown` : `${items.length} item${items.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+
+        <div className="vault-toolbar" aria-label="Vault filters">
+          <label className="vault-search">
+            <span className="vault-search__icon">
+              <SearchIcon />
+            </span>
+            <input
+              className="vault-search__input"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={`Search ${currentFolderName}`}
+              aria-label="Search vault items"
+            />
+          </label>
+          <div className="vault-toolbar__filters">
+            <div className="vault-filter">
+              <span className="vault-filter__label">Type</span>
+              <Dropdown
+                className="vault-filter__dropdown"
+                value={typeFilter}
+                options={TYPE_FILTER_OPTIONS}
+                onChange={setTypeFilter}
+                ariaLabel="Filter vault items by type"
+              />
+            </div>
+            <div className="vault-filter">
+              <span className="vault-filter__label">Sort</span>
+              <Dropdown
+                className="vault-filter__dropdown"
+                value={sortMode}
+                options={SORT_OPTIONS}
+                onChange={setSortMode}
+                ariaLabel="Sort vault items"
+              />
+            </div>
+            {filtersActive && (
+              <button type="button" className="vault-toolbar__clear" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
 
       <div className="vault__grid">
+        {visibleCount === 0 && (
+          <div className="vault__empty">
+            <strong>{filtersActive ? 'No matching items' : 'This folder is empty'}</strong>
+            <span>
+              {filtersActive
+                ? 'Try another keyword or adjust the filters.'
+                : 'Use the Add card to create a folder or upload a file.'}
+            </span>
+          </div>
+        )}
         {folders.map((folder) => (
           <div key={folder.id} className="vault-item vault-item--folder">
             <button
@@ -238,9 +377,9 @@ export default function VaultPage() {
       <Modal open={!!preview} title={preview?.name} onClose={() => setPreview(null)} className="modal--vaultpreview">
         {preview && (
           <div className="vault-preview">
-            {preview.mediaType === 'image' && preview.url ? (
+            {previewType === 'image' && preview.url ? (
               <img className="vault-preview__media" src={preview.url} alt={preview.name} />
-            ) : preview.mediaType === 'video' && preview.url ? (
+            ) : previewType === 'video' && preview.url ? (
               <video className="vault-preview__media" src={preview.url} controls autoPlay />
             ) : (
               <div className="vault-preview__none">

@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query, getConnection } from '../config/db.js';
 import { env } from '../config/env.js';
+import { moduleAccessForUser, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 import * as invitesService from './invites.service.js';
 import * as mail from './mail.service.js';
@@ -24,7 +25,7 @@ export function verifyToken(token) {
 function publicUser(row) {
   if (!row) return null;
   const { password_hash, ...rest } = row;
-  return rest;
+  return { ...rest, module_access: moduleAccessForUser(row) };
 }
 
 // Registration is invite-only: a valid single-use token is required and is
@@ -33,7 +34,8 @@ export async function register({ name, email, password, token }) {
   if (!name || !email || !password) throw ApiError.badRequest('name, email and password are required');
   if (String(password).length < 8) throw ApiError.badRequest('password must be at least 8 characters');
 
-  await invitesService.findUsable(token); // throws if missing/used/expired
+  const invite = await invitesService.findUsable(token); // throws if missing/used/expired
+  const inviteModules = moduleAccessForUser(invite);
 
   const existing = await query('SELECT id FROM users WHERE email = ?', [email]);
   if (existing.length) throw ApiError.conflict('email already registered');
@@ -42,7 +44,10 @@ export async function register({ name, email, password, token }) {
   const conn = await getConnection();
   try {
     await conn.beginTransaction();
-    const [result] = await conn.query('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)', [name, email, hash]);
+    const [result] = await conn.query(
+      'INSERT INTO users (name, email, password_hash, module_access) VALUES (?, ?, ?, ?)',
+      [name, email, hash, serializeModuleAccess(inviteModules)],
+    );
     const userId = result.insertId;
     await conn.query('INSERT INTO posting_settings (user_id, owner_email) VALUES (?, ?)', [userId, email]);
 
@@ -83,10 +88,17 @@ export async function getById(id) {
 // Used by requireAuth on every request, so deactivation/deletion takes effect
 // immediately (the user's existing token stops working).
 export async function findActiveById(id) {
-  const rows = await query('SELECT id, name, email, role, is_active, deleted_at FROM users WHERE id = ?', [id]);
+  const rows = await query('SELECT id, name, email, role, is_active, deleted_at, module_access FROM users WHERE id = ?', [id]);
   const row = rows[0];
   if (!row || row.deleted_at || !row.is_active) return null;
-  return { id: row.id, name: row.name, email: row.email, role: row.role, is_active: !!row.is_active };
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    is_active: !!row.is_active,
+    module_access: moduleAccessForUser(row),
+  };
 }
 
 // ── Email-verified password change ───────────────────────────────────────────

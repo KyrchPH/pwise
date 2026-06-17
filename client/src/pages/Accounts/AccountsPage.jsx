@@ -4,9 +4,30 @@ import { apiError } from '../../services/api.js';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Card, Button, Spinner, EmptyState } from '../../components/ui.jsx';
+import { APP_MODULES, invitableModulesForUser, labelForModule, normalizeModuleAccess } from '../../config/modules.js';
+import { Card, Button, Spinner, EmptyState, Modal } from '../../components/ui.jsx';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString() : '—');
+
+const allModuleIds = APP_MODULES.map((m) => m.id);
+
+function accessLabels(access) {
+  const ids = normalizeModuleAccess(access) || allModuleIds;
+  if (ids.length === allModuleIds.length) return ['All modules'];
+  return ids.map(labelForModule);
+}
+
+function AccessPills({ access }) {
+  return (
+    <div className="module-pills">
+      {accessLabels(access).map((label) => (
+        <span className="module-pill" key={label}>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function statusBadge(u) {
   if (u.deleted_at) return <span className="badge badge--failed">deleted</span>;
@@ -21,6 +42,8 @@ export default function AccountsPage() {
   const toast = useToast();
   const { user } = useAuth();
   const [generating, setGenerating] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [selectedModules, setSelectedModules] = useState([]);
   const [link, setLink] = useState('');
 
   const { data, loading, error, refresh } = useCachedResource('accounts', () =>
@@ -32,12 +55,30 @@ export default function AccountsPage() {
   }, [error, toast]);
 
   const { users = [], invites = [] } = data || {};
+  const availableModules = invitableModulesForUser(user);
+
+  const openAccessDialog = () => {
+    setSelectedModules(availableModules.map((module) => module.id));
+    setAccessOpen(true);
+  };
+
+  const toggleModule = (module) => {
+    if (module.core) return;
+    setSelectedModules((current) =>
+      current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
+    );
+  };
 
   const generate = async () => {
+    if (selectedModules.length === 0) {
+      toast.error('Select at least one module');
+      return;
+    }
     setGenerating(true);
     try {
-      const invite = await adminService.createInvite();
+      const invite = await adminService.createInvite({ modules: selectedModules });
       setLink(invite.link);
+      setAccessOpen(false);
       try {
         await navigator.clipboard?.writeText(invite.link);
         toast.success('Login link generated & copied');
@@ -100,7 +141,7 @@ export default function AccountsPage() {
           <h1 className="page-head__title">Accounts</h1>
           <div className="page-head__sub">Invite people and manage who can access pwise.</div>
         </div>
-        <Button onClick={generate} disabled={generating}>
+        <Button onClick={openAccessDialog} disabled={generating || availableModules.length === 0}>
           {generating ? 'Generating…' : '+ Generate login link'}
         </Button>
       </div>
@@ -133,6 +174,7 @@ export default function AccountsPage() {
                     <th>Name</th>
                     <th>Email</th>
                     <th>Role</th>
+                    <th>Access</th>
                     <th>Status</th>
                     <th>Joined</th>
                     <th />
@@ -148,6 +190,9 @@ export default function AccountsPage() {
                         <td className="cell-muted" data-label="Email">{u.email}</td>
                         <td data-label="Role">
                           <span className={`badge badge--${u.role === 'admin' ? 'posted' : 'draft'}`}>{u.role}</span>
+                        </td>
+                        <td data-label="Access">
+                          <AccessPills access={u.module_access} />
                         </td>
                         <td data-label="Status">{statusBadge(u)}</td>
                         <td className="cell-muted" data-label="Joined">{fmt(u.created_at)}</td>
@@ -187,6 +232,7 @@ export default function AccountsPage() {
                     <tr>
                       <th>Created by</th>
                       <th>Status</th>
+                      <th>Access</th>
                       <th>Used by</th>
                       <th>Created</th>
                       <th />
@@ -205,6 +251,9 @@ export default function AccountsPage() {
                             ) : (
                               <span className="badge badge--ready">unused</span>
                             )}
+                          </td>
+                          <td data-label="Access">
+                            <AccessPills access={inv.module_access} />
                           </td>
                           <td className="cell-muted" data-label="Used by">{inv.used_by_email || '—'}</td>
                           <td className="cell-muted" data-label="Created">{fmt(inv.created_at)}</td>
@@ -232,6 +281,52 @@ export default function AccountsPage() {
           </Card>
         </>
       )}
+
+      <Modal
+        open={accessOpen}
+        title="Module access"
+        onClose={() => (!generating ? setAccessOpen(false) : undefined)}
+        className="modal--module-access"
+        dismissable={!generating}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAccessOpen(false)} disabled={generating}>
+              Cancel
+            </Button>
+            <Button onClick={generate} disabled={generating || selectedModules.length === 0}>
+              {generating ? 'Generating...' : 'Confirm'}
+            </Button>
+          </>
+        }
+      >
+        <div className="module-access">
+          <p className="module-access__intro">
+            Choose the modules this login link can unlock. Modules you do not have are not available to grant.
+          </p>
+          <div className="module-access__list">
+            {availableModules.map((module) => {
+              const checked = selectedModules.includes(module.id);
+              return (
+                <label className={`module-access__item${checked ? ' is-checked' : ''}`} key={module.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={module.core || generating}
+                    onChange={() => toggleModule(module)}
+                  />
+                  <span className="module-access__check" aria-hidden="true" />
+                  <span>
+                    <span className="module-access__name">{module.label}</span>
+                    <span className="module-access__hint">
+                      {module.core ? 'Required safe landing page' : 'Allow access after signup'}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -19,6 +19,7 @@
     "db:migrate": "npm run db:migrate -w scripts",
     "db:reset": "npm run db:reset -w scripts",
     "db:seed": "npm run db:seed -w scripts",
+    "db:seed:messaging": "npm run db:seed:messaging -w scripts",
     "db:setup": "npm run db:setup -w scripts",
     "s3:lifecycle": "npm run s3:lifecycle -w scripts",
     "fb:import-env": "npm run fb:import-env -w scripts"

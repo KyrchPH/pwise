@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import AdminRoute from './components/AdminRoute.jsx';
+import ModuleRoute from './components/ModuleRoute.jsx';
 import AppLayout from './components/AppLayout.jsx';
 import LoginPage from './pages/Login/LoginPage.jsx';
 import SignupPage from './pages/Signup/SignupPage.jsx';
@@ -34,17 +35,17 @@ export default function App() {
       >
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/content-calendar" element={<ContentCalendarPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/post-pool" element={<PostPoolPage />} />
-        <Route path="/upload" element={<UploadPostPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/settings/change-password" element={<ChangePasswordPage />} />
-        <Route path="/logs" element={<LogsPage />} />
-        <Route path="/activity" element={<ActivityPage />} />
-        <Route path="/accounts" element={<AdminRoute><AccountsPage /></AdminRoute>} />
-        <Route path="/messages" element={<MessagingPage />} />
-        <Route path="/vault" element={<VaultPage />} />
+        <Route path="/content-calendar" element={<ModuleRoute moduleId="content-calendar"><ContentCalendarPage /></ModuleRoute>} />
+        <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
+        <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><PostPoolPage /></ModuleRoute>} />
+        <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
+        <Route path="/settings" element={<ModuleRoute moduleId="settings"><SettingsPage /></ModuleRoute>} />
+        <Route path="/settings/change-password" element={<ModuleRoute moduleId="settings"><ChangePasswordPage /></ModuleRoute>} />
+        <Route path="/logs" element={<ModuleRoute moduleId="logs"><LogsPage /></ModuleRoute>} />
+        <Route path="/activity" element={<ModuleRoute moduleId="activity"><ActivityPage /></ModuleRoute>} />
+        <Route path="/accounts" element={<AdminRoute><ModuleRoute moduleId="accounts"><AccountsPage /></ModuleRoute></AdminRoute>} />
+        <Route path="/messages" element={<ModuleRoute moduleId="messages"><MessagingPage /></ModuleRoute>} />
+        <Route path="/vault" element={<ModuleRoute moduleId="vault"><VaultPage /></ModuleRoute>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

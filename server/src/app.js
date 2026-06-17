@@ -15,6 +15,7 @@ import contentNotesRoutes from './routes/content_notes.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
 import platformAccountsRoutes from './routes/platform_accounts.routes.js';
+import messagingRoutes from './routes/messaging.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -46,6 +47,8 @@ export function createApp() {
   app.use('/api/analytics', revalidate, analyticsRoutes);
   app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
   app.use('/api/pages', revalidate, platformAccountsRoutes);
+  // Messaging is real-time (SSE + frequent writes), so it's left uncached.
+  app.use('/api/messages', messagingRoutes);
 
   // Machine-facing (service-token) routes for n8n.
   app.use('/api/scheduler', schedulerRoutes);

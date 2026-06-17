@@ -6,7 +6,7 @@ import * as admin from '../services/admin.service.js';
 
 // Invites -------------------------------------------------------------------
 export const createInvite = asyncHandler(async (req, res) => {
-  const invite = await invites.create(req.user.id);
+  const invite = await invites.create(req.user.id, req.body?.modules);
   sendSuccess(res, invite, 201); // { token, link }
 });
 

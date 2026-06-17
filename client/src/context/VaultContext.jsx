@@ -11,6 +11,25 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 
 let seq = 100;
 const nextId = () => `vault-${(seq += 1)}`;
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif']);
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv']);
+
+function extensionOf(name) {
+  return String(name || '')
+    .trim()
+    .split('.')
+    .pop()
+    .toLowerCase();
+}
+
+export function getVaultMediaType(item) {
+  if (item?.mediaType === 'image' || item?.type?.startsWith?.('image/')) return 'image';
+  if (item?.mediaType === 'video' || item?.type?.startsWith?.('video/')) return 'video';
+  const ext = extensionOf(item?.name);
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (VIDEO_EXTS.has(ext)) return 'video';
+  return 'file';
+}
 
 // Reliable, offline thumbnail: a labelled gradient as an SVG data URI, so sample
 // "photos" always render even without a network / real S3 objects.
@@ -86,17 +105,16 @@ export function VaultProvider({ children }) {
     setItems((cur) => [
       ...cur,
       ...files.map((f) => {
-        const isImage = f.type.startsWith('image/');
-        const isVideo = f.type.startsWith('video/');
+        const mediaType = getVaultMediaType(f);
         return {
           id: nextId(),
           name: f.name,
           type: 'file',
           parentId: parentId ?? null,
-          mediaType: isImage ? 'image' : isVideo ? 'video' : 'file',
+          mediaType,
           // Blob URL previews the file for this session; on reload it falls back to
           // a type icon (real previews come from S3 once the backend is wired).
-          url: isImage || isVideo ? URL.createObjectURL(f) : '',
+          url: mediaType === 'image' || mediaType === 'video' ? URL.createObjectURL(f) : '',
           size: f.size,
           createdAt: Date.now(),
           uploadedBy: 'You',

@@ -10,6 +10,8 @@
     "db:migrate": "node src/db/migrate.js",
     "db:reset": "node src/db/migrate.js --reset",
     "db:seed": "node src/db/seed.js",
+    "db:seed:messaging": "node src/db/seed-messaging.js",
+    "db:apply": "node src/db/apply.js",
     "db:setup": "node src/db/migrate.js && node src/db/seed.js",
     "db:migrate:accounts": "node src/db/apply.js database/migrations/001_accounts.sql",
     "create-admin": "node src/create-admin.js",

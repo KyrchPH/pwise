@@ -1,8 +1,8 @@
 import api from './api.js';
 
-export async function createInvite() {
-  const { data } = await api.post('/admin/invites');
-  return data.data; // { token, link }
+export async function createInvite(payload) {
+  const { data } = await api.post('/admin/invites', payload);
+  return data.data; // { token, link, module_access }
 }
 
 export async function listInvites() {
