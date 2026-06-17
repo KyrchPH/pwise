@@ -16,6 +16,7 @@ import LogsPage from './pages/Logs/LogsPage.jsx';
 import ActivityPage from './pages/Activity/ActivityPage.jsx';
 import AccountsPage from './pages/Accounts/AccountsPage.jsx';
 import MessagingPage from './pages/Messaging/MessagingPage.jsx';
+import VaultPage from './pages/Vault/VaultPage.jsx';
 
 export default function App() {
   return (
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/accounts" element={<AdminRoute><AccountsPage /></AdminRoute>} />
         <Route path="/messages" element={<MessagingPage />} />
+        <Route path="/vault" element={<VaultPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

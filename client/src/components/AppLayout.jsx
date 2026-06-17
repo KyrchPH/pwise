@@ -1,15 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
-import {
-  buildConversations,
-  buildPageCards,
-  formatTotal,
-  resolveSelectedPageId,
-} from '../pages/Messaging/messagingData.js';
 import * as pagesService from '../services/pages.service.js';
 import { Modal } from './ui.jsx';
 
@@ -119,6 +113,17 @@ const PRIMARY_NAV = [
 // Page-independent tools — bottom group (with Messaging + the page switcher).
 const SECONDARY_NAV = [
   {
+    to: '/vault',
+    label: 'Vault',
+    icon: (
+      <Ico>
+        <polyline points="21 8 21 21 3 21 3 8" />
+        <rect x="1" y="3" width="22" height="5" />
+        <line x1="10" y1="12" x2="14" y2="12" />
+      </Ico>
+    ),
+  },
+  {
     to: '/logs',
     label: 'Logs',
     icon: (
@@ -198,30 +203,11 @@ export default function AppLayout() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages } = usePages();
   const { pathname } = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const toast = useToast();
   const isAdmin = user?.role === 'admin';
   const isMessagingPage = pathname === '/messages';
   const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
-  const connectedMessagingPages = pages.filter((page) => page.is_active !== false);
-  const messagingPageCards = buildPageCards(connectedMessagingPages);
-  const messagingConversations = buildConversations(messagingPageCards);
-  const requestedMessagingPageId = searchParams.get('page');
-  const preferredMessagingPageId = activePage?.id != null ? String(activePage.id) : null;
-  const selectedMessagingPageId = resolveSelectedPageId(
-    messagingPageCards,
-    requestedMessagingPageId,
-    preferredMessagingPageId,
-  );
-  const messagingPageSummaries = messagingPageCards.map((page) => {
-    const pageConversations = messagingConversations.filter((conversation) => conversation.pageId === page.id);
-    return {
-      ...page,
-      aiAgentMessages: formatTotal(pageConversations, 'AI Agent'),
-      liveAgentMessages: formatTotal(pageConversations, 'Live Agent'),
-    };
-  });
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
@@ -230,6 +216,7 @@ export default function AppLayout() {
   const [expiredIds, setExpiredIds] = useState(() => new Set()); // pages whose token failed to refresh
   const [menuOpen, setMenuOpen] = useState(false); // account dropdown (top-right)
   const menuRef = useRef(null);
+  const scrollRef = useRef(null); // scrollable nav region (for the edge-fade mask)
   // Desktop sidebar collapse (icons-only rail), remembered across sessions.
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -268,6 +255,29 @@ export default function AppLayout() {
       document.removeEventListener('keydown', onKey);
     };
   }, [menuOpen]);
+
+  // Soft-fade the nav's top/bottom edges to hint at more items. The fade size
+  // tracks how far you can still scroll in that direction, so it shrinks to 0 at
+  // each end — a fully-scrolled (or non-scrolling) list shows no fade.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const MAX = 32;
+    const update = () => {
+      el.style.setProperty('--fade-top', `${Math.min(MAX, el.scrollTop)}px`);
+      el.style.setProperty(
+        '--fade-bottom',
+        `${Math.min(MAX, Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop))}px`,
+      );
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      el.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, [collapsed, isAdmin]);
 
   // Pull fresh name/followers for every page from Facebook; flag any whose token
   // failed so the tile can show "Expired" + an Update shortcut.
@@ -315,12 +325,6 @@ export default function AppLayout() {
         </NavLink>
       ));
 
-  const selectMessagingPage = (pageId) => {
-    const nextSearchParams = new URLSearchParams(searchParams);
-    nextSearchParams.set('page', pageId);
-    setSearchParams(nextSearchParams);
-  };
-
   return (
     <div className="app-shell">
       <aside className={`sidebar${navOpen ? ' is-open' : ''}${collapsed ? ' is-collapsed' : ''}`}>
@@ -340,66 +344,73 @@ export default function AppLayout() {
             </svg>
           </button>
         </div>
-        <div className="nav-group">
-          <div className="nav__title">Workspace</div>
-          <nav className="nav">{renderNavLinks(PRIMARY_NAV)}</nav>
-        </div>
-        <div className="nav-group">
-          <div className="nav__title">General</div>
-          <nav className="nav">
-            <NavLink
-              to="/messages"
-              title={collapsed ? 'Messaging' : undefined}
-              className={({ isActive }) =>
-                isActive ? 'nav__link sidebar__messages active' : 'nav__link sidebar__messages'
-              }
-            >
-              <span className="nav__icon">
-                <Ico>
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </Ico>
-              </span>
-              <span className="nav__label">Messaging</span>
-              {messageCount > 0 && (
-                <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
-              )}
-            </NavLink>
-            {renderNavLinks(SECONDARY_NAV)}
-          </nav>
+        {/* Nav scrolls if it outgrows the viewport so the footer stays pinned. */}
+        <div className="sidebar__scroll" ref={scrollRef}>
+          <div className="nav-group">
+            <div className="nav__title">Workspace</div>
+            <nav className="nav">{renderNavLinks(PRIMARY_NAV)}</nav>
+          </div>
+          <div className="nav-group">
+            <div className="nav__title">General</div>
+            <nav className="nav">
+              <NavLink
+                to="/messages"
+                title={collapsed ? 'Messaging' : undefined}
+                className={({ isActive }) =>
+                  isActive ? 'nav__link sidebar__messages active' : 'nav__link sidebar__messages'
+                }
+              >
+                <span className="nav__icon">
+                  <Ico>
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </Ico>
+                </span>
+                <span className="nav__label">Messaging</span>
+                {messageCount > 0 && (
+                  <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
+                )}
+              </NavLink>
+              {renderNavLinks(SECONDARY_NAV)}
+            </nav>
+          </div>
         </div>
         <div className="sidebar__foot">
           {pages.length > 0 ? (
-            <div className="sidebar__pagebox">
-              <div className="sidebar__page">
-                <button
-                  type="button"
-                  className="sidebar__page-btn"
-                  onClick={() => setPickerOpen(true)}
-                  disabled={switching}
-                  title={switching ? 'Switching page…' : 'Switch page'}
-                  aria-label="Switch active page"
-                >
-                  <PageAvatar page={activePage} className="sidebar__page-photo" />
-                  <span className="sidebar__page-switch" aria-hidden="true">
-                    {switching ? (
-                      <svg className="spin-icon is-spinning" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="17 1 21 5 17 9" />
-                        <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                        <polyline points="7 23 3 19 7 15" />
-                        <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-                      </svg>
-                    )}
-                  </span>
-                </button>
-                <span className="sidebar__page-name">{activePage?.account_name || 'Select a page'}</span>
+            <div className="sidebar__acct sidebar__acct--page">
+              <PageAvatar page={activePage} />
+              <span className="sidebar__acct-id">
+                <span className="sidebar__acct-name">{activePage?.account_name || 'Select a page'}</span>
                 {activeFollowers != null && (
-                  <span className="sidebar__page-followers">{formatCount(activeFollowers)} followers</span>
+                  <span className="sidebar__acct-sub">{formatCount(activeFollowers)} followers</span>
                 )}
-              </div>
+              </span>
+              <button
+                type="button"
+                className="sidebar__switch-btn"
+                onClick={() => setPickerOpen(true)}
+                disabled={switching}
+                title="Switch page"
+                aria-label="Switch page"
+              >
+                <span className="sidebar__switch-btn__label">{switching ? 'Switching…' : 'Switch Page'}</span>
+                <svg
+                  className={`sidebar__switch-btn__icon spin-icon${switching ? ' is-spinning' : ''}`}
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="17 1 21 5 17 9" />
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                  <polyline points="7 23 3 19 7 15" />
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                </svg>
+              </button>
             </div>
           ) : (
             user?.role === 'admin' && (
@@ -408,62 +419,29 @@ export default function AppLayout() {
               </Link>
             )
           )}
-        </div>
-      </aside>
 
-      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
-
-      <div className="main">
-        <header className={`topbar${isMessagingPage ? ' topbar--messages' : ''}`}>
-          <div className="topbar__left">
-            <button className="topbar__menu" onClick={() => setNavOpen(true)} aria-label="Open menu">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="18" x2="21" y2="18" />
-              </svg>
-            </button>
-            {isMessagingPage && messagingPageSummaries.length > 0 && (
-              <div className="msg-page-grid msg-page-grid--topbar" aria-label="Connected pages">
-                {messagingPageSummaries.map((page) => (
-                  <button
-                    key={page.id}
-                    type="button"
-                    className={`card msg-page-card msg-page-card--topbar${page.id === selectedMessagingPageId ? ' is-active' : ''}`}
-                    onClick={() => selectMessagingPage(page.id)}
-                    aria-pressed={page.id === selectedMessagingPageId}
-                  >
-                    <div className="msg-page-card__top">
-                      <PageAvatar page={page} className="msg-page-card__avatar" />
-                      <div className="msg-page-card__copy">
-                        <strong className="msg-page-card__title">{page.name}</strong>
-                        <div className="msg-page-card__stats">
-                          <span className="msg-counter-badge msg-counter-badge--ai">
-                            <span className="msg-counter-badge__label">AI Agent</span>
-                            <strong className="msg-counter-badge__value">{page.aiAgentMessages}</strong>
-                          </span>
-                          <span className="msg-counter-badge msg-counter-badge--live">
-                            <span className="msg-counter-badge__label">Live Agent</span>
-                            <strong className="msg-counter-badge__value">{page.liveAgentMessages}</strong>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <div className="usermenu" ref={menuRef}>
             <button
               type="button"
-              className={`usermenu__trigger${menuOpen ? ' is-open' : ''}`}
+              className={`sidebar__acct sidebar__acct--user${menuOpen ? ' is-open' : ''}`}
               onClick={() => setMenuOpen((o) => !o)}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               aria-label="Account menu"
             >
               <span className="avatar">{initials}</span>
+              <span className="sidebar__acct-id">
+                <span className="sidebar__acct-name">{user?.name || user?.email || 'Account'}</span>
+                <span className="sidebar__acct-sub" title={user?.email}>
+                  {user?.name ? user.email : isAdmin ? 'Admin' : 'Account'}
+                </span>
+              </span>
+              <span className="sidebar__acct-action" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="8 9 12 5 16 9" />
+                  <polyline points="8 15 12 19 16 15" />
+                </svg>
+              </span>
             </button>
             {menuOpen && (
               <div className="usermenu__panel" role="menu">
@@ -519,6 +497,22 @@ export default function AppLayout() {
                 <div className="usermenu__meta">Auto-post scheduler · v0.1.0</div>
               </div>
             )}
+          </div>
+        </div>
+      </aside>
+
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+
+      <div className="main">
+        <header className="topbar">
+          <div className="topbar__left">
+            <button className="topbar__menu" onClick={() => setNavOpen(true)} aria-label="Open menu">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
           </div>
         </header>
         <main className={`content${isMessagingPage ? ' content--messages' : ''}`}>

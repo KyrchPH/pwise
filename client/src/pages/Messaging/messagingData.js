@@ -4,10 +4,23 @@ const FALLBACK_PAGES = [
   { id: 'demo-page-3', account_name: 'Wise Cleaner Makati', fb_page_id: '' },
 ];
 
+// Self-contained sample photo (gradient SVG data URI) so received media renders
+// without a network or real S3 objects.
+const sampleImg = (label, c1, c2) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300'>` +
+      `<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>` +
+      `<stop offset='0' stop-color='${c1}'/><stop offset='1' stop-color='${c2}'/></linearGradient></defs>` +
+      `<rect width='400' height='300' fill='url(#g)'/>` +
+      `<text x='50%' y='53%' fill='rgba(255,255,255,0.92)' font-family='sans-serif' font-size='24' font-weight='700' text-anchor='middle'>${label}</text>` +
+      `</svg>`,
+  )}`;
+
 const CONVERSATION_LIBRARY = [
   {
     customerName: 'Maria Santos',
     customerHandle: '@marias.home',
+    origin: 'Messenger',
     handledBy: 'AI Agent',
     activeMessages: 4,
     unread: 3,
@@ -18,12 +31,22 @@ const CONVERSATION_LIBRARY = [
     messages: [
       { side: 'incoming', sender: 'Maria Santos', time: '10:12 AM', text: 'Hi, do you offer same-day sofa deep cleaning?' },
       { side: 'outgoing', sender: 'AI Agent', time: '10:13 AM', text: 'Yes. I can help with availability and a quick estimate. Which area are you located in?' },
-      { side: 'incoming', sender: 'Maria Santos', time: '10:14 AM', text: 'I am in Pasig. It is a 3-seater sofa and one accent chair.' },
+      {
+        side: 'incoming',
+        sender: 'Maria Santos',
+        time: '10:14 AM',
+        text: 'I am in Pasig. It is a 3-seater sofa and one accent chair.',
+        media: [
+          { type: 'image', name: 'sofa.jpg', url: sampleImg('sofa.jpg', '#8e7bef', '#5b46c9') },
+          { type: 'image', name: 'accent-chair.jpg', url: sampleImg('accent-chair.jpg', '#ff8f6b', '#e0574a') },
+        ],
+      },
     ],
   },
   {
     customerName: 'Daniel Cruz',
     customerHandle: '@danielcrz',
+    origin: 'Instagram',
     handledBy: 'Live Agent',
     activeMessages: 2,
     unread: 1,
@@ -32,7 +55,13 @@ const CONVERSATION_LIBRARY = [
     tags: ['Booking', 'Follow-up'],
     summary: 'Client wants to move tomorrow morning service to a later arrival window.',
     messages: [
-      { side: 'incoming', sender: 'Daniel Cruz', time: '9:48 AM', text: 'Can we move the cleaning from 9 AM to around 1 PM tomorrow?' },
+      {
+        side: 'incoming',
+        sender: 'Daniel Cruz',
+        time: '9:48 AM',
+        text: 'Can we move the cleaning from 9 AM to around 1 PM tomorrow?',
+        media: [{ type: 'image', name: 'schedule.jpg', url: sampleImg('schedule.jpg', '#2dc878', '#1f8a55') }],
+      },
       { side: 'outgoing', sender: 'Jenny - Live Agent', time: '9:55 AM', text: 'I can check the team schedule. Is 1 PM your preferred time or is any afternoon slot okay?' },
       { side: 'incoming', sender: 'Daniel Cruz', time: '9:58 AM', text: 'Any slot after lunch works for me.' },
     ],
@@ -40,6 +69,7 @@ const CONVERSATION_LIBRARY = [
   {
     customerName: 'Alyssa Tan',
     customerHandle: '@alyssatan',
+    origin: 'Messenger',
     handledBy: 'AI Agent',
     activeMessages: 3,
     unread: 0,
@@ -56,6 +86,7 @@ const CONVERSATION_LIBRARY = [
   {
     customerName: 'Jerome Lee',
     customerHandle: '@jeromelee',
+    origin: 'WhatsApp',
     handledBy: 'Live Agent',
     activeMessages: 5,
     unread: 2,
@@ -72,6 +103,7 @@ const CONVERSATION_LIBRARY = [
   {
     customerName: 'Carla Reyes',
     customerHandle: '@carla.r',
+    origin: 'Instagram',
     handledBy: 'AI Agent',
     activeMessages: 2,
     unread: 1,
@@ -88,6 +120,7 @@ const CONVERSATION_LIBRARY = [
   {
     customerName: 'Bea Navarro',
     customerHandle: '@beanav',
+    origin: 'Messenger',
     handledBy: 'Live Agent',
     activeMessages: 4,
     unread: 0,
@@ -125,6 +158,7 @@ export function buildConversations(pageCards) {
         pageName: page.name,
         customerName: template.customerName,
         customerHandle: template.customerHandle,
+        origin: template.origin,
         handledBy: template.handledBy,
         activeMessages: template.activeMessages + variance,
         unread: Math.max(0, template.unread + variance - (slot === 2 ? 1 : 0)),
