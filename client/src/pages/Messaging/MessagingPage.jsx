@@ -1,12 +1,44 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Card, EmptyState } from '../../components/ui.jsx';
+import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { usePages } from '../../context/PageContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
 import { buildPageCards, messagePreview, resolveSelectedPageId } from './messagingData.js';
+
+// Two-way arrows for the transfer action, and an inbox glyph for the request bar.
+function TransferIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="17 1 21 5 17 9" />
+      <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+      <polyline points="7 23 3 19 7 15" />
+      <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+    </svg>
+  );
+}
+function InboxIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+  );
+}
+
+// Two-letter initials for an avatar fallback (used for teammates with no photo).
+function initialsOf(name) {
+  return (name || '?')
+    .split(' ')
+    .map((part) => part[0] || '')
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
 
 // Apply an SSE message:new event to a conversation: append any not-yet-seen
 // bubbles (deduped by id, so the sender's own echo is ignored) and merge the
@@ -94,6 +126,8 @@ function CustomerAvatar({ name, origin, avatarUrl }) {
 
 export default function MessagingPage() {
   const { pages, activePage } = usePages();
+  const { user } = useAuth();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const connectedPages = pages.filter((page) => page.is_active !== false);
   const pageCards = buildPageCards(connectedPages);
@@ -110,12 +144,18 @@ export default function MessagingPage() {
   const [templateOpen, setTemplateOpen] = useState(false); // template drawer
   const [dropActive, setDropActive] = useState(false); // template being dragged over the thread
   const [replyTo, setReplyTo] = useState(null);
+  const [messageMode, setMessageMode] = useState('customer'); // customer = current inbox, agent = unfiltered team view
   const [agentView, setAgentView] = useState('ai'); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
   const [copiedId, setCopiedId] = useState(null); // message whose copy just succeeded
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [incomingRequests, setIncomingRequests] = useState([]); // pending transfers addressed to me
+  const [requestsOpen, setRequestsOpen] = useState(false); // incoming-requests sidebar
+  const [transferFor, setTransferFor] = useState(null); // conversation being transferred
+  const [agents, setAgents] = useState([]); // teammates for the transfer picker
+  const [transferBusy, setTransferBusy] = useState(false);
 
   // Load the shared inbox once on mount.
   useEffect(() => {
@@ -140,20 +180,44 @@ export default function MessagingPage() {
     };
   }, []);
 
-  // Keep it live: SSE pushes new messages and thread changes (sent by any user).
+  // Refetch the conversations I'm allowed to see (used after an ownership change).
+  const reloadConversations = useCallback(() => {
+    messaging.listConversations().then(setConversations).catch(() => {});
+  }, []);
+
+  // Load the transfer requests waiting for me (the incoming-request bar).
+  useEffect(() => {
+    messaging.incomingTransfers().then(setIncomingRequests).catch(() => {});
+  }, []);
+
+  // Keep it live: SSE pushes new messages, freshly opened threads, ownership
+  // changes, and transfer requests — from other users or n8n's inbound webhook.
   useEffect(() => {
     return messaging.subscribe((event) => {
       if (event.type === 'message:new') {
         setConversations((cur) =>
           cur.map((c) => (c.id === event.conversationId ? mergeIncoming(c, event) : c)),
         );
+      } else if (event.type === 'conversation:new' && event.conversation) {
+        // A new customer thread (e.g. n8n delivered a first message) — prepend it,
+        // ignoring duplicates if the stream replays.
+        setConversations((cur) =>
+          cur.some((c) => c.id === event.conversation.id) ? cur : [event.conversation, ...cur],
+        );
       } else if (event.type === 'conversation:updated' && event.conversation) {
         setConversations((cur) =>
           cur.map((c) => (c.id === event.conversation.id ? { ...c, ...event.conversation } : c)),
         );
+      } else if (event.type === 'conversation:reassigned') {
+        // Ownership moved (take-over or accepted transfer) — refetch what I can see.
+        reloadConversations();
+      } else if (event.type === 'transfer:new' && event.transfer) {
+        setIncomingRequests((cur) => (cur.some((t) => t.id === event.transfer.id) ? cur : [event.transfer, ...cur]));
+      } else if (event.type === 'transfer:resolved') {
+        setIncomingRequests((cur) => cur.filter((t) => t.id !== event.transferId));
       }
     });
-  }, []);
+  }, [reloadConversations]);
 
   // The page filter targets a single page or all of them ('all'); with no request
   // it resolves to the active page so the inbox opens where you left off.
@@ -161,6 +225,7 @@ export default function MessagingPage() {
   const selectedPageId = isAllPages
     ? null
     : resolveSelectedPageId(pageCards, requestedPageId, preferredPageId);
+  const isAgentToAgent = messageMode === 'agent';
 
   useEffect(() => {
     if (isAllPages || !selectedPageId || requestedPageId === selectedPageId) return;
@@ -184,14 +249,20 @@ export default function MessagingPage() {
     };
   }, [filterOpen]);
 
+  useEffect(() => {
+    if (isAgentToAgent) setFilterOpen(false);
+  }, [isAgentToAgent]);
+
   // The list is the selected page's conversations (or every page when 'all'),
   // narrowed to the active tab: AI-handled threads vs. the live-agent queue.
   const wantedHandler = agentView === 'ai' ? 'AI Agent' : 'Live Agent';
-  const visibleConversations = conversations.filter(
-    (conversation) =>
-      (isAllPages || conversation.pageId === selectedPageId) &&
-      conversation.handledBy === wantedHandler,
-  );
+  const visibleConversations = isAgentToAgent
+    ? conversations
+    : conversations.filter(
+        (conversation) =>
+          (isAllPages || conversation.pageId === selectedPageId) &&
+          conversation.handledBy === wantedHandler,
+      );
   const conversationSnapshot = visibleConversations.map((conversation) => conversation.id).join('|');
 
   useEffect(() => {
@@ -207,9 +278,11 @@ export default function MessagingPage() {
     visibleConversations[0] ||
     null;
 
-  // Live-agent threads are interactive (composer enabled); AI-agent threads are
-  // read-only until the user takes over (then they become live-agent threads).
-  const isLiveAgent = activeConversation?.handledBy === 'Live Agent';
+  // The composer is enabled only on a Live Agent thread BOUND TO ME. AI-agent
+  // threads are read-only until taken over; another agent's bound thread isn't
+  // shown here at all (the server filters it out).
+  const isLiveAgent =
+    activeConversation?.handledBy === 'Live Agent' && activeConversation?.assignedUserId === user?.id;
 
   // Unread "chats" = conversations not yet seen (unread > 0). These drive the
   // page-filter badges — a per-page count and a grand total.
@@ -336,12 +409,55 @@ export default function MessagingPage() {
     const id = activeConversation.id;
     setConversations((current) =>
       current.map((conversation) =>
-        conversation.id === id ? { ...conversation, handledBy: 'Live Agent' } : conversation,
+        conversation.id === id
+          ? { ...conversation, handledBy: 'Live Agent', assignedUserId: user?.id, assignedUserName: user?.name }
+          : conversation,
       ),
     );
     setAgentView('foryou');
     setSelectedConversationId(id);
     messaging.takeOver(id).catch(() => {});
+  };
+
+  // Open the transfer picker for the active (owned) conversation, loading teammates.
+  const openTransfer = () => {
+    if (!activeConversation) return;
+    setTransferFor(activeConversation);
+    if (!agents.length) messaging.agents().then(setAgents).catch(() => {});
+  };
+  const doTransfer = async (toUserId) => {
+    if (!transferFor || transferBusy) return;
+    setTransferBusy(true);
+    try {
+      await messaging.requestTransfer(transferFor.id, toUserId);
+      toast.success('Transfer request sent — waiting for them to accept');
+      setTransferFor(null);
+    } catch (e) {
+      toast.error(messaging.apiError(e));
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+  const acceptRequest = async (req) => {
+    try {
+      await messaging.acceptTransfer(req.id);
+      setIncomingRequests((cur) => cur.filter((t) => t.id !== req.id));
+      reloadConversations();
+      setAgentView('foryou');
+      setSelectedConversationId(req.conversationId);
+      setRequestsOpen(false);
+      toast.success('Conversation transferred to you');
+    } catch (e) {
+      toast.error(messaging.apiError(e));
+    }
+  };
+  const declineRequest = async (req) => {
+    try {
+      await messaging.declineTransfer(req.id);
+      setIncomingRequests((cur) => cur.filter((t) => t.id !== req.id));
+    } catch (e) {
+      toast.error(messaging.apiError(e));
+    }
   };
 
   // Copy a message's text; briefly flag the bubble so its icon shows a check.
@@ -361,97 +477,156 @@ export default function MessagingPage() {
 
   return (
     <div className={`messaging-page${templateOpen ? ' is-template-open' : ''}`}>
+      <aside className="msg-mode-rail" aria-label="Messaging mode">
+        <button
+          type="button"
+          className={`msg-mode-card${messageMode === 'agent' ? ' is-active' : ''}`}
+          onClick={() => setMessageMode('agent')}
+          aria-pressed={messageMode === 'agent'}
+          aria-label="Agent to Agent"
+          title="Agent to Agent"
+        >
+          <span className="msg-mode-card__avatar msg-mode-card__avatar--agent" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16 11a4 4 0 1 0-8 0" />
+              <path d="M4 21a8 8 0 0 1 16 0" />
+              <path d="M18 8h1a3 3 0 0 1 0 6h-1" />
+              <path d="M6 8H5a3 3 0 0 0 0 6h1" />
+            </svg>
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`msg-mode-card${messageMode === 'customer' ? ' is-active' : ''}`}
+          onClick={() => setMessageMode('customer')}
+          aria-pressed={messageMode === 'customer'}
+          aria-label="Agent to Customer"
+          title="Agent to Customer"
+        >
+          <span className="msg-mode-card__avatar msg-mode-card__avatar--customer" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+              <path d="M8 9h8" />
+              <path d="M8 13h5" />
+            </svg>
+          </span>
+        </button>
+      </aside>
       <section className="msg-workspace">
         <Card className="msg-panel msg-panel--list">
           <div className="card__head">
-            <div className="card__title">Messaging</div>
-            <div className="msg-filter" ref={filterRef}>
-              <button
-                type="button"
-                className={`msg-filter__btn${filterOpen ? ' is-open' : ''}`}
-                onClick={() => setFilterOpen((open) => !open)}
-                aria-haspopup="listbox"
-                aria-expanded={filterOpen}
-                aria-label="Filter conversations by page"
-                title="Filter by page"
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                </svg>
-                <span className="msg-filter__label">{filterLabel}</span>
-                {unreadTotal > 0 && (
-                  <span className="msg-filter__count" title={`${unreadTotal} unread chats`}>
-                    {unreadTotal}
-                  </span>
-                )}
-                <svg className="msg-filter__caret" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </button>
-              {filterOpen && (
-                <div className="dropdown__menu msg-filter__menu" role="listbox">
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={isAllPages}
-                    className={`dropdown__opt${isAllPages ? ' is-selected' : ''}`}
-                    onClick={() => applyPageFilter('all')}
-                  >
-                    <span>All pages</span>
-                    {unreadTotal > 0 && (
-                      <span className="msg-filter__opt-end">
-                        <span className="msg-filter__opt-count">{unreadTotal}</span>
-                      </span>
-                    )}
-                  </button>
-                  {pageCards.map((page) => {
-                    const selected = !isAllPages && page.id === selectedPageId;
-                    const pageUnread = unreadForPage(page.id);
-                    return (
-                      <button
-                        key={page.id}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        className={`dropdown__opt${selected ? ' is-selected' : ''}`}
-                        onClick={() => applyPageFilter(page.id)}
-                      >
-                        <span>{page.name}</span>
-                        {pageUnread > 0 && (
-                          <span className="msg-filter__opt-end">
-                            <span className="msg-filter__opt-count">{pageUnread}</span>
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <div>
+              <div className="card__title">{isAgentToAgent ? 'Agent to Agent' : 'Messaging'}</div>
+              {isAgentToAgent && <div className="msg-panel__sub">All conversations, unfiltered</div>}
             </div>
+            {!isAgentToAgent && (
+              <div className="msg-filter" ref={filterRef}>
+                <button
+                  type="button"
+                  className={`msg-filter__btn${filterOpen ? ' is-open' : ''}`}
+                  onClick={() => setFilterOpen((open) => !open)}
+                  aria-haspopup="listbox"
+                  aria-expanded={filterOpen}
+                  aria-label="Filter conversations by page"
+                  title="Filter by page"
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                  </svg>
+                  <span className="msg-filter__label">{filterLabel}</span>
+                  {unreadTotal > 0 && (
+                    <span className="msg-filter__count" title={`${unreadTotal} unread chats`}>
+                      {unreadTotal}
+                    </span>
+                  )}
+                  <svg className="msg-filter__caret" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                {filterOpen && (
+                  <div className="dropdown__menu msg-filter__menu" role="listbox">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={isAllPages}
+                      className={`dropdown__opt${isAllPages ? ' is-selected' : ''}`}
+                      onClick={() => applyPageFilter('all')}
+                    >
+                      <span>All pages</span>
+                      {unreadTotal > 0 && (
+                        <span className="msg-filter__opt-end">
+                          <span className="msg-filter__opt-count">{unreadTotal}</span>
+                        </span>
+                      )}
+                    </button>
+                    {pageCards.map((page) => {
+                      const selected = !isAllPages && page.id === selectedPageId;
+                      const pageUnread = unreadForPage(page.id);
+                      return (
+                        <button
+                          key={page.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          className={`dropdown__opt${selected ? ' is-selected' : ''}`}
+                          onClick={() => applyPageFilter(page.id)}
+                        >
+                          <span>{page.name}</span>
+                          {pageUnread > 0 && (
+                            <span className="msg-filter__opt-end">
+                              <span className="msg-filter__opt-count">{pageUnread}</span>
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="msg-list-switch">
-            <div className="seg msg-list-switch__seg" role="tablist" aria-label="Conversation view">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={agentView === 'ai'}
-                className={`seg__btn${agentView === 'ai' ? ' is-active' : ''}`}
-                onClick={() => setAgentView('ai')}
-              >
-                AI Agent
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={agentView === 'foryou'}
-                className={`seg__btn${agentView === 'foryou' ? ' is-active' : ''}`}
-                onClick={() => setAgentView('foryou')}
-              >
-                For You
-              </button>
+          {!isAgentToAgent && (
+            <button
+              type="button"
+              className="msg-requests-bar"
+              onClick={() => setRequestsOpen(true)}
+              aria-haspopup="dialog"
+            >
+              <span className="msg-requests-bar__icon">
+                <InboxIcon />
+              </span>
+              <span className="msg-requests-bar__label">Incoming requests</span>
+              {incomingRequests.length > 0 && (
+                <span className="msg-requests-bar__count">{incomingRequests.length}</span>
+              )}
+            </button>
+          )}
+
+          {!isAgentToAgent && (
+            <div className="msg-list-switch">
+              <div className="seg msg-list-switch__seg" role="tablist" aria-label="Conversation view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={agentView === 'ai'}
+                  className={`seg__btn${agentView === 'ai' ? ' is-active' : ''}`}
+                  onClick={() => setAgentView('ai')}
+                >
+                  AI Agent
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={agentView === 'foryou'}
+                  className={`seg__btn${agentView === 'foryou' ? ' is-active' : ''}`}
+                  onClick={() => setAgentView('foryou')}
+                >
+                  For You
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {loading ? (
             <div className="card--pad">
@@ -466,7 +641,11 @@ export default function MessagingPage() {
               <EmptyState
                 icon="..."
                 title="No conversations"
-                message="No conversations match this view yet. Try another page or switch tabs."
+                message={
+                  isAgentToAgent
+                    ? 'No conversations are available in the team view yet.'
+                    : 'No conversations match this view yet. Try another page or switch tabs.'
+                }
               />
             </div>
           ) : (
@@ -524,6 +703,17 @@ export default function MessagingPage() {
                   </div>
                 </div>
                 <div className="msg-thread__meta">
+                  {isLiveAgent && (
+                    <button
+                      type="button"
+                      className="msg-transfer-btn"
+                      onClick={openTransfer}
+                      title="Transfer conversation"
+                      aria-label="Transfer conversation"
+                    >
+                      <TransferIcon />
+                    </button>
+                  )}
                   <span className={`msg-status-badge msg-status-badge--${isLiveAgent ? 'live' : 'ai'}`}>
                     <span className="msg-status-badge__dot" aria-hidden="true" />
                     {activeConversation.handledBy}
@@ -793,6 +983,119 @@ export default function MessagingPage() {
 
       <VaultPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} onAttach={handleAttach} />
       <TemplateDrawer open={templateOpen} onClose={() => setTemplateOpen(false)} onUse={handleUseTemplate} />
+
+      {/* Incoming transfer requests — a right-side drawer opened from the request bar. */}
+      {requestsOpen && (
+        <div className="msg-requests" role="dialog" aria-modal="true" aria-label="Incoming transfer requests">
+          <div className="msg-requests__scrim" onClick={() => setRequestsOpen(false)} />
+          <aside className="msg-requests__panel">
+            <header className="msg-requests__head">
+              <div>
+                <h3 className="msg-requests__title">Incoming requests</h3>
+                <p className="msg-requests__sub">Conversations teammates want to hand to you.</p>
+              </div>
+              <button
+                type="button"
+                className="msg-requests__close"
+                onClick={() => setRequestsOpen(false)}
+                aria-label="Close"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            </header>
+            <div className="msg-requests__body">
+              {incomingRequests.length === 0 ? (
+                <div className="msg-requests__empty">
+                  <span className="msg-requests__empty-icon">
+                    <InboxIcon />
+                  </span>
+                  <p className="msg-requests__empty-title">No incoming requests</p>
+                  <p className="msg-requests__empty-text">
+                    When a teammate transfers a conversation to you, it shows up here for you to accept.
+                  </p>
+                </div>
+              ) : (
+                <ul className="msg-request-list">
+                  {incomingRequests.map((req) => (
+                    <li key={req.id} className="msg-request">
+                      <div className="msg-request__top">
+                        <CustomerAvatar
+                          name={req.customerName || 'Customer'}
+                          origin={req.origin}
+                          avatarUrl={req.avatarUrl}
+                        />
+                        <div className="msg-request__who">
+                          <span className="msg-request__name">{req.customerName || 'Customer'}</span>
+                          <span className="msg-request__from">
+                            from {req.fromUserName || 'a teammate'}
+                            {req.pageName ? ` · ${req.pageName}` : ''}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="msg-request__actions">
+                        <Button variant="ghost" size="sm" onClick={() => declineRequest(req)}>
+                          Decline
+                        </Button>
+                        <Button variant="primary" size="sm" onClick={() => acceptRequest(req)}>
+                          Accept
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Transfer picker — choose a teammate to hand the current conversation to. */}
+      <Modal
+        open={!!transferFor}
+        title="Transfer conversation"
+        onClose={() => {
+          if (!transferBusy) setTransferFor(null);
+        }}
+        className="msg-transfer-modal"
+      >
+        <p className="msg-transfer__lead">
+          Hand <strong>{transferFor?.customerName || 'this conversation'}</strong> to a teammate. They&apos;ll get an
+          incoming request, and it moves to them once they accept.
+        </p>
+        {agents.length === 0 ? (
+          <EmptyState
+            icon="M16 11a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-9 9a7 7 0 0 1 14 0"
+            title="No teammates available"
+            message="No other active users have Messaging access yet."
+          />
+        ) : (
+          <ul className="msg-agent-list">
+            {agents.map((agent) => (
+              <li key={agent.id}>
+                <button
+                  type="button"
+                  className="msg-agent"
+                  onClick={() => doTransfer(agent.id)}
+                  disabled={transferBusy}
+                >
+                  <span className="msg-agent__avatar" aria-hidden="true">
+                    {initialsOf(agent.name)}
+                  </span>
+                  <span className="msg-agent__meta">
+                    <span className="msg-agent__name">{agent.name}</span>
+                    {agent.email && <span className="msg-agent__email">{agent.email}</span>}
+                  </span>
+                  <span className="msg-agent__go" aria-hidden="true">
+                    <TransferIcon />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
     </div>
   );
 }

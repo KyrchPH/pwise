@@ -18,6 +18,16 @@ export const me = asyncHandler(async (req, res) => {
   sendSuccess(res, { user });
 });
 
+export const updateMe = asyncHandler(async (req, res) => {
+  const user = await authService.updateProfile(req.user.id, req.body || {});
+  sendSuccess(res, { user });
+});
+
+export const updateAvatar = asyncHandler(async (req, res) => {
+  const user = await authService.updateAvatar(req.user.id, req.body || {});
+  sendSuccess(res, { user });
+});
+
 export const logout = asyncHandler(async (req, res) => {
   // JWT is stateless — the client discards the token.
   sendSuccess(res, { message: 'logged out' });

@@ -4,7 +4,7 @@ import * as pagesService from '../../services/pages.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
-import { Card, Button, Field, Spinner } from '../../components/ui.jsx';
+import { Card, Button, Field, Spinner, PageAvatar } from '../../components/ui.jsx';
 
 const EditIcon = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -20,10 +20,55 @@ const TrashIcon = () => (
     <line x1="14" y1="11" x2="14" y2="17" />
   </svg>
 );
+const GearIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
 
-const BLANK = { account_name: '', fb_page_id: '', access_token: '' };
+// Small brand marks for the platforms a page is connected to.
+function FacebookLogo({ title = 'Facebook' }) {
+  return (
+    <span className="platform-logo" title={title} aria-label={title}>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <rect width="24" height="24" rx="6" fill="#1877F2" />
+        <path
+          d="M15.5 12.5l.4-2.6h-2.5V8.2c0-.7.35-1.4 1.45-1.4h1.15V4.6s-1.05-.18-2.05-.18c-2.1 0-3.45 1.27-3.45 3.56v2.02H8.2v2.6h2.25V19h2.95v-6.5z"
+          fill="#fff"
+        />
+      </svg>
+    </span>
+  );
+}
+function TelegramLogo({ title = 'Telegram' }) {
+  return (
+    <span className="platform-logo" title={title} aria-label={title}>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <circle cx="12" cy="12" r="11" fill="#229ED9" />
+        <path
+          d="M17.8 7.2 15.6 17c-.15.7-.6.85-1.2.53l-3.3-2.43-1.6 1.54c-.18.18-.33.33-.67.33l.24-3.4 6.16-5.56c.27-.24-.06-.37-.42-.13L7.4 12.07l-3.27-1.02c-.7-.22-.72-.7.15-1.04l12.78-4.92c.6-.22 1.12.13.74 1.13z"
+          fill="#fff"
+        />
+      </svg>
+    </span>
+  );
+}
 
-export default function FacebookPages() {
+// `telegram_has`/`telegram_username` are loaded from the page on edit (display +
+// "keep current key" behaviour); `telegram_remove` detaches an attached bot.
+const BLANK = {
+  account_name: '',
+  fb_page_id: '',
+  access_token: '',
+  telegram_bot_name: '',
+  telegram_api_key: '',
+  telegram_remove: false,
+  telegram_has: false,
+  telegram_username: '',
+};
+
+export default function FacebookPages({ embedded = false }) {
   const toast = useToast();
   const { hash } = useLocation();
   const { refresh: refreshSwitcher } = usePages();
@@ -31,8 +76,9 @@ export default function FacebookPages() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { id?, ...fields }
   const [busy, setBusy] = useState(false);
-  const [tested, setTested] = useState(false); // connection verified for the CURRENT field values
+  const [tested, setTested] = useState(false); // FB connection verified for the CURRENT field values
   const [testInfo, setTestInfo] = useState(null); // { name, followers } from the successful test
+  const [menuId, setMenuId] = useState(null); // page whose options dropdown is open
 
   const load = () => {
     setLoading(true);
@@ -57,6 +103,21 @@ export default function FacebookPages() {
     return () => clearTimeout(t);
   }, [hash]);
 
+  // Close the open page-options dropdown on outside-click / Escape.
+  useEffect(() => {
+    if (menuId == null) return undefined;
+    const onDown = (e) => {
+      if (!e.target.closest('.fb-page-menu')) setMenuId(null);
+    };
+    const onKey = (e) => e.key === 'Escape' && setMenuId(null);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuId]);
+
   const resetTest = () => {
     setTested(false);
     setTestInfo(null);
@@ -67,22 +128,36 @@ export default function FacebookPages() {
   };
   const startEdit = (p) => {
     resetTest();
-    setEditing({ ...BLANK, id: p.id, account_name: p.account_name || '', fb_page_id: p.fb_page_id || '' });
+    setEditing({
+      ...BLANK,
+      id: p.id,
+      account_name: p.account_name || '',
+      fb_page_id: p.fb_page_id || '',
+      telegram_bot_name: p.telegram_bot_name || '',
+      telegram_has: !!p.has_telegram_bot,
+      telegram_username: p.telegram_bot_username || '',
+    });
   };
   const cancel = () => {
     resetTest();
     setEditing(null);
   };
-  // Any field edit invalidates a prior successful test → back to the "Connect" step.
+  // A Facebook field edit invalidates a prior successful test → back to "Connect".
   const setField = (k) => (e) => {
     const v = e.target.value;
     setEditing((ed) => ({ ...ed, [k]: v }));
     resetTest();
   };
+  // Telegram fields are independent of the Facebook connection test, so editing
+  // them does NOT reset the test gate.
+  const setTgField = (k) => (e) => {
+    const v = e.target.value;
+    setEditing((ed) => ({ ...ed, [k]: v }));
+  };
 
-  // Step 1 — verify credentials against Facebook. On success the primary button
-  // flips to "Add page" / "Save". (Edits may leave the token blank to reuse the
-  // stored one; the server falls back to it.)
+  // Step 1 — verify the PAGE credentials against Facebook. On success the primary
+  // button flips to "Add page" / "Save". (Edits may leave the token blank to reuse
+  // the stored one; the server falls back to it.)
   const runTest = async () => {
     const fbPageId = editing.fb_page_id.trim();
     if (!fbPageId && !editing.id) return toast.error('Facebook Page ID is required.');
@@ -105,12 +180,18 @@ export default function FacebookPages() {
     }
   };
 
-  // Step 2 — persist. Only reachable once the connection has tested OK.
+  // Step 2 — persist. Only reachable once the FB connection has tested OK. The
+  // optional Telegram bot is validated server-side on save (Telegram getMe).
   const commit = async () => {
     const name = editing.account_name.trim();
     const fbPageId = editing.fb_page_id.trim();
     if (!name) return toast.error('Give the page a name.');
     if (!fbPageId) return toast.error('Facebook Page ID is required.');
+    // Attaching a bot needs its API key (the bot name alone isn't enough).
+    const attachingBot = !editing.telegram_has && !editing.telegram_remove && editing.telegram_bot_name.trim();
+    if (attachingBot && !editing.telegram_api_key.trim()) {
+      return toast.error('Enter the Telegram bot API key to attach it (or clear the bot name).');
+    }
     setBusy(true);
     try {
       const payload = {
@@ -119,6 +200,12 @@ export default function FacebookPages() {
         // Token is write-only: send only when filled (blank on edit = keep current).
         ...(editing.access_token.trim() ? { access_token: editing.access_token.trim() } : {}),
       };
+      if (editing.id && editing.telegram_remove) {
+        payload.telegram_remove = true;
+      } else {
+        payload.telegram_bot_name = editing.telegram_bot_name.trim();
+        if (editing.telegram_api_key.trim()) payload.telegram_api_key = editing.telegram_api_key.trim();
+      }
       if (editing.id) await pagesService.update(editing.id, payload);
       else await pagesService.create(payload);
       toast.success(editing.id ? 'Page updated' : 'Page connected');
@@ -153,14 +240,17 @@ export default function FacebookPages() {
   };
 
   const secretHint = (label) => (editing?.id ? 'leave blank to keep current' : label);
+  // Show the "keep current"/masked affordances only when a bot is already attached.
+  const botKeyHint = editing?.telegram_has ? 'leave blank to keep current' : 'required to attach a bot';
 
-  return (
-    <Card id="facebook-pages" className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>
+  const body = (
+    <>
       <div className="row row--between" style={{ marginBottom: 14, gap: 12 }}>
         <div>
           <div style={{ fontWeight: 600 }}>Facebook Pages</div>
           <div className="text-sm text-muted">
-            Pages you can post to. Credentials are encrypted at rest; switch the active page from the top bar.
+            Pages you can post to — each can optionally have a Telegram bot attached. Credentials are encrypted at rest;
+            switch the active page from the top bar.
           </div>
         </div>
         {!editing && (
@@ -187,6 +277,49 @@ export default function FacebookPages() {
               {testInfo?.followers != null ? ` · ${Number(testInfo.followers).toLocaleString()} followers` : ''}
             </div>
           )}
+
+          {/* Optional Telegram bot attached to this page. */}
+          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
+              <div style={{ fontWeight: 600 }} className="text-sm">
+                Telegram bot <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
+              </div>
+              {editing.telegram_has && (
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={editing.telegram_remove}
+                    onChange={(e) => setEditing((ed) => ({ ...ed, telegram_remove: e.target.checked }))}
+                  />
+                  Remove bot
+                </label>
+              )}
+            </div>
+            {editing.telegram_remove ? (
+              <div className="text-sm text-muted">The attached Telegram bot will be removed when you save.</div>
+            ) : (
+              <>
+                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                  Attach a bot to this page. Create one with @BotFather on Telegram, then paste its token.
+                  {editing.telegram_has && editing.telegram_username ? ` Currently @${editing.telegram_username}.` : ''}
+                </div>
+                <Field label="Bot name">
+                  <input className="input" value={editing.telegram_bot_name} onChange={setTgField('telegram_bot_name')} placeholder="e.g. Wise Cleaner Bot" />
+                </Field>
+                <Field label="Bot API key" hint={botKeyHint}>
+                  <input
+                    className="input"
+                    type="password"
+                    value={editing.telegram_api_key}
+                    onChange={setTgField('telegram_api_key')}
+                    autoComplete="new-password"
+                    placeholder={editing.telegram_has ? '••••••••' : '123456789:ABCdef…'}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
+
           <div className="row gap-sm" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
               Cancel
@@ -203,28 +336,86 @@ export default function FacebookPages() {
           No pages connected yet. Connect one to start posting.
         </div>
       ) : (
-        <ul className="ct-list">
+        <div className="fb-pages">
           {pages.map((p) => (
-            <li key={p.id} className="ct-item">
-              <div className="ct-item__main">
-                <div className="ct-item__name">{p.account_name}</div>
-                <div className="ct-item__meta">
-                  Page ID: {p.fb_page_id || '—'}
-                  {!p.is_active && ' · disabled'}
+            <div
+              key={p.id}
+              className={`fb-page-card${!p.is_active ? ' is-disabled' : ''}${menuId === p.id ? ' is-menu-open' : ''}`}
+            >
+              <PageAvatar page={p} className="fb-page-card__photo" />
+              <div className="fb-page-card__body">
+                <div className="fb-page-card__name" title={p.account_name}>{p.account_name}</div>
+                <div className="fb-page-card__sub">
+                  {p.has_telegram_bot ? (
+                    // Page has another platform attached → show the platform logos.
+                    <span className="fb-page-card__platforms">
+                      <FacebookLogo />
+                      <TelegramLogo title={p.telegram_bot_username ? `Telegram · @${p.telegram_bot_username}` : 'Telegram'} />
+                    </span>
+                  ) : (
+                    // Facebook only → just a count.
+                    <span>1 connected</span>
+                  )}
+                  {!p.is_active && <span className="fb-chip">Disabled</span>}
                 </div>
               </div>
-              <div className="ct-item__actions">
-                <button type="button" className="card-iconbtn" title="Edit" aria-label="Edit page" onClick={() => startEdit(p)}>
-                  <EditIcon />
+              <div className="fb-page-card__actions fb-page-menu">
+                <button
+                  type="button"
+                  className="card-iconbtn"
+                  title="Options"
+                  aria-label={`Options for ${p.account_name}`}
+                  aria-haspopup="menu"
+                  aria-expanded={menuId === p.id}
+                  onClick={() => setMenuId((cur) => (cur === p.id ? null : p.id))}
+                >
+                  <GearIcon />
                 </button>
-                <button type="button" className="card-iconbtn card-iconbtn--danger" title="Delete" aria-label="Delete page" onClick={() => del(p)}>
-                  <TrashIcon />
-                </button>
+                {menuId === p.id && (
+                  <div className="card-menu" role="menu">
+                    <button
+                      type="button"
+                      className="card-menu__item"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuId(null);
+                        startEdit(p);
+                      }}
+                    >
+                      <EditIcon />
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="card-menu__item card-menu__item--danger"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuId(null);
+                        del(p);
+                      }}
+                    >
+                      <TrashIcon />
+                      Delete
+                    </button>
+                  </div>
+                )}
               </div>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
+    </>
+  );
+
+  // In Settings the whole view is one parent card, so render as a bare section;
+  // used standalone it keeps its own card wrapper.
+  return embedded ? (
+    <section id="facebook-pages" className="settings-section">
+      {body}
+    </section>
+  ) : (
+    <Card id="facebook-pages" className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>
+      {body}
     </Card>
   );
 }

@@ -1,7 +1,8 @@
 import api from './api.js';
 
-// Connected Facebook pages. List/active/select are available to any signed-in
-// user (for the switcher); create/update/remove are admin-only on the server.
+// Connected Facebook pages (each may carry an optional attached Telegram bot).
+// List/active/select are available to any signed-in user (for the switcher);
+// create/update/remove are admin-only on the server.
 export async function list() {
   const { data } = await api.get('/pages');
   return data.data.pages; // safe fields only (no secrets)

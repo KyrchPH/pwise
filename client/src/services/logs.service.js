@@ -2,7 +2,7 @@ import api from './api.js';
 
 export async function list(params = {}) {
   const { data } = await api.get('/logs', { params });
-  return data.data.logs;
+  return data.data;
 }
 
 export async function get(id) {

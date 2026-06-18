@@ -1,12 +1,31 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 
-// Shared pool → posting logs are global (every signed-in user sees all of them).
-export async function list({ limit = 50, offset = 0 } = {}) {
-  return query(
+const PAGE_SIZE = 10;
+
+function pageParams({ limit = PAGE_SIZE, offset = 0 } = {}) {
+  const rawLimit = Math.trunc(Number(limit) || PAGE_SIZE);
+  const rawOffset = Math.trunc(Number(offset) || 0);
+  return {
+    limit: Math.min(Math.max(rawLimit, 1), PAGE_SIZE),
+    offset: Math.max(rawOffset, 0),
+  };
+}
+
+// Shared pool: posting logs are global, so every signed-in user sees all of them.
+export async function list({ limit = PAGE_SIZE, offset = 0 } = {}) {
+  const page = pageParams({ limit, offset });
+  const logs = await query(
     'SELECT * FROM posting_logs ORDER BY created_at DESC LIMIT ? OFFSET ?',
-    [Number(limit) || 50, Number(offset) || 0],
+    [page.limit, page.offset],
   );
+  const countRows = await query('SELECT COUNT(*) AS total FROM posting_logs');
+  return {
+    logs,
+    total: Number(countRows[0]?.total) || 0,
+    limit: page.limit,
+    offset: page.offset,
+  };
 }
 
 export async function getById(userId, id) {

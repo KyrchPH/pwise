@@ -121,21 +121,30 @@ export function VaultThumb({ item }) {
     );
   }
 
-  if (mediaType === 'image' && item.url && !broken) {
-    return <img className="vault-thumb__img" src={item.url} alt="" onError={() => setBroken(true)} />;
+  // Prefer the optimized still (`thumbUrl`) for both images and videos; fall back
+  // to the full media only when no thumbnail was generated.
+  if (mediaType === 'image' && (item.thumbUrl || item.url) && !broken) {
+    return (
+      <img className="vault-thumb__img" src={item.thumbUrl || item.url} alt="" draggable={false} onError={() => setBroken(true)} />
+    );
   }
 
-  if (mediaType === 'video' && item.url && !broken) {
+  if (mediaType === 'video' && (item.thumbUrl || item.url) && !broken) {
     return (
       <>
-        <video
-          className="vault-thumb__img"
-          src={`${item.url}#t=0.1`}
-          muted
-          preload="metadata"
-          playsInline
-          onError={() => setBroken(true)}
-        />
+        {item.thumbUrl ? (
+          <img className="vault-thumb__img" src={item.thumbUrl} alt="" draggable={false} onError={() => setBroken(true)} />
+        ) : (
+          <video
+            className="vault-thumb__img"
+            src={`${item.url}#t=0.1`}
+            muted
+            preload="metadata"
+            playsInline
+            draggable={false}
+            onError={() => setBroken(true)}
+          />
+        )}
         <span className="vault-thumb__play" aria-hidden="true">
           <PlayOverlayIcon />
         </span>

@@ -20,6 +20,16 @@ export async function me() {
   return data.data.user;
 }
 
+export async function updateProfile(payload) {
+  const { data } = await api.patch('/auth/me', payload);
+  return data.data.user;
+}
+
+export async function updateAvatar(payload) {
+  const { data } = await api.patch('/auth/me/avatar', payload);
+  return data.data.user;
+}
+
 export async function logout() {
   await api.post('/auth/logout');
 }

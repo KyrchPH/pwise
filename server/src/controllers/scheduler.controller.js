@@ -4,17 +4,9 @@ import * as service from '../services/scheduler.service.js';
 import * as postPool from '../services/post_pool.service.js';
 import * as analytics from '../services/analytics.service.js';
 
-// n8n: claim the next post to publish (atomic; returns a presigned media URL).
-export const claim = asyncHandler(async (req, res) => {
-  const userId = req.body?.user_id ?? req.query.user_id ?? null;
-  const result = await service.claimNext({ userId });
-  sendSuccess(res, result);
-});
-
-// n8n: claim up to N due posts in one atomic batch (the drain loop). Same auth +
-// semantics as /claim, but returns { claimed, count, posts: [...] } so a single
-// run can publish every post due for a slot. `limit` (body or query) is clamped
-// server-side to 1..50; defaults to 10.
+// n8n: claim up to N due posts in one atomic batch. Returns
+// { claimed, count, posts: [...] } so a single run can publish every post due
+// for a slot. `limit` (body or query) is clamped server-side to 1..50.
 export const claimBatch = asyncHandler(async (req, res) => {
   const userId = req.body?.user_id ?? req.query.user_id ?? null;
   const limit = req.body?.limit ?? req.query.limit ?? 10;

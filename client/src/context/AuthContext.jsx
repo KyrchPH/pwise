@@ -47,12 +47,26 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  const updateProfile = async (payload) => {
+    const updated = await authService.updateProfile(payload);
+    setUser(updated);
+    return updated;
+  };
+
+  const updateAvatar = async (payload) => {
+    const updated = await authService.updateAvatar(payload);
+    setUser(updated);
+    return updated;
+  };
+
   const value = {
     user,
     loading,
     login,
     register,
     logout,
+    updateProfile,
+    updateAvatar,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'admin',
   };

@@ -216,7 +216,10 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
                 <span className="calendar__thumbs" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
                   {cellPosts.slice(0, 3).map((p, idx) => (
                     <span className="calendar__thumb" key={p.id} style={{ zIndex: 5 - idx }}>
-                      {p.media_preview_url ? (
+                      {p.thumbnail_preview_url ? (
+                        // Optimized still — no clip download just to fill a cell.
+                        <img src={p.thumbnail_preview_url} alt="" />
+                      ) : p.media_preview_url ? (
                         p.media_type === 'video' ? (
                           <video src={p.media_preview_url} muted preload="metadata" />
                         ) : (

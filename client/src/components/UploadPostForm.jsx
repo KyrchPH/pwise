@@ -206,6 +206,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       let media_url = null;
       let s3_key = null;
       let media_type = null;
+      let thumbnail_s3_key = null;
 
       if (useTemplate && generatedVideoUrl) {
         // Download the rendered video from Creatomate into our S3 now (at submit).
@@ -224,6 +225,17 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
         media_url = pres.mediaUrl;
         s3_key = pres.s3Key;
         media_type = file.type.startsWith('video') ? 'video' : 'image';
+
+        // Generate + upload an optimized still (first video frame / downscaled
+        // image) so grids and the viewer show a lightweight preview instead of
+        // fetching the full media. Best-effort — the post saves regardless.
+        setPhase('thumbnail');
+        try {
+          const thumb = await upload.uploadThumbnail(file);
+          if (thumb) thumbnail_s3_key = thumb.s3Key;
+        } catch {
+          /* a post without a thumbnail still works */
+        }
       }
 
       setPhase('saving');
@@ -233,6 +245,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
         status: 'ready',
         media_url,
         s3_key,
+        thumbnail_s3_key,
         media_type,
         ...(useTemplate ? { creatomate_template_id: Number(templateId) } : {}),
         ...(scheduled ? { scheduled_at } : { immediate: true }),
@@ -387,7 +400,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     <Button
       type="submit"
       size="lg"
-      className="btn--block"
+      className="btn--block upload-submit-btn"
       disabled={busy || (useTemplate && (!templateId || !generatedVideoUrl))}
     >
       {!busy
@@ -398,9 +411,11 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
           ? 'Preparing…'
           : phase === 'uploading'
             ? `Uploading… ${progress}%`
-            : phase === 'ingesting'
-              ? 'Finalizing…'
-              : 'Saving…'}
+            : phase === 'thumbnail'
+              ? 'Optimizing…'
+              : phase === 'ingesting'
+                ? 'Finalizing…'
+                : 'Saving…'}
     </Button>
   );
 
@@ -484,9 +499,11 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
             ? 'Saving post…'
             : phase === 'preparing'
               ? 'Preparing upload…'
-              : phase === 'ingesting'
-                ? 'Finalizing video…'
-                : 'Uploading…'
+              : phase === 'thumbnail'
+                ? 'Optimizing preview…'
+                : phase === 'ingesting'
+                  ? 'Finalizing video…'
+                  : 'Uploading…'
         }
       >
         <ProgressBar
@@ -497,9 +514,11 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
               ? 'Getting a secure upload link…'
               : phase === 'uploading'
                 ? `Uploading ${isVideo ? 'video' : 'media'}…`
-                : phase === 'ingesting'
-                  ? 'Downloading the generated video to storage…'
-                  : 'Saving your post…'
+                : phase === 'thumbnail'
+                  ? `Generating an optimized ${isVideo ? 'thumbnail' : 'preview'}…`
+                  : phase === 'ingesting'
+                    ? 'Downloading the generated video to storage…'
+                    : 'Saving your post…'
           }
         />
         {file && (

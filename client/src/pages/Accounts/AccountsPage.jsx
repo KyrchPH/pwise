@@ -17,7 +17,27 @@ function accessLabels(access) {
   return ids.map(labelForModule);
 }
 
+// Access modules on a single line; the rest collapse into a "+N more" pill (the
+// full set is shown in the row's details dialog).
+const MAX_ACCESS_PILLS = 3;
 function AccessPills({ access }) {
+  const labels = accessLabels(access);
+  const shown = labels.slice(0, MAX_ACCESS_PILLS);
+  const extra = labels.length - shown.length;
+  return (
+    <div className="module-pills module-pills--inline">
+      {shown.map((label) => (
+        <span className="module-pill" key={label}>
+          {label}
+        </span>
+      ))}
+      {extra > 0 && <span className="module-pill module-pill--more">+{extra} more</span>}
+    </div>
+  );
+}
+
+// Full (wrapping) access list — used inside the account details dialog.
+function AccessPillsFull({ access }) {
   return (
     <div className="module-pills">
       {accessLabels(access).map((label) => (
@@ -26,6 +46,15 @@ function AccessPills({ access }) {
         </span>
       ))}
     </div>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
 
@@ -45,6 +74,8 @@ export default function AccountsPage() {
   const [accessOpen, setAccessOpen] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
   const [link, setLink] = useState('');
+  const [details, setDetails] = useState(null); // account whose details dialog is open
+  const [menuId, setMenuId] = useState(null); // account whose options dropdown is open
 
   const { data, loading, error, refresh } = useCachedResource('accounts', () =>
     Promise.all([adminService.listUsers(), adminService.listInvites()]).then(([users, invites]) => ({ users, invites })),
@@ -53,6 +84,21 @@ export default function AccountsPage() {
   useEffect(() => {
     if (error) toast.error(apiError(error));
   }, [error, toast]);
+
+  // Close the open row-options dropdown on outside-click / Escape.
+  useEffect(() => {
+    if (menuId == null) return undefined;
+    const onDown = (e) => {
+      if (!e.target.closest('.acct-menu')) setMenuId(null);
+    };
+    const onKey = (e) => e.key === 'Escape' && setMenuId(null);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuId]);
 
   const { users = [], invites = [] } = data || {};
   const availableModules = invitableModulesForUser(user);
@@ -167,7 +213,7 @@ export default function AccountsPage() {
             <div className="card__head">
               <div className="card__title">Accounts ({users.length})</div>
             </div>
-            <div className="table-wrap">
+            <div className="table-wrap table-wrap--menu">
               <table className="table table--stack">
                 <thead>
                   <tr>
@@ -185,7 +231,7 @@ export default function AccountsPage() {
                     const self = u.id === user.id;
                     const deleted = !!u.deleted_at;
                     return (
-                      <tr key={u.id}>
+                      <tr key={u.id} className="acct-row" onClick={() => setDetails(u)}>
                         <td data-label="Name">{u.name}</td>
                         <td className="cell-muted" data-label="Email">{u.email}</td>
                         <td data-label="Role">
@@ -196,20 +242,50 @@ export default function AccountsPage() {
                         </td>
                         <td data-label="Status">{statusBadge(u)}</td>
                         <td className="cell-muted" data-label="Joined">{fmt(u.created_at)}</td>
-                        <td>
-                          <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
-                            <Button
-                              variant="subtle"
-                              size="sm"
-                              disabled={self || deleted}
-                              onClick={() => toggleActive(u)}
-                            >
-                              {u.is_active ? 'Deactivate' : 'Activate'}
-                            </Button>
-                            <Button variant="danger" size="sm" disabled={self || deleted} onClick={() => del(u)}>
-                              Delete
-                            </Button>
-                          </div>
+                        {/* No options menu for your own account; stop row-click on the menu otherwise. */}
+                        <td onClick={self ? undefined : (e) => e.stopPropagation()}>
+                          {!self && (
+                            <div className="acct-menu">
+                              <button
+                                type="button"
+                                className="card-iconbtn"
+                                disabled={deleted}
+                                aria-haspopup="menu"
+                                aria-expanded={menuId === u.id}
+                                title="Options"
+                                aria-label={`Options for ${u.name}`}
+                                onClick={() => setMenuId((cur) => (cur === u.id ? null : u.id))}
+                              >
+                                <GearIcon />
+                              </button>
+                              {menuId === u.id && (
+                                <div className="card-menu" role="menu">
+                                  <button
+                                    type="button"
+                                    className="card-menu__item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      toggleActive(u);
+                                    }}
+                                  >
+                                    {u.is_active ? 'Deactivate' : 'Activate'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="card-menu__item card-menu__item--danger"
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      del(u);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -281,6 +357,42 @@ export default function AccountsPage() {
           </Card>
         </>
       )}
+
+      <Modal
+        open={!!details}
+        title={details?.name || 'Account'}
+        onClose={() => setDetails(null)}
+        footer={
+          <Button variant="ghost" onClick={() => setDetails(null)}>
+            Close
+          </Button>
+        }
+      >
+        {details && (
+          <div className="acct-details">
+            <div className="acct-details__row">
+              <span className="acct-details__label">Email</span>
+              <span>{details.email}</span>
+            </div>
+            <div className="acct-details__row">
+              <span className="acct-details__label">Role</span>
+              <span className={`badge badge--${details.role === 'admin' ? 'posted' : 'draft'}`}>{details.role}</span>
+            </div>
+            <div className="acct-details__row">
+              <span className="acct-details__label">Status</span>
+              {statusBadge(details)}
+            </div>
+            <div className="acct-details__row">
+              <span className="acct-details__label">Joined</span>
+              <span>{fmt(details.created_at)}</span>
+            </div>
+            <div className="acct-details__block">
+              <span className="acct-details__label">Access</span>
+              <AccessPillsFull access={details.module_access} />
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={accessOpen}

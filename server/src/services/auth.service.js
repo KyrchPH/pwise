@@ -7,6 +7,7 @@ import { moduleAccessForUser, serializeModuleAccess } from '../config/modules.js
 import ApiError from '../utils/ApiError.js';
 import * as invitesService from './invites.service.js';
 import * as mail from './mail.service.js';
+import * as s3 from './s3.service.js';
 
 let jwtSecret = env.jwtSecret;
 if (!jwtSecret) {
@@ -22,10 +23,18 @@ export function verifyToken(token) {
   return jwt.verify(token, jwtSecret);
 }
 
-function publicUser(row) {
+async function publicUser(row) {
   if (!row) return null;
-  const { password_hash, ...rest } = row;
-  return { ...rest, module_access: moduleAccessForUser(row) };
+  const { password_hash, avatar_s3_key, ...rest } = row;
+  let avatarUrl = '';
+  if (avatar_s3_key) {
+    try {
+      avatarUrl = await s3.createDownloadUrl(avatar_s3_key);
+    } catch {
+      // Login/profile should still work if S3 is temporarily unavailable.
+    }
+  }
+  return { ...rest, avatar_url: avatarUrl, module_access: moduleAccessForUser(row) };
 }
 
 // Registration is invite-only: a valid single-use token is required and is
@@ -56,7 +65,7 @@ export async function register({ name, email, password, token }) {
 
     await conn.commit();
     const [rows] = await conn.query('SELECT * FROM users WHERE id = ?', [userId]);
-    const user = publicUser(rows[0]);
+    const user = await publicUser(rows[0]);
     return { user, token: signToken(user) };
   } catch (err) {
     await conn.rollback();
@@ -76,13 +85,48 @@ export async function login({ email, password }) {
   if (!ok) throw ApiError.unauthorized('invalid credentials');
   if (row.deleted_at || !row.is_active) throw ApiError.forbidden('this account has been deactivated');
 
-  const user = publicUser(row);
+  const user = await publicUser(row);
   return { user, token: signToken(user) };
 }
 
 export async function getById(id) {
   const rows = await query('SELECT * FROM users WHERE id = ?', [id]);
   return publicUser(rows[0]);
+}
+
+export async function updateProfile(userId, { name, email } = {}) {
+  const nextName = String(name ?? '').trim();
+  const nextEmail = String(email ?? '').trim().toLowerCase();
+  if (!nextName) throw ApiError.badRequest('name is required');
+  if (nextName.length > 255) throw ApiError.badRequest('name is too long (max 255 characters)');
+  if (!nextEmail) throw ApiError.badRequest('email is required');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw ApiError.badRequest('enter a valid email address');
+
+  const existing = await query('SELECT id FROM users WHERE email = ? AND id <> ?', [nextEmail, userId]);
+  if (existing.length) throw ApiError.conflict('email already registered');
+
+  await query('UPDATE users SET name = ?, email = ? WHERE id = ?', [nextName, nextEmail, userId]);
+  return getById(userId);
+}
+
+export async function updateAvatar(userId, { s3Key } = {}) {
+  const key = String(s3Key ?? '').trim();
+  if (!key) throw ApiError.badRequest('avatar s3Key is required');
+  if (!key.startsWith(`avatars/${userId}/`)) throw ApiError.badRequest('invalid avatar upload');
+
+  const head = await s3.headObject(key);
+  if (!head.exists) throw ApiError.badRequest('avatar upload was not found');
+  if (!String(head.contentType || '').startsWith('image/')) {
+    throw ApiError.badRequest('avatar must be an image');
+  }
+
+  const rows = await query('SELECT avatar_s3_key FROM users WHERE id = ?', [userId]);
+  if (!rows.length) throw ApiError.unauthorized('not authenticated');
+  const previousKey = rows[0].avatar_s3_key;
+
+  await query('UPDATE users SET avatar_s3_key = ? WHERE id = ?', [key, userId]);
+  if (previousKey && previousKey !== key) await s3.deleteObject(previousKey);
+  return getById(userId);
 }
 
 // Used by requireAuth on every request, so deactivation/deletion takes effect

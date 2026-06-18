@@ -6,7 +6,7 @@ import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { canAccessModule } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
-import { Modal } from './ui.jsx';
+import { Modal, PageAvatar, UserAvatar } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
 // whole nav is consistent — no emojis. Inherits the link's text color.
@@ -212,24 +212,6 @@ function formatCount(n) {
   return String(num);
 }
 
-// A connected page's photo (the Facebook page picture) with a letter fallback.
-function PageAvatar({ page, className = '' }) {
-  const [broken, setBroken] = useState(false);
-  const pagePictureId = page?.fb_page_id || page?.fbPageId;
-  const pageLabel = page?.account_name || page?.name || '?';
-  const src = pagePictureId
-    ? `https://graph.facebook.com/v21.0/${pagePictureId}/picture?type=square&width=96&height=96`
-    : null;
-  if (!src || broken) {
-    return (
-      <span className={`page-avatar page-avatar--fallback ${className}`} aria-hidden="true">
-        {pageLabel.charAt(0).toUpperCase()}
-      </span>
-    );
-  }
-  return <img className={`page-avatar ${className}`} src={src} alt="" onError={() => setBroken(true)} />;
-}
-
 export default function AppLayout() {
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
@@ -239,7 +221,9 @@ export default function AppLayout() {
   const toast = useToast();
   const isAdmin = user?.role === 'admin';
   const isMessagingPage = pathname === '/messages';
-  const initials = (user?.name || user?.email || '?').slice(0, 1).toUpperCase();
+  const isVaultPage = pathname === '/vault';
+  const isActivityPage = pathname === '/activity';
+  const isLogsPage = pathname === '/logs';
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
@@ -481,7 +465,7 @@ export default function AppLayout() {
               aria-expanded={menuOpen}
               aria-label="Account menu"
             >
-              <span className="avatar">{initials}</span>
+              <UserAvatar user={user} className="avatar" />
               <span className="sidebar__acct-id">
                 <span className="sidebar__acct-name">{user?.name || user?.email || 'Account'}</span>
                 <span className="sidebar__acct-sub" title={user?.email}>
@@ -497,14 +481,23 @@ export default function AppLayout() {
             </button>
             {menuOpen && (
               <div className="usermenu__panel" role="menu">
-                <div className="usermenu__head">
-                  <span className="avatar avatar--lg">{initials}</span>
+                <Link to="/profile" className="usermenu__head usermenu__head--link" role="menuitem" onClick={() => setMenuOpen(false)}>
+                  <UserAvatar user={user} className="avatar avatar--lg" />
                   <div className="usermenu__id">
                     {user?.name && <span className="usermenu__name">{user.name}</span>}
                     <span className="usermenu__email" title={user?.email}>{user?.email}</span>
                   </div>
-                </div>
+                </Link>
                 <div className="usermenu__sep" />
+                <Link to="/profile" className="usermenu__item" role="menuitem" onClick={() => setMenuOpen(false)}>
+                  <span className="usermenu__ico">
+                    <Ico>
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </Ico>
+                  </span>
+                  User Profile
+                </Link>
                 <Link to="/privacy" className="usermenu__item" role="menuitem" onClick={() => setMenuOpen(false)}>
                   <span className="usermenu__ico">
                     <Ico>
@@ -570,7 +563,10 @@ export default function AppLayout() {
         <main className={`content${isMessagingPage ? ' content--messages' : ''}`}>
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
-          <div className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}`} key={activeId ?? 'no-page'}>
+          <div
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage ? ' content__inner--fill' : ''}${isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
+            key={activeId ?? 'no-page'}
+          >
             <Outlet />
           </div>
         </main>

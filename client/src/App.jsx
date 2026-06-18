@@ -12,12 +12,13 @@ import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import SettingsPage from './pages/Settings/SettingsPage.jsx';
-import ChangePasswordPage from './pages/Settings/ChangePasswordPage.jsx';
+import ChangePasswordPage from './pages/Profile/ChangePasswordPage.jsx';
 import LogsPage from './pages/Logs/LogsPage.jsx';
 import ActivityPage from './pages/Activity/ActivityPage.jsx';
 import AccountsPage from './pages/Accounts/AccountsPage.jsx';
 import MessagingPage from './pages/Messaging/MessagingPage.jsx';
 import VaultPage from './pages/Vault/VaultPage.jsx';
+import ProfilePage from './pages/Profile/ProfilePage.jsx';
 
 export default function App() {
   return (
@@ -40,12 +41,14 @@ export default function App() {
         <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><PostPoolPage /></ModuleRoute>} />
         <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
         <Route path="/settings" element={<ModuleRoute moduleId="settings"><SettingsPage /></ModuleRoute>} />
-        <Route path="/settings/change-password" element={<ModuleRoute moduleId="settings"><ChangePasswordPage /></ModuleRoute>} />
+        <Route path="/settings/change-password" element={<Navigate to="/profile/change-password" replace />} />
         <Route path="/logs" element={<ModuleRoute moduleId="logs"><LogsPage /></ModuleRoute>} />
         <Route path="/activity" element={<ModuleRoute moduleId="activity"><ActivityPage /></ModuleRoute>} />
         <Route path="/accounts" element={<AdminRoute><ModuleRoute moduleId="accounts"><AccountsPage /></ModuleRoute></AdminRoute>} />
         <Route path="/messages" element={<ModuleRoute moduleId="messages"><MessagingPage /></ModuleRoute>} />
         <Route path="/vault" element={<ModuleRoute moduleId="vault"><VaultPage /></ModuleRoute>} />
+        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/profile/change-password" element={<ChangePasswordPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

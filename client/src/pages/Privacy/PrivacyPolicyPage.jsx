@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Logo } from '../../components/ui.jsx';
 
 // Edit these two as needed.
-const LAST_UPDATED = 'June 11, 2026';
+const LAST_UPDATED = 'June 18, 2026';
 const CONTACT_EMAIL = 'sixpent3@gmail.com';
 
 export default function PrivacyPolicyPage() {
@@ -17,12 +17,13 @@ export default function PrivacyPolicyPage() {
 
         <p>
           This Privacy Policy explains how <strong>pwise</strong> (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;,
-          the &ldquo;App&rdquo;) collects, uses, and protects your information. pwise is a social-media post scheduling
-          tool available at <a href="https://pwise.sixpent.com">pwise.sixpent.com</a> that lets you connect and manage
-          one or more Facebook Pages you own or administer; any such Page can be bound to your account. This policy
-          applies to every Page you connect, regardless of its name or brand. The App is intended for internal and
-          personal use only and is not offered as a public or commercial service. By using the App, you agree to this
-          policy.
+          the &ldquo;App&rdquo;) collects, uses, and protects your information. pwise is a social-media management tool
+          available at <a href="https://pwise.sixpent.com">pwise.sixpent.com</a> that lets you connect and manage one or
+          more Facebook Pages you own or administer — scheduling and publishing posts, storing shared files in a team
+          Vault, and handling customer messages from a shared inbox. You may also optionally attach a Telegram bot to a
+          connected Page. Any such Page can be bound to your account, and this policy applies to every channel you
+          connect, regardless of its name or brand. The App is intended for internal and personal use only and is not
+          offered as a public or commercial service. By using the App, you agree to this policy.
         </p>
 
         <h2>1. Information We Collect</h2>
@@ -32,7 +33,8 @@ export default function PrivacyPolicyPage() {
           </li>
           <li>
             <strong>Content you provide</strong> — images, videos, captions, scheduling details, content-planning
-            notes, and video templates you create in the App.
+            notes, video templates, and any files you upload to the shared team Vault. Uploaded images and videos may
+            have a small preview thumbnail generated automatically.
           </li>
           <li>
             <strong>Facebook Page data</strong> — you may connect one or more Facebook Pages that you manage. For each
@@ -42,6 +44,17 @@ export default function PrivacyPolicyPage() {
             behalf; and Page-level insights such as reach and impressions. We record these figures over time so we can
             show you historical trends for each Page. Every connected Page is handled the same way and kept separate from
             your other Pages.
+          </li>
+          <li>
+            <strong>Telegram bots</strong> — you may optionally connect a Telegram bot to a Page by providing its bot
+            token (API key) and name. We store the token encrypted and use it only to send and receive messages through
+            that bot.
+          </li>
+          <li>
+            <strong>Customer messages</strong> — when someone messages a Facebook Page or Telegram bot you have
+            connected, we receive and store that conversation so your team can read and reply to it. This may include
+            the sender&rsquo;s name or handle, their profile picture, the message text, and any photos, videos, or files
+            they send.
           </li>
           <li>
             <strong>Usage and logs</strong> — records of posting attempts and their results, used to operate and
@@ -57,6 +70,11 @@ export default function PrivacyPolicyPage() {
           <li>
             To record engagement and Page-level insights (such as reach and impressions) over time and show you
             analytics and historical trends, per Page, for the content the App published.
+          </li>
+          <li>To store files your team uploads to the shared Vault and make them available across your workspace.</li>
+          <li>
+            To receive customer messages from your connected channels and let your team view and reply to them from a
+            shared inbox.
           </li>
           <li>To send you operational emails, such as posting results and low-content alerts.</li>
         </ul>
@@ -77,30 +95,49 @@ export default function PrivacyPolicyPage() {
 
         <h2>4. How We Store and Protect Your Data</h2>
         <p>
-          Your account data is stored in a secured database, and your uploaded media is stored privately on Amazon Web
-          Services (Amazon S3). Facebook Page access tokens and related credentials are encrypted at rest and used only
-          to perform actions you have authorized; they are deleted when you disconnect the Page or delete your account.
-          Data is transmitted over encrypted (HTTPS) connections.
+          Your account data, content, and customer conversations are stored in a secured database, and uploaded media —
+          including Vault files, post media, generated thumbnails, and message attachments — is stored privately on
+          Amazon Web Services (Amazon S3). Connected-channel credentials (Facebook Page access tokens and Telegram bot
+          tokens) are encrypted at rest and used only to perform actions you have authorized; they are deleted when you
+          disconnect the channel or delete your account. Data is transmitted over encrypted (HTTPS) connections.
         </p>
 
         <h2>5. How We Share Your Information</h2>
-        <p>
-          We do <strong>not</strong> sell your personal information. We share data only as needed to run the service:
-          with <strong>Meta / Facebook</strong>, to publish the content you schedule; with infrastructure providers
-          (such as Amazon Web Services) that host our application and store your media on our behalf; and, when you use
-          the optional &ldquo;Generate with Template&rdquo; feature, with a <strong>third-party video-rendering
-          provider</strong> that processes your input video and caption to produce the finished video.
-        </p>
+        <p>We do <strong>not</strong> sell your personal information. We share data only as needed to run the service:</p>
+        <ul>
+          <li>
+            with <strong>Meta / Facebook</strong>, to publish the content you schedule and to read the Page data
+            described above;
+          </li>
+          <li>
+            with <strong>Telegram</strong>, when you connect a Telegram bot, to send and receive messages through it;
+          </li>
+          <li>
+            with <strong>infrastructure providers</strong> (such as Amazon Web Services) that host our application and
+            store your files and media on our behalf;
+          </li>
+          <li>
+            with an <strong>automation / workflow provider</strong> that we use to publish your posts and to deliver
+            incoming customer messages from your connected channels into the App; and
+          </li>
+          <li>
+            when you use the optional &ldquo;Generate with Template&rdquo; feature, with a{' '}
+            <strong>third-party video-rendering provider</strong> that processes your input video and caption to produce
+            the finished video.
+          </li>
+        </ul>
 
         <h2>6. Data Retention and Deletion</h2>
         <p>
           We retain your information for as long as your account is active. You may request access to, correction of, or
           deletion of your data at any time. To request deletion, email{' '}
           <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> with the subject line &ldquo;Delete my data&rdquo; from
-          the address associated with your account, and we will delete your account and its associated content from our
-          systems. You can also revoke the App&rsquo;s access to any connected Facebook Page at any time from your
-          Facebook settings (Settings &rarr; Business Integrations); revoking access stops the App from accessing that
-          Page.
+          the address associated with your account, and we will delete your account and its associated content
+          (including uploaded files and stored conversations) from our systems. Admins can also remove a connected
+          channel (a Facebook Page or its attached Telegram bot) at any time from the App&rsquo;s settings, which deletes
+          that channel&rsquo;s stored credentials. You can also revoke the App&rsquo;s access to any connected Facebook
+          Page at any time from your Facebook settings (Settings &rarr; Business Integrations); revoking access stops the
+          App from accessing that Page.
         </p>
 
         <h2>7. Cookies and Local Storage</h2>

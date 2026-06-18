@@ -8,7 +8,7 @@
 --   * Timestamps are DATETIME storing UTC (the app converts to each user's
 --     `timezone`). created_at/updated_at use DEFAULT CURRENT_TIMESTAMP +
 --     ON UPDATE CURRENT_TIMESTAMP, so MySQL maintains updated_at natively
---     (no trigger needed). Wall-clock posting windows stay as TIME.
+--     (no trigger needed).
 --   * status / media_type use CHECK constraints (enforced on MySQL 8.0.16+).
 --   * Foreign keys are table-level — MySQL silently ignores inline column
 --     REFERENCES, so they must be declared as constraints.
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role          VARCHAR(20) NOT NULL DEFAULT 'user',
   module_access JSON NULL,
+  avatar_s3_key TEXT NULL,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   deleted_at    DATETIME NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS post_pool (
   media_type      VARCHAR(50),
   media_url       TEXT,
   s3_key          TEXT,
+  thumbnail_s3_key TEXT,                       -- optimized still (first video frame / downscaled image) for previews
   target_platform VARCHAR(100),
   account_id      INT NULL,                    -- which connected page this post publishes to
   status          VARCHAR(50) NOT NULL DEFAULT 'draft',
@@ -87,7 +89,7 @@ CREATE TABLE IF NOT EXISTS post_pool (
   CONSTRAINT fk_post_pool_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_post_pool_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE SET NULL,
   CONSTRAINT chk_post_pool_status
-    CHECK (status IN ('draft','ready','posting','posted','failed','archived','expired')),
+    CHECK (status IN ('draft','ready','posting','posted','failed','archived','expired','deleted')),
   CONSTRAINT chk_post_pool_media_type
     CHECK (media_type IS NULL OR media_type IN ('image','video')),
   -- Supports the scheduler claim query:
@@ -145,6 +147,9 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   app_secret       TEXT,                        -- ENCRYPTED
   app_client_token TEXT,                        -- ENCRYPTED
   access_token     TEXT,                        -- ENCRYPTED page access token
+  telegram_bot_name     VARCHAR(255),           -- optional Telegram bot attached to this page
+  telegram_bot_token    TEXT,                   -- ENCRYPTED Telegram bot API key
+  telegram_bot_username VARCHAR(255),           -- Telegram bot @username (from getMe)
   refresh_token    TEXT,                        -- ENCRYPTED (reserved)
   token_expires_at DATETIME NULL,
   is_active        BOOLEAN NOT NULL DEFAULT TRUE,
@@ -247,6 +252,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   customer_avatar TEXT,
   origin          VARCHAR(50),                              -- Messenger | Instagram | WhatsApp | Telegram
   handled_by      VARCHAR(20) NOT NULL DEFAULT 'AI Agent',  -- 'AI Agent' | 'Live Agent'
+  assigned_user_id   INT NULL,                              -- owner when handled by a Live Agent
+  assigned_user_name VARCHAR(255),                          -- snapshot for display
   status          VARCHAR(80),
   tags            JSON NULL,
   summary         TEXT,
@@ -255,6 +262,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_conversations_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_conversations_assignee FOREIGN KEY (assigned_user_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT chk_conversations_handled CHECK (handled_by IN ('AI Agent', 'Live Agent')),
   INDEX idx_conversations_account (account_id, last_message_at),
   INDEX idx_conversations_activity (last_message_at DESC)
@@ -275,4 +283,49 @@ CREATE TABLE IF NOT EXISTS messages (
   CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   CONSTRAINT chk_messages_side CHECK (side IN ('incoming', 'outgoing')),
   INDEX idx_messages_conversation (conversation_id, created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- vault_items — shared file manager (folders + files in one self-referencing tree)
+-- Global like the rest of the app: every signed-in user sees/edits all items.
+-- Files carry an S3 key (+ optional thumbnail). Folder deletes cascade to children
+-- (the app deletes their S3 objects first). user_id = uploader (audit).
+CREATE TABLE IF NOT EXISTS vault_items (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  parent_id        INT NULL,                       -- NULL = root ("Main")
+  type             VARCHAR(10) NOT NULL,           -- 'folder' | 'file'
+  name             VARCHAR(255) NOT NULL,
+  media_type       VARCHAR(20),                    -- 'image' | 'video' | 'file' (files only)
+  mime_type        VARCHAR(150),
+  s3_key           TEXT,                           -- files only
+  thumbnail_s3_key TEXT,                           -- optimized still (images/videos)
+  size             BIGINT NOT NULL DEFAULT 0,
+  user_id          INT NULL,                       -- uploader (audit)
+  uploaded_by      VARCHAR(255),                   -- snapshot name for durable display
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_vault_parent FOREIGN KEY (parent_id) REFERENCES vault_items(id) ON DELETE CASCADE,
+  CONSTRAINT fk_vault_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT chk_vault_type CHECK (type IN ('folder', 'file')),
+  INDEX idx_vault_parent (parent_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- conversation_transfers — handoff of a Live Agent conversation to another user --
+-- The recipient (to_user_id) must accept before ownership (conversations.assigned_user_id)
+-- actually moves. One pending transfer per conversation at a time.
+CREATE TABLE IF NOT EXISTS conversation_transfers (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  conversation_id INT NOT NULL,
+  from_user_id    INT NULL,
+  from_user_name  VARCHAR(255),
+  to_user_id      INT NOT NULL,
+  to_user_name    VARCHAR(255),
+  status          VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending | accepted | declined | cancelled
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  responded_at    DATETIME NULL,
+  CONSTRAINT fk_transfer_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  CONSTRAINT fk_transfer_from FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_transfer_to FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT chk_transfer_status CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled')),
+  INDEX idx_transfer_to_pending (to_user_id, status),
+  INDEX idx_transfer_conversation (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

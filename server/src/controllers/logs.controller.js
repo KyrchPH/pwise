@@ -4,8 +4,7 @@ import * as service from '../services/logs.service.js';
 
 export const list = asyncHandler(async (req, res) => {
   const { limit, offset } = req.query;
-  const logs = await service.list({ limit, offset });
-  sendSuccess(res, { logs });
+  sendSuccess(res, await service.list({ limit, offset }));
 });
 
 export const get = asyncHandler(async (req, res) => {

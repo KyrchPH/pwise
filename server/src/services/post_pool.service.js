@@ -19,7 +19,7 @@ async function pageCtx(post) {
   }
 }
 
-const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
+const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired', 'deleted'];
 const ALLOWED_MEDIA = ['image', 'video'];
 
 // Engagement counts older than this are re-read from Facebook when a post is
@@ -58,15 +58,28 @@ function truthy(v) {
   return v === '1' || v === 1 || v === true || v === 'true';
 }
 
-// Attach a short-lived presigned GET URL so the UI can show a real thumbnail
-// of the (private) S3 media. null if there's no media or S3 isn't configured.
+// Attach short-lived presigned GET URLs so the UI can show the (private) S3
+// media. `media_preview_url` is the full file; `thumbnail_preview_url` is the
+// optimized still generated at upload (a video's first frame / a downscaled
+// image) — used wherever a lightweight preview is enough. Either is null when
+// absent or S3 isn't configured.
 async function withMediaPreview(post) {
-  if (!post.s3_key) return { ...post, media_preview_url: null };
-  try {
-    return { ...post, media_preview_url: await createDownloadUrl(post.s3_key) };
-  } catch {
-    return { ...post, media_preview_url: null };
+  const out = { ...post, media_preview_url: null, thumbnail_preview_url: null };
+  if (post.s3_key) {
+    try {
+      out.media_preview_url = await createDownloadUrl(post.s3_key);
+    } catch {
+      /* S3 not configured / object missing */
+    }
   }
+  if (post.thumbnail_s3_key) {
+    try {
+      out.thumbnail_preview_url = await createDownloadUrl(post.thumbnail_s3_key);
+    } catch {
+      /* S3 not configured / object missing */
+    }
+  }
+  return out;
 }
 
 // One post per scheduled slot — GLOBAL now (the pool is shared and everything
@@ -75,7 +88,7 @@ async function withMediaPreview(post) {
 async function assertSlotFree(scheduledDate, excludeId = null) {
   if (!scheduledDate) return;
   let sql = `SELECT id FROM post_pool
-             WHERE scheduled_at = ? AND status NOT IN ('posted', 'failed', 'archived', 'expired')`;
+             WHERE scheduled_at = ? AND status NOT IN ('posted', 'failed', 'archived', 'expired', 'deleted')`;
   const params = [scheduledDate];
   if (excludeId != null) {
     sql += ' AND id <> ?';
@@ -91,7 +104,7 @@ export async function isSlotFree(scheduledAt, excludeId = null) {
   const schedule = normalizeScheduledAt(scheduledAt); // validates :00/:30 boundary
   if (!schedule) return true;
   let sql = `SELECT id FROM post_pool
-             WHERE scheduled_at = ? AND status NOT IN ('posted', 'failed', 'archived', 'expired')`;
+             WHERE scheduled_at = ? AND status NOT IN ('posted', 'failed', 'archived', 'expired', 'deleted')`;
   const params = [schedule];
   if (excludeId != null) {
     sql += ' AND id <> ?';
@@ -143,7 +156,17 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
   if (post.status !== 'posted' || !post.platform_post_id) return { comments: [], nextCursor: null };
   const lim = Math.min(Math.max(Number(limit) || 25, 1), 50);
   const { token } = await pageCtx(post);
-  return fb.listComments(post.platform_post_id, { after: after || null, limit: lim }, token);
+  try {
+    return await fb.listComments(post.platform_post_id, { after: after || null, limit: lim }, token);
+  } catch (err) {
+    // The post no longer exists on Facebook (deleted there) → mark it 'deleted'
+    // here and tell the viewer, so the user can re-post or remove it.
+    if (fb.isObjectGoneError(err)) {
+      await query("UPDATE post_pool SET status = 'deleted' WHERE id = ?", [id]);
+      return { comments: [], nextCursor: null, postDeleted: true };
+    }
+    throw err;
+  }
 }
 
 // `actor` = { id, name } of the signed-in user creating the post (recorded as
@@ -154,6 +177,7 @@ export async function create(actor = {}, data = {}) {
     media_type = null,
     media_url = null,
     s3_key = null,
+    thumbnail_s3_key = null,
     target_platform = 'facebook',
     status = 'ready',
     priority = 0,
@@ -169,9 +193,9 @@ export async function create(actor = {}, data = {}) {
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
 
-  // "Post now" (immediate) is handed straight to n8n via the webhook below, NOT
-  // the scheduled claim: scheduled_at stays NULL so claimNext / expireOverdue skip
-  // it, and it goes in as 'posting' (in-flight) until n8n marks it posted/failed.
+  // "Post now" (immediate) is handed straight to n8n via the webhook below, not
+  // the scheduled drain: scheduled_at stays NULL so claimNextBatch / expireOverdue
+  // skip it, and it goes in as 'posting' until n8n marks it posted/failed.
   // Scheduled posts keep the slot-checked :00/:30 path.
   const isImmediate = truthy(immediate);
   let schedule;
@@ -191,9 +215,9 @@ export async function create(actor = {}, data = {}) {
   // scheduler/posting falls back to the env page during rollout).
   const accountId = actor.id != null ? await getSelectedAccountId(actor.id) : null;
   const result = await query(
-    `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, target_platform, account_id, status, priority, scheduled_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [actor.id, caption, media_type, media_url, s3_key, target_platform, accountId, isImmediate ? 'posting' : status, Number(priority) || 0, schedule],
+    `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, thumbnail_s3_key, target_platform, account_id, status, priority, scheduled_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [actor.id, caption, media_type, media_url, s3_key, thumbnail_s3_key, target_platform, accountId, isImmediate ? 'posting' : status, Number(priority) || 0, schedule],
   );
   await activity.log({
     postId: result.insertId,
@@ -222,7 +246,7 @@ export async function create(actor = {}, data = {}) {
 }
 
 // Push a "Post now" post to the n8n "Post to n8n" webhook for immediate
-// publishing. Mirrors the shape claimNext hands n8n (data.post with a presigned
+// publishing. Mirrors the scheduled drain payload (data.post with a presigned
 // media URL + the page's decrypted creds) so the same posting nodes consume it;
 // `for_automation: false` routes n8n's IF to the publish branch (not generate).
 async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId, target_platform }) {
@@ -270,8 +294,8 @@ async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId
 // eyes it; n8n reports the outcome back via /posts/:id/posted|failed.
 export async function retryNow(id, actor = {}) {
   const post = await getById(id); // 404 if missing
-  if (post.status !== 'failed' && post.status !== 'expired') {
-    throw ApiError.badRequest(`only failed or expired posts can be retried (this one is '${post.status}')`);
+  if (post.status !== 'failed' && post.status !== 'expired' && post.status !== 'deleted') {
+    throw ApiError.badRequest(`only failed, expired, or deleted posts can be retried (this one is '${post.status}')`);
   }
   if (!env.n8n.postWebhookUrl) {
     throw new ApiError(503, 'Retry is disabled: N8N_POST_WEBHOOK_URL (or N8N_GENERATE_WEBHOOK_URL) is not configured');
@@ -309,7 +333,7 @@ export async function retryNow(id, actor = {}) {
 export async function update(id, data = {}, actor = {}) {
   const existing = await getById(id); // existence check
 
-  const editable = ['caption', 'media_type', 'media_url', 's3_key', 'target_platform', 'status', 'priority', 'scheduled_at'];
+  const editable = ['caption', 'media_type', 'media_url', 's3_key', 'thumbnail_s3_key', 'target_platform', 'status', 'priority', 'scheduled_at'];
   const fields = [];
   const params = [];
   const changed = [];
@@ -395,6 +419,7 @@ export async function remove(id, actor = {}) {
   }
   await query('DELETE FROM post_pool WHERE id = ?', [id]);
   if (post.s3_key) await deleteObject(post.s3_key); // best-effort: clean up the media in S3
+  if (post.thumbnail_s3_key) await deleteObject(post.thumbnail_s3_key); // and its thumbnail
   await activity.log({
     postId: null, // row is gone (the FK would null it anyway)
     userId: actor.id,

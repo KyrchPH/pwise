@@ -1,16 +1,16 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useAuth } from './AuthContext.jsx';
+import * as vaultApi from '../services/vault.service.js';
+import * as upload from '../services/upload.service.js';
 
 /**
- * Vault — the app's global, shared file explorer. Every signed-in user sees the
- * same files and folders; they can upload, view, download and delete. This is the
- * ONLY place the app imports files from (e.g. the chat media picker reads from
- * here). For now it's an in-memory prototype seeded with sample data; the real
- * backend stores objects in S3 (a follow-up). State lives at the app root so the
- * Vault page and the chat picker share one source of truth for the session.
+ * Vault — the app's global, shared file manager. Every signed-in user sees the
+ * same folders and files; they can upload, view, download and delete. Files live
+ * in S3 and are recorded in the `vault_items` table; this provider fetches the
+ * whole tree once and slices it per-folder client-side, so the Vault page and the
+ * chat media picker share one source of truth. Mutations go through the API.
  */
 
-let seq = 100;
-const nextId = () => `vault-${(seq += 1)}`;
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif']);
 const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv']);
 
@@ -31,43 +31,34 @@ export function getVaultMediaType(item) {
   return 'file';
 }
 
-// Reliable, offline thumbnail: a labelled gradient as an SVG data URI, so sample
-// "photos" always render even without a network / real S3 objects.
-function svgThumb(label, c1, c2) {
-  const svg =
-    `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300'>` +
-    `<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>` +
-    `<stop offset='0' stop-color='${c1}'/><stop offset='1' stop-color='${c2}'/></linearGradient></defs>` +
-    `<rect width='400' height='300' fill='url(#g)'/>` +
-    `<text x='50%' y='53%' fill='rgba(255,255,255,0.92)' font-family='sans-serif' font-size='26' font-weight='700' text-anchor='middle'>${label}</text>` +
-    `</svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function seedItems() {
-  const items = [];
-  const make = (item) => {
-    const it = { id: nextId(), createdAt: Date.now(), uploadedBy: 'Demo User', size: 0, ...item };
-    items.push(it);
-    return it;
-  };
-  const brand = make({ name: 'Brand Assets', type: 'folder', parentId: null });
-  const proofs = make({ name: 'Job Proofs', type: 'folder', parentId: null });
-  make({ name: 'logo-primary.png', type: 'file', mediaType: 'image', parentId: null, size: 84_213, url: svgThumb('logo-primary', '#1f9be6', '#0f6fbb') });
-  make({ name: 'price-list.pdf', type: 'file', mediaType: 'file', parentId: null, size: 220_140, url: '' });
-  make({ name: 'storefront.jpg', type: 'file', mediaType: 'image', parentId: brand.id, size: 512_900, url: svgThumb('storefront', '#ffc400', '#f3ad00') });
-  make({ name: 'mascot.png', type: 'file', mediaType: 'image', parentId: brand.id, size: 130_400, url: svgThumb('mascot', '#45b0f2', '#1f9be6') });
-  make({ name: 'sofa-before.jpg', type: 'file', mediaType: 'image', parentId: proofs.id, size: 410_220, url: svgThumb('sofa-before', '#8e7bef', '#5b46c9') });
-  make({ name: 'sofa-after.jpg', type: 'file', mediaType: 'image', parentId: proofs.id, size: 398_110, url: svgThumb('sofa-after', '#2dc878', '#1f8a55') });
-  make({ name: 'mattress-clean.jpg', type: 'file', mediaType: 'image', parentId: proofs.id, size: 367_540, url: svgThumb('mattress', '#ff8f6b', '#e0574a') });
-  make({ name: 'demo-clean.mp4', type: 'file', mediaType: 'video', parentId: proofs.id, size: 4_980_220, url: '' });
-  return items;
-}
-
 const VaultContext = createContext(null);
 
 export function VaultProvider({ children }) {
-  const [items, setItems] = useState(seedItems);
+  const { isAuthenticated } = useAuth();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    if (!isAuthenticated) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const list = await vaultApi.list();
+      setItems(list);
+      setError(null);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const childrenOf = useCallback(
     (parentId) => items.filter((it) => it.parentId === (parentId ?? null)),
@@ -90,42 +81,81 @@ export function VaultProvider({ children }) {
     [items],
   );
 
-  const createFolder = useCallback((parentId, name) => {
+  const createFolder = useCallback(async (parentId, name) => {
     const clean = (name || '').trim();
-    if (!clean) return;
-    setItems((cur) => [
-      ...cur,
-      { id: nextId(), name: clean, type: 'folder', parentId: parentId ?? null, createdAt: Date.now(), uploadedBy: 'You' },
-    ]);
+    if (!clean) return null;
+    const item = await vaultApi.createFolder(parentId ?? null, clean);
+    setItems((cur) => [...cur, item]);
+    return item;
   }, []);
 
-  const uploadFiles = useCallback((parentId, fileList) => {
+  // Upload each file straight to S3 (presigned PUT), generate + upload an optimized
+  // thumbnail for images/videos, then record the file in the vault. Items appear as
+  // each one finishes. Reports progress per file via onProgress(index, patch) —
+  // patch is { status, percent, error? } where status is uploading|processing|done|error.
+  // Doesn't throw: one file's failure doesn't abort the rest. Returns { uploaded, failed }.
+  const uploadFiles = useCallback(async (parentId, fileList, onProgress) => {
     const files = Array.from(fileList || []);
-    if (!files.length) return;
-    setItems((cur) => [
-      ...cur,
-      ...files.map((f) => {
-        const mediaType = getVaultMediaType(f);
-        return {
-          id: nextId(),
-          name: f.name,
-          type: 'file',
+    if (!files.length) return { uploaded: 0, failed: 0 };
+    const report = (index, patch) => onProgress?.(index, patch);
+    let uploaded = 0;
+    let failed = 0;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const mediaType = getVaultMediaType(file);
+      const isMedia = mediaType === 'image' || mediaType === 'video';
+      try {
+        report(index, { status: 'uploading', percent: 0 });
+        const pres = await upload.getPresignedUrl(file.name, file.type || 'application/octet-stream', { vault: true });
+        // The S3 PUT is the bulk of the time — stream its 0..100 progress to the UI.
+        await upload.uploadToS3(pres.uploadUrl, file, (percent) => report(index, { status: 'uploading', percent }));
+
+        // Bytes are in S3; the thumbnail + DB record are quick — show a processing state.
+        report(index, { status: 'processing', percent: 100 });
+        let thumbnailS3Key = null;
+        if (isMedia) {
+          try {
+            const thumb = await upload.uploadThumbnail(file, { vault: true });
+            if (thumb) thumbnailS3Key = thumb.s3Key;
+          } catch {
+            /* best-effort — a file without a thumbnail still works */
+          }
+        }
+
+        const item = await vaultApi.createFile({
           parentId: parentId ?? null,
+          name: file.name,
+          s3Key: pres.s3Key,
+          thumbnailS3Key,
           mediaType,
-          // Blob URL previews the file for this session; on reload it falls back to
-          // a type icon (real previews come from S3 once the backend is wired).
-          url: mediaType === 'image' || mediaType === 'video' ? URL.createObjectURL(f) : '',
-          size: f.size,
-          createdAt: Date.now(),
-          uploadedBy: 'You',
-        };
-      }),
-    ]);
+          mime: file.type || null,
+          size: file.size,
+        });
+        setItems((cur) => [...cur, item]);
+        uploaded += 1;
+        report(index, { status: 'done', percent: 100 });
+      } catch (err) {
+        failed += 1;
+        report(index, { status: 'error', percent: 0, error: err?.message || 'Upload failed' });
+      }
+    }
+
+    return { uploaded, failed };
   }, []);
 
-  const deleteItem = useCallback((id) => {
+  // Move an item into another folder (parentId null → root). Updates the moved
+  // row's parentId locally so it re-slices into the new folder immediately.
+  const moveItem = useCallback(async (id, parentId) => {
+    const updated = await vaultApi.move(id, parentId ?? null);
+    setItems((cur) => cur.map((it) => (it.id === updated.id ? { ...it, ...updated } : it)));
+    return updated;
+  }, []);
+
+  const deleteItem = useCallback(async (id) => {
+    await vaultApi.remove(id);
     setItems((cur) => {
-      // Collect the item plus all of its descendants (for folders).
+      // Drop the item plus all of its descendants (the server cascades the rows).
       const doomed = new Set([id]);
       let grew = true;
       while (grew) {
@@ -137,16 +167,13 @@ export function VaultProvider({ children }) {
           }
         }
       }
-      cur.forEach((it) => {
-        if (doomed.has(it.id) && it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url);
-      });
       return cur.filter((it) => !doomed.has(it.id));
     });
   }, []);
 
   const value = useMemo(
-    () => ({ items, childrenOf, getItem, pathTo, createFolder, uploadFiles, deleteItem }),
-    [items, childrenOf, getItem, pathTo, createFolder, uploadFiles, deleteItem],
+    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem }),
+    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem],
   );
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
@@ -154,12 +181,15 @@ export function VaultProvider({ children }) {
 
 export const useVault = () => useContext(VaultContext);
 
-// Trigger a browser download for a vault file (best-effort for prototype URLs).
+// Open/download a vault file. The URL is a presigned S3 link; the `download`
+// attribute is ignored cross-origin, so this opens in a new tab (the browser
+// downloads non-viewable types and shows viewable ones to save).
 export function downloadVaultItem(item) {
   if (!item || !item.url) return;
   const a = document.createElement('a');
   a.href = item.url;
   a.download = item.name || 'download';
+  a.target = '_blank';
   a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
@@ -170,7 +200,7 @@ export function downloadVaultItem(item) {
 export function formatBytes(bytes) {
   const n = Number(bytes) || 0;
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n % 1024 === 0 ? 0 : 0)} KB`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }

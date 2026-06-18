@@ -3,10 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
     "db:migrate": "node src/db/migrate.js",
     "db:reset": "node src/db/migrate.js --reset",
     "db:seed": "node src/db/seed.js",
@@ -14,17 +11,24 @@
     "db:apply": "node src/db/apply.js",
     "db:setup": "node src/db/migrate.js && node src/db/seed.js",
     "db:migrate:accounts": "node src/db/apply.js database/migrations/001_accounts.sql",
+    "db:migrate:thumbnail": "node src/db/apply.js database/migrations/017_post_thumbnail.sql",
+    "db:migrate:telegram": "node src/db/apply.js database/migrations/018_telegram_channels.sql",
+    "db:migrate:vault": "node src/db/apply.js database/migrations/019_vault.sql",
+    "db:migrate:deleted-status": "node src/db/apply.js database/migrations/020_post_deleted_status.sql",
+    "db:migrate:conversation-assignment": "node src/db/apply.js database/migrations/021_conversation_assignment.sql",
+    "db:migrate:avatar": "node src/db/apply.js database/migrations/021_user_avatar.sql",
     "create-admin": "node src/create-admin.js",
+    "reset:demo": "node src/reset-demo.js",
     "s3:lifecycle": "node src/set-s3-lifecycle.js",
-    "fb:import-env": "node src/import-fb-env.js"
+    "fb:import-env": "node src/import-fb-env.js",
+    "fb:list-pages": "node src/list-fb-pages.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
-    "mysql2": "^3.11.0",
-    "node-cron": "^4.2.1"
+    "mysql2": "^3.11.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"

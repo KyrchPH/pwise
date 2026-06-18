@@ -19,6 +19,15 @@ function tokenOrThrow(token) {
   return t;
 }
 
+// Graph's "object no longer exists / can't be loaded" family — a published object
+// that was deleted (or whose permission was lost) on Facebook. Accepts either a
+// message string or an Error/ApiError.
+const OBJECT_GONE_RE = /do(es)?\s*not exist|cannot be loaded|Unsupported \w+ request/i;
+export function isObjectGoneError(messageOrError) {
+  const msg = typeof messageOrError === 'string' ? messageOrError : messageOrError?.message || '';
+  return OBJECT_GONE_RE.test(msg);
+}
+
 // Thin Graph API call against a single object id. The access token rides in the
 // query string for GET/DELETE and in the form body for POST.
 async function graph(id, { method = 'GET', fields = {}, token } = {}) {
@@ -60,7 +69,7 @@ export async function deletePost(platformPostId, token) {
   const { ok, error } = await graph(platformPostId, { method: 'DELETE', token });
   if (ok) return { deleted: true };
   const msg = error?.message || 'unknown error';
-  if (/do(es)?\s*not exist|cannot be loaded|Unsupported \w+ request/i.test(msg)) {
+  if (isObjectGoneError(msg)) {
     return { deleted: true, alreadyGone: true };
   }
   throw new ApiError(502, `Couldn't delete the post on Facebook: ${msg}`);

@@ -8,6 +8,8 @@ router.post('/register', ctrl.register); // requires a valid invite token in the
 router.post('/login', ctrl.login);
 router.get('/invite/:token', ctrl.validateInvite); // public: check an invite link
 router.get('/me', requireAuth, ctrl.me);
+router.patch('/me', requireAuth, ctrl.updateMe);
+router.patch('/me/avatar', requireAuth, ctrl.updateAvatar);
 router.post('/logout', requireAuth, ctrl.logout);
 
 // Email-verified password change (signed-in user). 3 steps: confirm current

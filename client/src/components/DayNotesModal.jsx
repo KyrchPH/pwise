@@ -311,7 +311,10 @@ export default function DayNotesModal({
               <ul className="day-posts__list">
                 {posts.map((p) => (
                   <li key={p.id} className="day-post">
-                    {p.media_preview_url ? (
+                    {p.thumbnail_preview_url ? (
+                      // Optimized still — avoids fetching the full clip for a row.
+                      <img className="day-post__thumb" src={p.thumbnail_preview_url} alt="" />
+                    ) : p.media_preview_url ? (
                       p.media_type === 'video' ? (
                         <video className="day-post__thumb" src={p.media_preview_url} muted preload="metadata" />
                       ) : (

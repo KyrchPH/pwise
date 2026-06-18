@@ -2,10 +2,13 @@ import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { encrypt, decrypt } from '../utils/crypto.util.js';
 import * as fb from './fb.service.js';
+import * as tg from './telegram.service.js';
 
-// The page list is shared/global (like the post pool); user_id is the admin
-// creator (audit). Secrets (app_secret, app_client_token, access_token) are
-// stored encrypted and NEVER returned to the browser.
+// Connected Facebook pages. The list is shared/global (like the post pool); user_id
+// is the admin creator (audit). Secrets (app_secret, app_client_token, access_token)
+// are stored encrypted and NEVER returned to the browser. A page may OPTIONALLY have
+// a Telegram bot attached (a bot can't exist without a page) — its API key lives in
+// the encrypted telegram_bot_token column alongside the page's own credentials.
 
 function toSafe(r) {
   return {
@@ -13,6 +16,11 @@ function toSafe(r) {
     account_name: r.account_name,
     fb_page_id: r.fb_page_id,
     app_id: r.app_id,
+    // Optional Telegram bot attached to this page (the token itself is never exposed;
+    // has_telegram_bot just says whether one is configured).
+    telegram_bot_name: r.telegram_bot_name || null,
+    telegram_bot_username: r.telegram_bot_username || null,
+    has_telegram_bot: !!r.telegram_bot_token,
     is_active: !!r.is_active,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -32,8 +40,8 @@ export async function getById(id) {
   return toSafe(rows[0]);
 }
 
-// Internal only — full row with decrypted credentials (for posting / Graph calls).
-// Never wire this to a client-facing response.
+// Internal only — full row with decrypted credentials (for posting / Graph calls /
+// future Telegram sends). Never wire this to a client-facing response.
 export async function getDecrypted(id) {
   const rows = await query('SELECT * FROM platform_accounts WHERE id = ?', [id]);
   if (!rows.length) throw ApiError.notFound('page not found');
@@ -46,6 +54,9 @@ export async function getDecrypted(id) {
     app_secret: decrypt(r.app_secret),
     app_client_token: decrypt(r.app_client_token),
     access_token: decrypt(r.access_token),
+    telegram_bot_name: r.telegram_bot_name || null,
+    telegram_bot_username: r.telegram_bot_username || null,
+    telegram_bot_token: decrypt(r.telegram_bot_token),
     is_active: !!r.is_active,
   };
 }
@@ -54,6 +65,15 @@ function requireStr(value, label) {
   const s = String(value ?? '').trim();
   if (!s) throw ApiError.badRequest(`${label} is required`);
   return s;
+}
+
+// Validate a Telegram bot API key against Telegram (getMe) and return the columns
+// to write: { token (encrypted), username }. Throws on an invalid key. Used by
+// create/update when a page is given a bot.
+async function resolveTelegramBot(apiKey) {
+  const me = await tg.getMe(apiKey);
+  if (!me.ok) throw ApiError.badRequest(me.error || 'Invalid Telegram bot API key');
+  return { token: encrypt(String(apiKey).trim()), username: me.username || null };
 }
 
 // Validate page credentials against Facebook BEFORE saving (the "Connect" step).
@@ -80,10 +100,25 @@ export async function create(actor = {}, data = {}) {
   const account_name = requireStr(data.account_name, 'page name');
   const fb_page_id = requireStr(data.fb_page_id, 'Facebook Page ID');
   const access_token = requireStr(data.access_token, 'page access token');
+
+  // Optional Telegram bot attached to this page. Only set when an API key is given;
+  // the key is validated (and the @username captured) via getMe.
+  let tgName = null;
+  let tgToken = null;
+  let tgUsername = null;
+  const apiKey = data.telegram_api_key ? String(data.telegram_api_key).trim() : '';
+  if (apiKey) {
+    const resolved = await resolveTelegramBot(apiKey);
+    tgToken = resolved.token;
+    tgUsername = resolved.username;
+    tgName = (data.telegram_bot_name && String(data.telegram_bot_name).trim()) || tgUsername || 'Telegram bot';
+  }
+
   const result = await query(
     `INSERT INTO platform_accounts
-       (user_id, platform_name, account_name, fb_page_id, app_id, app_secret, app_client_token, access_token, is_active)
-     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, 1)`,
+       (user_id, platform_name, account_name, fb_page_id, app_id, app_secret, app_client_token, access_token,
+        telegram_bot_name, telegram_bot_token, telegram_bot_username, is_active)
+     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     [
       actor.id ?? null,
       account_name,
@@ -92,13 +127,16 @@ export async function create(actor = {}, data = {}) {
       encrypt(data.app_secret),
       encrypt(data.app_client_token),
       encrypt(access_token),
+      tgName,
+      tgToken,
+      tgUsername,
     ],
   );
   return getById(result.insertId);
 }
 
 export async function update(id, data = {}) {
-  await getById(id); // existence
+  const existing = await getById(id); // existence (+ whether a bot is already attached)
   const fields = [];
   const params = [];
   const set = (col, val) => {
@@ -114,6 +152,26 @@ export async function update(id, data = {}) {
   if (data.app_secret) set('app_secret', encrypt(data.app_secret));
   if (data.app_client_token) set('app_client_token', encrypt(data.app_client_token));
   if (data.access_token) set('access_token', encrypt(data.access_token));
+
+  // Optional Telegram bot: detach it, (re)connect a key, and/or rename it.
+  if (data.telegram_remove) {
+    set('telegram_bot_name', null);
+    set('telegram_bot_token', null);
+    set('telegram_bot_username', null);
+  } else {
+    const apiKey = data.telegram_api_key ? String(data.telegram_api_key).trim() : '';
+    if (apiKey) {
+      const resolved = await resolveTelegramBot(apiKey);
+      set('telegram_bot_token', resolved.token);
+      set('telegram_bot_username', resolved.username);
+    }
+    // Only persist a bot name when there's actually a bot (an incoming key now, or
+    // one already attached) — avoids leaving a dangling name with no token.
+    if (data.telegram_bot_name !== undefined && (apiKey || existing.has_telegram_bot)) {
+      set('telegram_bot_name', String(data.telegram_bot_name).trim() || existing.telegram_bot_username || 'Telegram bot');
+    }
+  }
+
   if (fields.length) {
     params.push(id);
     await query(`UPDATE platform_accounts SET ${fields.join(', ')} WHERE id = ?`, params);

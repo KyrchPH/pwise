@@ -31,6 +31,35 @@ export async function takeOver(id) {
   return data.data.conversation;
 }
 
+// ── Transfers ────────────────────────────────────────────────────────────────
+// Teammates a chat can be transferred to (active users with Messaging access).
+export async function agents() {
+  const { data } = await api.get('/messages/agents');
+  return data.data.agents; // [{ id, name, email }]
+}
+
+// Pending transfer requests addressed to me.
+export async function incomingTransfers() {
+  const { data } = await api.get('/messages/transfers/incoming');
+  return data.data.transfers;
+}
+
+// Hand a conversation off to another agent (they must accept).
+export async function requestTransfer(conversationId, toUserId) {
+  const { data } = await api.post(`/messages/${conversationId}/transfer`, { toUserId });
+  return data.data.transfer;
+}
+
+export async function acceptTransfer(transferId) {
+  const { data } = await api.post(`/messages/transfers/${transferId}/accept`);
+  return data.data; // { accepted, conversationId }
+}
+
+export async function declineTransfer(transferId) {
+  const { data } = await api.post(`/messages/transfers/${transferId}/decline`);
+  return data.data;
+}
+
 /**
  * Subscribe to live inbox events over SSE. `onEvent` receives parsed event
  * objects ({ type: 'message:new' | 'conversation:updated', ... }). Returns an

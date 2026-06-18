@@ -74,7 +74,7 @@ The system is split into a **management app** and an **automation engine**:
 - **Safety:** if the Facebook action fails, the local change is aborted and the error surfaced, so the app and the live page never silently drift; an already-deleted post is handled gracefully.
 
 ### 7. Settings
-- **Auto-posting** master toggle.
+- **Scheduled publishing** master toggle.
 - **Timezone** selection.
 - **Low-pool alert threshold** + **owner email** for notifications.
 

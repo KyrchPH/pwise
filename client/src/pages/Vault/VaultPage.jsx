@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Dropdown, Modal } from '../../components/ui.jsx';
+import { Button, Card, Dropdown, Modal, Spinner } from '../../components/ui.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { downloadVaultItem, formatBytes, getVaultMediaType, useVault } from '../../context/VaultContext.jsx';
+import { apiError } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 
 function DownloadIcon() {
   return (
@@ -22,11 +24,22 @@ function TrashIcon() {
   );
 }
 
-function PlusIcon() {
+function UploadIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+      <line x1="12" y1="11" x2="12" y2="17" />
+      <line x1="9" y1="14" x2="15" y2="14" />
     </svg>
   );
 }
@@ -36,6 +49,15 @@ function SearchIcon() {
     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="11" cy="11" r="7" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
     </svg>
   );
 }
@@ -88,19 +110,32 @@ function sortVaultItems(items, sortMode) {
   });
 }
 
+function uploadStatusLabel(entry) {
+  if (entry.status === 'error') return entry.error || 'Failed';
+  if (entry.status === 'done') return 'Done';
+  if (entry.status === 'processing') return 'Processing…';
+  if (entry.status === 'uploading') return `${entry.percent || 0}%`;
+  return 'Waiting…';
+}
+
 export default function VaultPage() {
-  const { childrenOf, pathTo, createFolder, uploadFiles, deleteItem } = useVault();
+  const toast = useToast();
+  const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading } = useVault();
   const [folderId, setFolderId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadQueue, setUploadQueue] = useState([]); // [{ name, size, percent, status, error }]
+  const [deleting, setDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortMode, setSortMode] = useState('name');
+  const [dragId, setDragId] = useState(null); // item being dragged
+  const [dropTargetId, setDropTargetId] = useState(null); // folder id or 'root' highlighted as a drop target
   const fileInputRef = useRef(null);
-  const addMenuRef = useRef(null);
 
   const items = childrenOf(folderId);
   const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -122,49 +157,125 @@ export default function VaultPage() {
   const visibleCount = folders.length + files.length;
   const filtersActive = Boolean(normalizedQuery) || typeFilter !== 'all';
 
+  const handleUpload = async (event) => {
+    // Copy the FileList into a real array BEFORE clearing the input. `event.target.files`
+    // is live, so resetting value (to allow re-picking the same file) empties it — read
+    // it first or the upload silently no-ops with zero files.
+    const selected = Array.from(event.target.files || []);
+    event.target.value = ''; // allow re-selecting the same file(s)
+    if (!selected.length) return;
+    setUploadQueue(selected.map((f) => ({ name: f.name, size: f.size, percent: 0, status: 'pending' })));
+    setUploading(true);
+    try {
+      const { uploaded, failed } = await uploadFiles(folderId, selected, (index, patch) => {
+        setUploadQueue((cur) => cur.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+      });
+      if (failed === 0) {
+        toast.success(`Uploaded ${uploaded} file${uploaded === 1 ? '' : 's'}`);
+      } else if (uploaded === 0) {
+        toast.error(`Upload failed for ${failed} file${failed === 1 ? '' : 's'}`);
+      } else {
+        toast.error(`Uploaded ${uploaded}, but ${failed} failed`);
+      }
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Auto-dismiss the progress dialog shortly after a clean run; keep it open when
+  // something failed so the user can see which file(s) and why.
   useEffect(() => {
-    if (!addMenuOpen) return undefined;
-    const onDown = (event) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(event.target)) setAddMenuOpen(false);
-    };
-    const onKey = (event) => {
-      if (event.key === 'Escape') setAddMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [addMenuOpen]);
+    if (uploading || !uploadQueue.length) return undefined;
+    if (!uploadQueue.every((f) => f.status === 'done')) return undefined;
+    const timer = setTimeout(() => setUploadQueue([]), 1000);
+    return () => clearTimeout(timer);
+  }, [uploading, uploadQueue]);
 
-  const handleUpload = (event) => {
-    uploadFiles(folderId, event.target.files);
-    event.target.value = '';
-    setAddMenuOpen(false);
+  const closeUploadDialog = () => {
+    if (!uploading) setUploadQueue([]);
   };
 
-  const submitFolder = () => {
+  const submitFolder = async () => {
     const name = newFolderName.trim();
-    if (!name) return;
-    createFolder(folderId, name);
-    setNewFolderName('');
-    setNewFolderOpen(false);
+    if (!name || creatingFolder) return;
+    setCreatingFolder(true);
+    try {
+      await createFolder(folderId, name);
+      toast.success('Folder created');
+      setNewFolderName('');
+      setNewFolderOpen(false);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setCreatingFolder(false);
+    }
   };
 
-  const doDelete = () => {
-    if (confirmDelete) deleteItem(confirmDelete.id);
-    setConfirmDelete(null);
+  const doDelete = async () => {
+    if (!confirmDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await deleteItem(confirmDelete.id);
+      setConfirmDelete(null);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setDeleting(false);
+    }
   };
 
-  const openNewFolder = () => {
-    setAddMenuOpen(false);
-    setNewFolderOpen(true);
-  };
+  const openNewFolder = () => setNewFolderOpen(true);
+  const openUploadPicker = () => fileInputRef.current?.click();
+  // Up one level: the second-to-last crumb is the parent (none → back to root).
+  const goBack = () => setFolderId(trail[trail.length - 2]?.id ?? null);
 
-  const openUploadPicker = () => {
-    setAddMenuOpen(false);
-    fileInputRef.current?.click();
+  // ── Drag-and-drop: drag an item card onto a folder (card or breadcrumb) to move
+  // it. The breadcrumb "Main" uses the 'root' key (→ parentId null). ───────────
+  const onItemDragStart = (event, item) => {
+    setDragId(item.id);
+    event.dataTransfer.effectAllowed = 'move';
+    try {
+      event.dataTransfer.setData('text/plain', item.name || '');
+    } catch {
+      /* some browsers reject setData before the drag image is ready */
+    }
+  };
+  const onItemDragEnd = () => {
+    setDragId(null);
+    setDropTargetId(null);
+  };
+  // A target accepts the drop while something is being dragged that isn't itself.
+  const canDropOn = (targetKey) => dragId != null && dragId !== targetKey;
+  const onDropZoneOver = (event, targetKey) => {
+    if (!canDropOn(targetKey)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropTargetId !== targetKey) setDropTargetId(targetKey);
+  };
+  const onDropZoneLeave = (event, targetKey) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return; // moving within the zone
+    setDropTargetId((cur) => (cur === targetKey ? null : cur));
+  };
+  const onDropZoneDrop = (event, targetKey) => {
+    if (!canDropOn(targetKey)) return;
+    event.preventDefault();
+    const id = dragId;
+    setDropTargetId(null);
+    setDragId(null);
+    doMove(id, targetKey === 'root' ? null : targetKey);
+  };
+  const doMove = async (id, parentId) => {
+    const moving = getItem(id);
+    if (!moving || (moving.parentId ?? null) === (parentId ?? null)) return; // gone or already there
+    try {
+      await moveItem(id, parentId);
+      const destName = parentId ? getItem(parentId)?.name || 'folder' : 'Main';
+      toast.success(`Moved “${moving.name}” to ${destName}`);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
   };
   const clearFilters = () => {
     setSearchQuery('');
@@ -182,27 +293,69 @@ export default function VaultPage() {
       </div>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleUpload} />
 
-      <section className="vault-browser" aria-label="Vault content">
+      <Card className="vault-panel">
+        <section className="vault-browser" aria-label="Vault content">
         <div className="vault-browser__top">
           <nav className="vault__crumbs" aria-label="Folder path">
-            <button type="button" className="vault__crumb" onClick={() => setFolderId(null)}>
+            <button
+              type="button"
+              className={`vault__crumb${dropTargetId === 'root' ? ' is-drop-target' : ''}`}
+              onClick={() => setFolderId(null)}
+              onDragOver={(event) => onDropZoneOver(event, 'root')}
+              onDragLeave={(event) => onDropZoneLeave(event, 'root')}
+              onDrop={(event) => onDropZoneDrop(event, 'root')}
+            >
               Main
             </button>
-            {trail.map((folder) => (
-              <span key={folder.id} className="vault__crumb-wrap">
-                <span className="vault__crumb-sep" aria-hidden="true">/</span>
-                <button type="button" className="vault__crumb" onClick={() => setFolderId(folder.id)}>
-                  {folder.name}
-                </button>
-              </span>
-            ))}
+            {trail.map((folder, i) => {
+              const isCurrent = i === trail.length - 1;
+              const dropProps = isCurrent
+                ? null
+                : {
+                    onDragOver: (event) => onDropZoneOver(event, folder.id),
+                    onDragLeave: (event) => onDropZoneLeave(event, folder.id),
+                    onDrop: (event) => onDropZoneDrop(event, folder.id),
+                  };
+              return (
+                <span key={folder.id} className="vault__crumb-wrap">
+                  <span className="vault__crumb-sep" aria-hidden="true">/</span>
+                  <button
+                    type="button"
+                    className={`vault__crumb${!isCurrent && dropTargetId === folder.id ? ' is-drop-target' : ''}`}
+                    onClick={() => setFolderId(folder.id)}
+                    {...dropProps}
+                  >
+                    {folder.name}
+                  </button>
+                </span>
+              );
+            })}
           </nav>
-          <div className="vault-browser__count">
-            {filtersActive ? `${visibleCount} of ${items.length} shown` : `${items.length} item${items.length === 1 ? '' : 's'}`}
+          <div className="vault-browser__actions">
+            <Button variant="ghost" size="sm" onClick={openNewFolder}>
+              <FolderPlusIcon /> Create a new folder
+            </Button>
+            <Button size="sm" onClick={openUploadPicker} disabled={uploading}>
+              <UploadIcon /> {uploading ? 'Uploading…' : 'Upload files'}
+            </Button>
+            <span className="vault-browser__count">
+              {filtersActive ? `${visibleCount} of ${items.length} shown` : `${items.length} item${items.length === 1 ? '' : 's'}`}
+            </span>
           </div>
         </div>
 
         <div className="vault-toolbar" aria-label="Vault filters">
+          {folderId && (
+            <button
+              type="button"
+              className="vault-back"
+              onClick={goBack}
+              aria-label="Back to parent folder"
+              title="Back"
+            >
+              <BackIcon />
+            </button>
+          )}
           <label className="vault-search">
             <span className="vault-search__icon">
               <SearchIcon />
@@ -248,16 +401,33 @@ export default function VaultPage() {
       <div className="vault__grid">
         {visibleCount === 0 && (
           <div className="vault__empty">
-            <strong>{filtersActive ? 'No matching items' : 'This folder is empty'}</strong>
-            <span>
-              {filtersActive
-                ? 'Try another keyword or adjust the filters.'
-                : 'Use the Add card to create a folder or upload a file.'}
-            </span>
+            {loading ? (
+              <Spinner label="Loading files…" />
+            ) : (
+              <>
+                <strong>{filtersActive ? 'No matching items' : 'This folder is empty'}</strong>
+                <span>
+                  {filtersActive
+                    ? 'Try another keyword or adjust the filters.'
+                    : 'Use “Upload files” or “Create a new folder” above to add something.'}
+                </span>
+              </>
+            )}
           </div>
         )}
         {folders.map((folder) => (
-          <div key={folder.id} className="vault-item vault-item--folder">
+          <div
+            key={folder.id}
+            className={`vault-item vault-item--folder${dragId === folder.id ? ' is-dragging' : ''}${
+              dropTargetId === folder.id ? ' is-drop-target' : ''
+            }`}
+            draggable
+            onDragStart={(event) => onItemDragStart(event, folder)}
+            onDragEnd={onItemDragEnd}
+            onDragOver={(event) => onDropZoneOver(event, folder.id)}
+            onDragLeave={(event) => onDropZoneLeave(event, folder.id)}
+            onDrop={(event) => onDropZoneDrop(event, folder.id)}
+          >
             <button
               type="button"
               className="vault-item__open"
@@ -284,7 +454,13 @@ export default function VaultPage() {
           </div>
         ))}
         {files.map((file) => (
-          <div key={file.id} className="vault-item">
+          <div
+            key={file.id}
+            className={`vault-item${dragId === file.id ? ' is-dragging' : ''}`}
+            draggable
+            onDragStart={(event) => onItemDragStart(event, file)}
+            onDragEnd={onItemDragEnd}
+          >
             <button
               type="button"
               className="vault-item__open"
@@ -320,33 +496,48 @@ export default function VaultPage() {
           </div>
         ))}
 
-        <div ref={addMenuRef} className={`vault-add${addMenuOpen ? ' is-open' : ''}`}>
-          <button
-            type="button"
-            className="vault-add__card"
-            onClick={() => setAddMenuOpen((open) => !open)}
-            aria-haspopup="menu"
-            aria-expanded={addMenuOpen}
-            title="Add"
-          >
-            <span className="vault-add__icon">
-              <PlusIcon />
-            </span>
-            <span className="vault-add__label">Add</span>
-            <span className="vault-add__meta">New folder or file</span>
-          </button>
-          {addMenuOpen && (
-            <div className="vault-add__menu" role="menu" aria-label="Add options">
-              <button type="button" className="vault-add__option" role="menuitem" onClick={openNewFolder}>
-                Add new folder
-              </button>
-              <button type="button" className="vault-add__option" role="menuitem" onClick={openUploadPicker}>
-                Upload a file
-              </button>
-            </div>
-          )}
-        </div>
       </div>
+      </Card>
+
+      <Modal
+        open={uploadQueue.length > 0}
+        title={
+          uploading
+            ? 'Uploading files'
+            : uploadQueue.some((f) => f.status === 'error')
+              ? 'Upload finished with errors'
+              : 'Upload complete'
+        }
+        onClose={closeUploadDialog}
+        dismissable={!uploading}
+        className="modal--upload"
+        footer={
+          uploading ? null : (
+            <Button variant="primary" onClick={closeUploadDialog}>
+              Done
+            </Button>
+          )
+        }
+      >
+        <ul className="vault-upload-list">
+          {uploadQueue.map((entry, i) => (
+            <li key={i} className={`vault-upload vault-upload--${entry.status}`}>
+              <div className="vault-upload__row">
+                <span className="vault-upload__name" title={entry.name}>
+                  {entry.name}
+                </span>
+                <span className="vault-upload__status">{uploadStatusLabel(entry)}</span>
+              </div>
+              <div className="vault-upload__track">
+                <div
+                  className="vault-upload__bar"
+                  style={{ width: `${entry.status === 'done' ? 100 : entry.percent || 0}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Modal>
 
       <Modal
         open={newFolderOpen}
@@ -354,11 +545,11 @@ export default function VaultPage() {
         onClose={() => setNewFolderOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setNewFolderOpen(false)}>
+            <Button variant="ghost" onClick={() => setNewFolderOpen(false)} disabled={creatingFolder}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!newFolderName.trim()} onClick={submitFolder}>
-              Create
+            <Button variant="primary" disabled={!newFolderName.trim() || creatingFolder} onClick={submitFolder}>
+              {creatingFolder ? 'Creating…' : 'Create'}
             </Button>
           </>
         }
@@ -403,11 +594,11 @@ export default function VaultPage() {
         onClose={() => setConfirmDelete(null)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)} disabled={deleting}>
               Cancel
             </Button>
-            <Button variant="danger" onClick={doDelete}>
-              Delete
+            <Button variant="danger" onClick={doDelete} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete'}
             </Button>
           </>
         }

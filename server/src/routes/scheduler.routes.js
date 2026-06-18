@@ -6,7 +6,6 @@ const router = Router();
 
 // All scheduler routes are machine-only (called by n8n with the service token).
 router.use(requireServiceToken);
-router.post('/claim', ctrl.claim);
 router.post('/claim-batch', ctrl.claimBatch); // batch drain: claim up to N due posts at once
 router.get('/pool-status', ctrl.poolStatus);
 router.post('/posts/:id/posted', ctrl.markPosted);

@@ -31,7 +31,7 @@ const fmtNum = (n) => {
 // viewer opens; more pages lazy-load as you scroll near the bottom. Shows each
 // comment's text + time — Facebook withholds the commenter's identity (`from`)
 // for ordinary users (privacy), so author names aren't available.
-function CommentsSection({ post }) {
+function CommentsSection({ post, onDeleted }) {
   const [comments, setComments] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,11 +50,16 @@ function CommentsSection({ post }) {
       setLoading(true);
       setError(null);
       try {
-        const { comments: page, nextCursor } = await postPool.comments(post.id, after);
-        setComments((prev) => (after ? [...prev, ...page] : page));
-        cursorRef.current = nextCursor;
-        setCursor(nextCursor);
-        setLoadedOnce(true);
+        const { comments: page, nextCursor, postDeleted } = await postPool.comments(post.id, after);
+        if (postDeleted) {
+          onDeleted?.(); // the post was removed on Facebook → the viewer shows the dialog
+          setLoadedOnce(true);
+        } else {
+          setComments((prev) => (after ? [...prev, ...page] : page));
+          cursorRef.current = nextCursor;
+          setCursor(nextCursor);
+          setLoadedOnce(true);
+        }
       } catch (err) {
         setError(apiError(err));
       } finally {
@@ -62,7 +67,7 @@ function CommentsSection({ post }) {
         setLoading(false);
       }
     },
-    [post.id],
+    [post.id, onDeleted],
   );
 
   useEffect(() => {
@@ -111,9 +116,11 @@ function CommentsSection({ post }) {
  * left, with a white info panel (author, caption, scheduling details) docked
  * full-height on the right. Renders nothing when `post` is null.
  */
-export default function PostViewer({ post, onClose, onEdit, onRetry }) {
+export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, onDeletedOnFacebook }) {
   const [showInsights, setShowInsights] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
+  const [deletedDialog, setDeletedDialog] = useState(false); // post was removed on Facebook
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // Close on Escape and lock background scroll while open.
   useEffect(() => {
@@ -130,11 +137,14 @@ export default function PostViewer({ post, onClose, onEdit, onRetry }) {
     };
   }, [post, onClose]);
 
-  // Reset transient UI (insights drawer, retry button) when switching posts.
+  // Reset transient UI when switching posts. Open the "deleted on Facebook" dialog
+  // up front if the post is already marked deleted (detected on a prior view).
   useEffect(() => {
     setShowInsights(false);
     setRetryBusy(false);
-  }, [post?.id]);
+    setDeleteBusy(false);
+    setDeletedDialog(post?.status === 'deleted');
+  }, [post?.id, post?.status]);
 
   if (!post) return null;
 
@@ -155,6 +165,33 @@ export default function PostViewer({ post, onClose, onEdit, onRetry }) {
     }
   };
 
+  // The comments fetch discovered the post is gone on Facebook (now marked
+  // 'deleted' server-side): open the dialog and let the parent refresh the list.
+  const onDeletedDetected = () => {
+    setDeletedDialog(true);
+    onDeletedOnFacebook?.(post);
+  };
+  // Dialog actions — "Re-post" re-publishes; "Delete post" removes it. Both are
+  // handled by the parent, which closes the viewer on success.
+  const repostFromDialog = async () => {
+    if (retryBusy || deleteBusy || !onRetry) return;
+    setRetryBusy(true);
+    try {
+      await onRetry(post);
+    } finally {
+      setRetryBusy(false);
+    }
+  };
+  const deleteFromDialog = async () => {
+    if (deleteBusy || retryBusy || !onDelete) return;
+    setDeleteBusy(true);
+    try {
+      await onDelete(post);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   return (
     <div className="post-viewer" role="dialog" aria-modal="true" aria-label={`Post ${post.id}`}>
       <button className="post-viewer__close" onClick={onClose} aria-label="Close">
@@ -170,7 +207,14 @@ export default function PostViewer({ post, onClose, onEdit, onRetry }) {
       <div className="post-viewer__stage">
         {post.media_preview_url ? (
           post.media_type === 'video' ? (
-            <video src={post.media_preview_url} controls />
+            // Show the optimized thumbnail as the poster and hold off downloading
+            // the clip until the viewer hits play.
+            <video
+              src={post.media_preview_url}
+              poster={post.thumbnail_preview_url || undefined}
+              preload={post.thumbnail_preview_url ? 'none' : 'metadata'}
+              controls
+            />
           ) : (
             <img src={post.media_preview_url} alt="" />
           )
@@ -279,10 +323,32 @@ export default function PostViewer({ post, onClose, onEdit, onRetry }) {
         )}
 
         {/* Live comments from Facebook — first page on open, lazy-load on scroll */}
-        <CommentsSection post={post} />
+        <CommentsSection post={post} onDeleted={onDeletedDetected} />
       </aside>
 
       <InsightsDrawer post={post} open={showInsights} onClose={() => setShowInsights(false)} />
+
+      {/* Shown when the post no longer exists on Facebook (deleted there). Rendered
+          inside the viewer so it sits above it (a normal Modal would fall behind). */}
+      {deletedDialog && (
+        <div className="post-viewer__dialog-overlay" role="dialog" aria-modal="true" aria-label="Post deleted on Facebook">
+          <div className="post-viewer__dialog">
+            <h3>Post deleted on Facebook</h3>
+            <p>This post has been deleted in Facebook. You can delete the post or re-post it.</p>
+            <div className="post-viewer__dialog-actions">
+              <Button variant="ghost" onClick={() => setDeletedDialog(false)} disabled={retryBusy || deleteBusy}>
+                Close
+              </Button>
+              <Button variant="danger" onClick={deleteFromDialog} disabled={retryBusy || deleteBusy}>
+                {deleteBusy ? 'Deleting…' : 'Delete post'}
+              </Button>
+              <Button onClick={repostFromDialog} disabled={retryBusy || deleteBusy}>
+                {retryBusy ? 'Re-posting…' : 'Re-post'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

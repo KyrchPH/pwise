@@ -7,7 +7,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
 
-const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired'];
+const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired', 'deleted'];
 
 const PAGE_SIZE = 15;
 
@@ -49,6 +49,7 @@ export default function PostPoolPage() {
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(null); // id of the post currently being retried
+  const [menuPostId, setMenuPostId] = useState(null);
 
   const {
     data,
@@ -77,6 +78,21 @@ export default function PostPoolPage() {
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  useEffect(() => {
+    if (menuPostId == null) return undefined;
+    const close = (e) => {
+      if (e.type === 'keydown' && e.key !== 'Escape') return;
+      if (e.type === 'pointerdown' && e.target.closest('.post-card__menu')) return;
+      setMenuPostId(null);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [menuPostId]);
 
   // After a change: drop sibling caches (other filters + dashboard counts) so
   // they refetch when next visited, and refetch the current view now.
@@ -212,12 +228,54 @@ export default function PostPoolPage() {
                 }
               }}
             >
-              <MediaThumb mediaUrl={post.media_preview_url} mediaType={post.media_type} />
-              <div className="post-card__body">
-                <div className="row row--between">
+              <MediaThumb mediaUrl={post.media_preview_url} mediaType={post.media_type} thumbnailUrl={post.thumbnail_preview_url}>
+                <div className="post-card__status">
                   <StatusBadge status={post.status} />
-                  <span className="text-sm text-muted">#{post.id}</span>
                 </div>
+                <div className="post-card__menu" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="post-card__menu-trigger"
+                    aria-label="Post options"
+                    title="Post options"
+                    aria-expanded={menuPostId === post.id}
+                    onClick={() => setMenuPostId((id) => (id === post.id ? null : post.id))}
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                      <circle cx="5" cy="12" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="19" cy="12" r="2" />
+                    </svg>
+                  </button>
+                  {menuPostId === post.id && (
+                    <div className="card-menu post-card__dropdown" role="menu">
+                      <button
+                        type="button"
+                        className="card-menu__item"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuPostId(null);
+                          openEdit(post);
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="card-menu__item card-menu__item--danger"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuPostId(null);
+                          setDeleting(post);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </MediaThumb>
+              <div className="post-card__body">
                 <div className="post-card__caption">{post.caption || <em className="text-muted">No caption</em>}</div>
                 {post.scheduled_at && <div className="post-card__sched">📅 {fmtSched(post.scheduled_at)}</div>}
                 {post.engagement_synced_at && (
@@ -228,44 +286,6 @@ export default function PostPoolPage() {
                     {post.media_type === 'video' && <span title="Views"><EyeIcon size={14} />{fmtNum(post.views_count)}</span>}
                   </div>
                 )}
-              </div>
-              {/* stopPropagation so the action buttons don't also open the viewer */}
-              <div className="post-card__actions" onClick={(e) => e.stopPropagation()}>
-                {(post.status === 'failed' || post.status === 'expired') && (
-                  <button
-                    type="button"
-                    className="card-iconbtn"
-                    onClick={() => retryPost(post)}
-                    disabled={retrying === post.id}
-                    aria-label="Retry now"
-                    title="Retry now (publish immediately)"
-                  >
-                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
-                      <path d="M3 3v5h5" />
-                    </svg>
-                  </button>
-                )}
-                <button type="button" className="card-iconbtn" onClick={() => openEdit(post)} aria-label="Edit post" title="Edit">
-                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="card-iconbtn card-iconbtn--danger"
-                  onClick={() => setDeleting(post)}
-                  aria-label="Delete post"
-                  title="Delete"
-                >
-                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M3 6h18" />
-                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                    <line x1="10" y1="11" x2="10" y2="17" />
-                    <line x1="14" y1="11" x2="14" y2="17" />
-                  </svg>
-                </button>
               </div>
             </Card>
           ))}
@@ -301,6 +321,17 @@ export default function PostPoolPage() {
         onRetry={async (p) => {
           if (await retryPost(p)) setViewing(null);
         }}
+        onDelete={async (p) => {
+          try {
+            await postPool.remove(p.id);
+            toast.success('Post deleted');
+            setViewing(null);
+            reload();
+          } catch (e) {
+            toast.error(apiError(e));
+          }
+        }}
+        onDeletedOnFacebook={() => reload()}
       />
 
       {/* Edit modal */}

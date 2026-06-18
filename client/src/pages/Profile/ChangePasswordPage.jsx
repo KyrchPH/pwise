@@ -95,7 +95,7 @@ export default function ChangePasswordPage() {
     try {
       await authService.completePasswordChange(newPassword);
       toast.success('Password changed');
-      navigate('/settings');
+      navigate('/profile');
     } catch (err) {
       toast.error(apiError(err));
     } finally {
@@ -105,8 +105,8 @@ export default function ChangePasswordPage() {
 
   return (
     <div className="pwchange">
-      <Link to="/settings" className="pwchange__back">
-        ← Back to settings
+      <Link to="/profile" className="pwchange__back">
+        Back to profile
       </Link>
 
       <div className="pwchange__head">

@@ -478,23 +478,74 @@ export function Logo({ height = 40, className = '' }) {
   );
 }
 
-// Renders the media image; falls back to a type icon if it can't load
-// (private S3 objects aren't directly viewable without a presigned URL).
-export function MediaThumb({ mediaUrl, mediaType }) {
+export function UserAvatar({ user, className = 'avatar' }) {
   const [broken, setBroken] = useState(false);
+  const label = user?.name || user?.email || '?';
+  const initial = label.slice(0, 1).toUpperCase();
+  if (user?.avatar_url && !broken) {
+    return <img className={`${className} user-avatar-img`} src={user.avatar_url} alt="" onError={() => setBroken(true)} />;
+  }
+  return (
+    <span className={className} aria-hidden="true">
+      {initial}
+    </span>
+  );
+}
+
+// A connected page's photo (the Facebook page picture) with a letter fallback.
+// Shared by the sidebar/page switcher and the Settings page cards. Sized by the
+// caller via `className` (sets width/height on .page-avatar).
+export function PageAvatar({ page, className = '' }) {
+  const [broken, setBroken] = useState(false);
+  const pagePictureId = page?.fb_page_id || page?.fbPageId;
+  const pageLabel = page?.account_name || page?.name || '?';
+  const src = pagePictureId
+    ? `https://graph.facebook.com/v21.0/${pagePictureId}/picture?type=square&width=96&height=96`
+    : null;
+  if (!src || broken) {
+    return (
+      <span className={`page-avatar page-avatar--fallback ${className}`} aria-hidden="true">
+        {pageLabel.charAt(0).toUpperCase()}
+      </span>
+    );
+  }
+  return <img className={`page-avatar ${className}`} src={src} alt="" onError={() => setBroken(true)} />;
+}
+
+// Renders the media still; falls back to a type icon if it can't load (private
+// S3 objects aren't directly viewable without a presigned URL). Prefers the
+// pre-generated, optimized thumbnail (`thumbnailUrl`) for BOTH images and videos
+// so a grid never downloads a whole clip just to show a poster frame; only when
+// there's no thumbnail does it fall back to the full media.
+export function MediaThumb({ mediaUrl, mediaType, thumbnailUrl, children }) {
+  const [broken, setBroken] = useState(false);
+  const [thumbBroken, setThumbBroken] = useState(false);
+
+  if (thumbnailUrl && !thumbBroken) {
+    return (
+      <div className="thumb">
+        <img src={thumbnailUrl} alt="" onError={() => setThumbBroken(true)} />
+        {children}
+        {mediaType === 'video' && <span className="thumb__play">▶</span>}
+      </div>
+    );
+  }
   if (mediaUrl && !broken) {
     if (mediaType === 'image') {
       return (
         <div className="thumb">
           <img src={mediaUrl} alt="" onError={() => setBroken(true)} />
+          {children}
         </div>
       );
     }
     if (mediaType === 'video') {
-      // #t=0.5 nudges the browser to show a frame instead of a black poster.
+      // No thumbnail (e.g. older posts) — #t=0.5 nudges the browser to show a
+      // frame instead of a black poster.
       return (
         <div className="thumb">
           <video src={`${mediaUrl}#t=0.5`} muted preload="metadata" playsInline onError={() => setBroken(true)} />
+          {children}
           <span className="thumb__play">▶</span>
         </div>
       );
@@ -504,6 +555,7 @@ export function MediaThumb({ mediaUrl, mediaType }) {
   return (
     <div className="thumb">
       <span className="thumb__placeholder">{icon}</span>
+      {children}
     </div>
   );
 }

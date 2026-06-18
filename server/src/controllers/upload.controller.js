@@ -8,15 +8,21 @@ const ALLOWED_PREFIXES = ['image/', 'video/'];
 
 // Step 1: client asks for a presigned PUT URL, then uploads bytes straight to S3.
 // `temporary` uploads (e.g. a template's input video) land under tmp/ so an S3
-// lifecycle rule can auto-expire any that aren't cleaned up explicitly.
+// lifecycle rule can auto-expire any that aren't cleaned up explicitly. `vault`
+// uploads are the file manager — they accept ANY file type (not just media) and
+// land under vault/.
 export const presignedUrl = asyncHandler(async (req, res) => {
-  const { filename, contentType, temporary } = req.body || {};
+  const { filename, contentType, temporary, vault, avatar } = req.body || {};
   if (!filename || !contentType) throw ApiError.badRequest('filename and contentType are required');
-  if (!ALLOWED_PREFIXES.some((p) => String(contentType).startsWith(p))) {
+  if (avatar && !String(contentType).startsWith('image/')) {
+    throw ApiError.badRequest('only image uploads are allowed for profile photos');
+  }
+  // Posts are restricted to image/video; the vault stores arbitrary files.
+  if (!vault && !ALLOWED_PREFIXES.some((p) => String(contentType).startsWith(p))) {
     throw ApiError.badRequest('only image/* or video/* uploads are allowed');
   }
   const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-  const base = temporary ? 'tmp' : 'uploads';
+  const base = avatar ? 'avatars' : vault ? 'vault' : temporary ? 'tmp' : 'uploads';
   const s3Key = `${base}/${req.user.id}/${crypto.randomUUID()}-${safeName}`;
   const uploadUrl = await s3.createUploadUrl(s3Key, contentType);
   sendSuccess(res, { uploadUrl, s3Key, mediaUrl: s3.publicObjectUrl(s3Key) });

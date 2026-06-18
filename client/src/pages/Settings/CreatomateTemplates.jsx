@@ -34,7 +34,7 @@ const templateIdOf = (config) => {
   }
 };
 
-export default function CreatomateTemplates() {
+export default function CreatomateTemplates({ embedded = false }) {
   const toast = useToast();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -107,8 +107,8 @@ export default function CreatomateTemplates() {
     }
   };
 
-  return (
-    <Card className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>
+  const body = (
+    <>
       <div className="row row--between" style={{ marginBottom: 14, gap: 12 }}>
         <div>
           <div style={{ fontWeight: 600 }}>Creatomate templates</div>
@@ -199,6 +199,13 @@ export default function CreatomateTemplates() {
           })}
         </ul>
       )}
-    </Card>
+    </>
+  );
+
+  // Embedded in the single Settings card → bare section; standalone → own card.
+  return embedded ? (
+    <section className="settings-section">{body}</section>
+  ) : (
+    <Card className="card--pad" style={{ marginTop: 24, maxWidth: 640 }}>{body}</Card>
   );
 }
