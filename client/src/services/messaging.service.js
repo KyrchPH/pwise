@@ -60,24 +60,56 @@ export async function declineTransfer(transferId) {
   return data.data;
 }
 
+// Shared SSE connection: ONE EventSource for the whole app, fanned out to every
+// subscriber. Opens on the first subscriber, closes when the last unsubscribes,
+// and reopens if the auth token changes. This is why both the customer inbox and
+// the agent-to-agent view can call subscribe() without each holding its own socket.
+let _source = null;
+let _streamToken = null;
+const _listeners = new Set();
+
+function _ensureStream() {
+  if (typeof EventSource === 'undefined') return;
+  const token = localStorage.getItem('token') || '';
+  if (_source && _streamToken === token) return; // already connected with this token
+  if (_source) _source.close();
+  _streamToken = token;
+  _source = new EventSource(`${env.apiBaseUrl}/messages/stream?token=${encodeURIComponent(token)}`);
+  _source.onmessage = (event) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(event.data);
+    } catch {
+      return; // keep-alive / comment frame
+    }
+    for (const fn of _listeners) {
+      try {
+        fn(parsed);
+      } catch {
+        /* one bad handler shouldn't take down the others */
+      }
+    }
+  };
+}
+
 /**
- * Subscribe to live inbox events over SSE. `onEvent` receives parsed event
- * objects ({ type: 'message:new' | 'conversation:updated', ... }). Returns an
- * unsubscribe function. EventSource can't set headers, so the JWT rides the URL.
+ * Subscribe to live inbox events over SSE. `onEvent` receives parsed event objects
+ * ({ type: 'message:new' | 'team:message:new' | ... }). Returns an unsubscribe
+ * function. EventSource can't set headers, so the JWT rides the URL. All callers
+ * share a single underlying connection (see above).
  */
 export function subscribe(onEvent) {
   if (typeof EventSource === 'undefined') return () => {};
-  const token = localStorage.getItem('token') || '';
-  const url = `${env.apiBaseUrl}/messages/stream?token=${encodeURIComponent(token)}`;
-  const source = new EventSource(url);
-  source.onmessage = (event) => {
-    try {
-      onEvent(JSON.parse(event.data));
-    } catch {
-      /* ignore keep-alive/comment frames */
+  _listeners.add(onEvent);
+  _ensureStream();
+  return () => {
+    _listeners.delete(onEvent);
+    if (_listeners.size === 0 && _source) {
+      _source.close();
+      _source = null;
+      _streamToken = null;
     }
   };
-  return () => source.close();
 }
 
 export { apiError };

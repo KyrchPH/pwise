@@ -111,6 +111,7 @@ function fileKind(item) {
 
 export function VaultThumb({ item }) {
   const [broken, setBroken] = useState(false);
+  const [loaded, setLoaded] = useState(false); // drives the skeleton shimmer until the image paints
   const mediaType = getVaultMediaType(item);
 
   if (item.type === 'folder') {
@@ -125,7 +126,7 @@ export function VaultThumb({ item }) {
   // to the full media only when no thumbnail was generated.
   if (mediaType === 'image' && (item.thumbUrl || item.url) && !broken) {
     return (
-      <img className="vault-thumb__img" src={item.thumbUrl || item.url} alt="" draggable={false} onError={() => setBroken(true)} />
+      <img className={`vault-thumb__img${loaded ? ' is-loaded' : ''}`} src={item.thumbUrl || item.url} alt="" draggable={false} onLoad={() => setLoaded(true)} onError={() => setBroken(true)} />
     );
   }
 
@@ -133,7 +134,7 @@ export function VaultThumb({ item }) {
     return (
       <>
         {item.thumbUrl ? (
-          <img className="vault-thumb__img" src={item.thumbUrl} alt="" draggable={false} onError={() => setBroken(true)} />
+          <img className={`vault-thumb__img${loaded ? ' is-loaded' : ''}`} src={item.thumbUrl} alt="" draggable={false} onLoad={() => setLoaded(true)} onError={() => setBroken(true)} />
         ) : (
           <video
             className="vault-thumb__img"

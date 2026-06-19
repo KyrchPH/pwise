@@ -9,6 +9,8 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
 import { buildPageCards, messagePreview, resolveSelectedPageId } from './messagingData.js';
+import AgentChat from './AgentChat.jsx';
+import MediaLightbox from './MediaLightbox.jsx';
 
 // Two-way arrows for the transfer action, and an inbox glyph for the request bar.
 function TransferIcon() {
@@ -136,6 +138,11 @@ export default function MessagingPage() {
   const filterRef = useRef(null);
   const copyTimerRef = useRef(null);
   const composerInputRef = useRef(null);
+  const messagesRef = useRef(null); // scroll container for the open thread
+  const stickBottomRef = useRef(true); // follow new messages unless the reader scrolled up
+  const prevConvIdRef = useRef(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false); // "scroll to latest" affordance when scrolled up
+  const [lightbox, setLightbox] = useState(null); // media item being viewed fullscreen
 
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [draft, setDraft] = useState('');
@@ -197,6 +204,21 @@ export default function MessagingPage() {
       if (event.type === 'message:new') {
         setConversations((cur) =>
           cur.map((c) => (c.id === event.conversationId ? mergeIncoming(c, event) : c)),
+        );
+      } else if (event.type === 'message:status') {
+        // Delivery outcome for already-shown bubbles (e.g. a Telegram send failed).
+        setConversations((cur) =>
+          cur.map((c) =>
+            c.id === event.conversationId
+              ? {
+                  ...c,
+                  messages: c.messages.map((m) => {
+                    const u = (event.updates || []).find((x) => String(x.id) === m.id);
+                    return u ? { ...m, deliveryStatus: u.deliveryStatus } : m;
+                  }),
+                }
+              : c,
+          ),
         );
       } else if (event.type === 'conversation:new' && event.conversation) {
         // A new customer thread (e.g. n8n delivered a first message) — prepend it,
@@ -320,6 +342,40 @@ export default function MessagingPage() {
   useEffect(() => {
     setAttachments([]);
   }, [activeConversation?.id]);
+
+  // Keep the thread pinned to the newest message. Switching threads jumps to the
+  // bottom; a new bubble only follows down if the reader is already near the bottom,
+  // so someone scrolled up reading history isn't yanked back down.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    if (prevConvIdRef.current !== activeConversation?.id) {
+      prevConvIdRef.current = activeConversation?.id;
+      stickBottomRef.current = true;
+    }
+    if (stickBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowScrollBtn(false);
+    }
+  }, [activeConversation?.id, activeConversation?.messages.length]);
+
+  // Re-evaluate "stuck to bottom" as the reader scrolls (80px slack for near-bottom),
+  // and reveal the "scroll to latest" arrow once they're well above the bottom.
+  const handleMessagesScroll = (event) => {
+    const el = event.currentTarget;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickBottomRef.current = distanceFromBottom < 80;
+    setShowScrollBtn(distanceFromBottom > 240);
+  };
+
+  // Jump back to the newest message (the floating arrow button).
+  const scrollToLatest = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    stickBottomRef.current = true;
+    setShowScrollBtn(false);
+  };
 
   const handleSend = async (event) => {
     event.preventDefault();
@@ -513,6 +569,10 @@ export default function MessagingPage() {
         </button>
       </aside>
       <section className="msg-workspace">
+        {isAgentToAgent ? (
+          <AgentChat />
+        ) : (
+        <>
         <Card className="msg-panel msg-panel--list">
           <div className="card__head">
             <div>
@@ -629,9 +689,18 @@ export default function MessagingPage() {
           )}
 
           {loading ? (
-            <div className="card--pad">
-              <EmptyState icon="…" title="Loading conversations" message="Fetching the latest inbox." />
-            </div>
+            <ul className="msg-conversation-list" aria-hidden="true">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <li key={i} className="msg-skel-row">
+                  <span className="msg-skel msg-skel--avatar" />
+                  <div className="msg-skel-row__main">
+                    <span className="msg-skel msg-skel--line msg-skel--name" />
+                    <span className="msg-skel msg-skel--line" />
+                    <span className="msg-skel msg-skel--line msg-skel--short" />
+                  </div>
+                </li>
+              ))}
+            </ul>
           ) : loadError ? (
             <div className="card--pad">
               <EmptyState icon="!" title="Couldn’t load messages" message={loadError} />
@@ -668,7 +737,14 @@ export default function MessagingPage() {
                         <span className="msg-conversation__time">{conversation.lastActivity}</span>
                       </div>
                       <div className="msg-conversation__row">
-                        <span className="msg-conversation__mode">{conversation.handledBy}</span>
+                        <span className="msg-conversation__tags">
+                          <span className="msg-conversation__mode">{conversation.handledBy}</span>
+                          {conversation.pageName && (
+                            <span className="msg-conversation__page" title={conversation.pageName}>
+                              {conversation.pageName}
+                            </span>
+                          )}
+                        </span>
                       </div>
                       <p className="msg-conversation__preview">{conversation.summary}</p>
                     </div>
@@ -697,7 +773,9 @@ export default function MessagingPage() {
                   <div>
                     <div className="card__title">{activeConversation.customerName}</div>
                     <div className="msg-panel__sub msg-thread__sub">
-                      <span>Last message {activeConversation.lastActivity}</span>
+                      {activeConversation.lastActivity && activeConversation.lastActivity !== 'Just now' && (
+                        <span>Last message {activeConversation.lastActivity}</span>
+                      )}
                       <span className="msg-thread__page">{activeConversation.pageName}</span>
                     </div>
                   </div>
@@ -721,7 +799,8 @@ export default function MessagingPage() {
                 </div>
               </div>
 
-              <div className="msg-thread__messages">
+              <div className="msg-thread__scrollwrap">
+              <div className="msg-thread__messages" ref={messagesRef} onScroll={handleMessagesScroll}>
                 {activeConversation.messages.map((message) => (
                   <div
                     key={message.id}
@@ -743,9 +822,15 @@ export default function MessagingPage() {
                         {message.media?.length > 0 && (
                           <div className={`msg-bubble__media${message.media.length === 1 ? ' is-single' : ''}`}>
                             {message.media.map((m, index) => (
-                              <span key={index} className="msg-bubble__media-tile">
+                              <button
+                                key={index}
+                                type="button"
+                                className="msg-bubble__media-tile"
+                                onClick={() => setLightbox(m)}
+                                aria-label={`View ${m.name || 'attachment'}`}
+                              >
                                 <VaultThumb item={{ type: 'file', mediaType: m.type, url: m.url, name: m.name }} />
-                              </span>
+                              </button>
                             ))}
                           </div>
                         )}
@@ -770,6 +855,16 @@ export default function MessagingPage() {
                                 </svg>
                               )}
                             </button>
+                          )}
+                          {message.side === 'outgoing' && message.deliveryStatus === 'failed' && (
+                            <span className="msg-bubble__undelivered" title="Not delivered to the customer">
+                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                                <path d="M12 9v4" />
+                                <path d="M12 17h.01" />
+                              </svg>
+                              Not delivered
+                            </span>
                           )}
                           <span className="msg-bubble__time">{message.time}</span>
                         </div>
@@ -803,6 +898,21 @@ export default function MessagingPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+                {showScrollBtn && (
+                  <button
+                    type="button"
+                    className="msg-scrolldown"
+                    onClick={scrollToLatest}
+                    aria-label="Scroll to latest messages"
+                    title="Scroll to latest"
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 5v14" />
+                      <path d="M19 12l-7 7-7-7" />
+                    </svg>
+                  </button>
+                )}
               </div>
 
               {isLiveAgent ? (
@@ -979,10 +1089,13 @@ export default function MessagingPage() {
             </div>
           )}
         </Card>
+        </>
+        )}
       </section>
 
       <VaultPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} onAttach={handleAttach} />
       <TemplateDrawer open={templateOpen} onClose={() => setTemplateOpen(false)} onUse={handleUseTemplate} />
+      <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />
 
       {/* Incoming transfer requests — a right-side drawer opened from the request bar. */}
       {requestsOpen && (

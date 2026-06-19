@@ -279,10 +279,59 @@ CREATE TABLE IF NOT EXISTS messages (
   body            TEXT NULL,
   media           JSON NULL,                                -- [{ type, url, name }]
   reply_to        JSON NULL,                                -- { id, sender, text }
+  external_id     VARCHAR(64) NULL,                          -- platform message id (e.g. Telegram message_id), for reply threading
+  delivery_status VARCHAR(16) NULL,                          -- NULL = n/a · 'sent' · 'failed' (outgoing platform delivery)
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
   CONSTRAINT chk_messages_side CHECK (side IN ('incoming', 'outgoing')),
   INDEX idx_messages_conversation (conversation_id, created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- agent-to-agent chat — internal DMs + group chats between teammates
+CREATE TABLE IF NOT EXISTS agent_conversations (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  is_group        TINYINT(1) NOT NULL DEFAULT 0,
+  name            VARCHAR(255) NULL,                 -- group name (NULL for DMs)
+  created_by      INT NULL,
+  last_message_at DATETIME NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_agent_conv_activity (last_message_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_conversation_participants (
+  conversation_id INT NOT NULL,
+  user_id         INT NOT NULL,
+  last_read_at    DATETIME NULL,
+  joined_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (conversation_id, user_id),
+  INDEX idx_agent_part_user (user_id),
+  CONSTRAINT fk_agent_part_conv FOREIGN KEY (conversation_id) REFERENCES agent_conversations(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  conversation_id INT NOT NULL,
+  sender_user_id  INT NULL,
+  sender_name     VARCHAR(255),
+  body            TEXT NULL,
+  media           JSON NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_agent_msg_conv FOREIGN KEY (conversation_id) REFERENCES agent_conversations(id) ON DELETE CASCADE,
+  INDEX idx_agent_msg_conv (conversation_id, created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- connections — agent-to-agent "friend" graph (gates replying in A2A DMs)
+CREATE TABLE IF NOT EXISTS user_connections (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  requester_id INT NOT NULL,
+  addressee_id INT NOT NULL,
+  status       VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending | accepted
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  responded_at DATETIME NULL,
+  UNIQUE KEY uq_connection_pair (requester_id, addressee_id),
+  INDEX idx_connection_addressee (addressee_id, status),
+  INDEX idx_connection_requester (requester_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- vault_items — shared file manager (folders + files in one self-referencing tree)

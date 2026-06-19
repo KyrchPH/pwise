@@ -6,6 +6,8 @@ import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { canAccessModule } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
+import * as connections from '../services/connections.service.js';
+import { subscribe } from '../services/messaging.service.js';
 import { Modal, PageAvatar, UserAvatar } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
@@ -220,7 +222,10 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const toast = useToast();
   const isAdmin = user?.role === 'admin';
+  const canConn = canAccessModule(user, 'connections');
+  const canMsg = canAccessModule(user, 'messages');
   const isMessagingPage = pathname === '/messages';
+  const isConnectionsPage = pathname === '/connections';
   const isVaultPage = pathname === '/vault';
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
@@ -252,10 +257,25 @@ export default function AppLayout() {
   // Unread-messages count for the sidebar badge. TODO: wire to the real source
   // (e.g. the active page's Facebook inbox); 0 keeps the badge hidden.
   const [messageCount] = useState(0);
+  const [connCount, setConnCount] = useState(0); // pending incoming connection requests
   useEffect(() => {
     setNavOpen(false);
     setMenuOpen(false);
   }, [pathname]);
+
+  // Connections nav badge — pending incoming-request count, kept live over SSE.
+  useEffect(() => {
+    if (!canConn) return;
+    connections.list().then((d) => setConnCount(d.incoming.length)).catch(() => {});
+  }, [canConn]);
+  useEffect(() => {
+    if (!canConn || !canMsg) return undefined; // the SSE stream itself requires messaging access
+    return subscribe((ev) => {
+      if (ev?.type === 'connection:request' || ev?.type === 'connection:changed') {
+        connections.list().then((d) => setConnCount(d.incoming.length)).catch(() => {});
+      }
+    });
+  }, [canConn, canMsg]);
 
   // Close the account menu on outside-click or Escape.
   useEffect(() => {
@@ -406,6 +426,23 @@ export default function AppLayout() {
                 },
                 'sidebar__messages',
               )}
+              {renderNavItem({
+                to: '/connections',
+                label: 'Connections',
+                moduleId: 'connections',
+                icon: (
+                  <Ico>
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <line x1="19" y1="8" x2="19" y2="14" />
+                    <line x1="22" y1="11" x2="16" y2="11" />
+                  </Ico>
+                ),
+                badge:
+                  connCount > 0 ? (
+                    <span className="sidebar__msg-badge">{connCount > 99 ? '99+' : connCount}</span>
+                  ) : null,
+              })}
               {renderNavLinks(SECONDARY_NAV)}
             </nav>
           </div>
@@ -564,7 +601,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage ? ' content__inner--fill' : ''}${isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             <Outlet />

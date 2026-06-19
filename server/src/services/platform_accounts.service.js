@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import { encrypt, decrypt } from '../utils/crypto.util.js';
 import * as fb from './fb.service.js';
 import * as tg from './telegram.service.js';
+import { env } from '../config/env.js';
 
 // Connected Facebook pages. The list is shared/global (like the post pool); user_id
 // is the admin creator (audit). Secrets (app_secret, app_client_token, access_token)
@@ -76,6 +77,37 @@ async function resolveTelegramBot(apiKey) {
   return { token: encrypt(String(apiKey).trim()), username: me.username || null };
 }
 
+// Register this page's Telegram bot webhook with Telegram so inbound messages reach
+// our gateway tagged with the account id. Best-effort — a Telegram hiccup must not
+// fail the page save.
+async function ensureTelegramWebhook(accountId) {
+  if (!env.publicUrl) return;
+  try {
+    const a = await getDecrypted(accountId);
+    if (!a.telegram_bot_token) return;
+    const url = `${env.publicUrl}/api/webhooks/telegram?accountId=${accountId}`;
+    const r = await tg.setWebhook(a.telegram_bot_token, url, env.telegramWebhookSecret);
+    if (!r.ok) console.warn(`[accounts] setWebhook failed (account ${accountId}): ${r.error}`);
+  } catch (e) {
+    console.warn(`[accounts] ensureTelegramWebhook error: ${e?.message || e}`);
+  }
+}
+
+// Subscribe this page to the app's Messenger webhooks so its inbound messages reach
+// /api/webhooks/messenger. Only attempted when Messenger is configured (a verify
+// token is set). Best-effort.
+async function ensureMessengerSubscription(accountId) {
+  if (!env.facebook.verifyToken) return;
+  try {
+    const a = await getDecrypted(accountId);
+    if (!a.access_token || !a.fb_page_id) return;
+    const r = await fb.subscribeMessaging(a.access_token, a.fb_page_id);
+    if (!r.ok) console.warn(`[accounts] messenger subscribe failed (account ${accountId}): ${r.error}`);
+  } catch (e) {
+    console.warn(`[accounts] ensureMessengerSubscription error: ${e?.message || e}`);
+  }
+}
+
 // Validate page credentials against Facebook BEFORE saving (the "Connect" step).
 // For edits, a blank token / page id falls back to the stored values so an admin
 // can re-test without re-entering secrets. Throws on failure.
@@ -132,11 +164,18 @@ export async function create(actor = {}, data = {}) {
       tgUsername,
     ],
   );
-  return getById(result.insertId);
+  const account = await getById(result.insertId);
+  if (tgToken) ensureTelegramWebhook(account.id).catch(() => {}); // wire up the bot's webhook
+  ensureMessengerSubscription(account.id).catch(() => {});
+  return account;
 }
 
 export async function update(id, data = {}) {
   const existing = await getById(id); // existence (+ whether a bot is already attached)
+  // Capture the current bot token before we (maybe) null it, so we can drop its webhook.
+  const oldTgToken = data.telegram_remove
+    ? await getDecrypted(id).then((a) => a.telegram_bot_token).catch(() => null)
+    : null;
   const fields = [];
   const params = [];
   const set = (col, val) => {
@@ -176,11 +215,21 @@ export async function update(id, data = {}) {
     params.push(id);
     await query(`UPDATE platform_accounts SET ${fields.join(', ')} WHERE id = ?`, params);
   }
+  // Keep the Telegram webhook in sync with the new bot state.
+  if (data.telegram_remove) {
+    if (oldTgToken) tg.deleteWebhook(oldTgToken).catch(() => {});
+  } else if (data.telegram_api_key || existing.has_telegram_bot) {
+    ensureTelegramWebhook(id).catch(() => {});
+  }
+  ensureMessengerSubscription(id).catch(() => {});
   return getById(id);
 }
 
 export async function remove(id) {
   await getById(id); // 404 if already gone
+  // Drop the Telegram webhook (if any) before the row goes.
+  const tok = await getDecrypted(id).then((a) => a.telegram_bot_token).catch(() => null);
+  if (tok) tg.deleteWebhook(tok).catch(() => {});
   // Null references first — migrated DBs have no DB-level FK (see migration 012).
   await query('UPDATE post_pool SET account_id = NULL WHERE account_id = ?', [id]);
   await query('UPDATE posting_settings SET selected_account_id = NULL WHERE selected_account_id = ?', [id]);

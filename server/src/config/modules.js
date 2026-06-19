@@ -5,6 +5,7 @@ export const APP_MODULES = [
   { id: 'post-pool', label: 'Post Pool' },
   { id: 'upload', label: 'Upload' },
   { id: 'messages', label: 'Messaging' },
+  { id: 'connections', label: 'Connections' },
   { id: 'vault', label: 'Vault' },
   { id: 'logs', label: 'Logs' },
   { id: 'activity', label: 'Activity' },
@@ -32,6 +33,17 @@ export function normalizeModuleAccess(value) {
 export function moduleAccessForUser(user) {
   const access = normalizeModuleAccess(user?.module_access);
   return access == null ? MODULE_IDS : access;
+}
+
+// Can this user use a given module? Admins always; otherwise the module must be in
+// their access list.
+export function canUseModule(user, moduleId) {
+  return user?.role === 'admin' || moduleAccessForUser(user).includes(moduleId);
+}
+
+// Can this user use Messaging? Shared by the route guard and the SSE controller.
+export function hasMessagingAccess(user) {
+  return canUseModule(user, 'messages');
 }
 
 export function serializeModuleAccess(value) {

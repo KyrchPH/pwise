@@ -5,6 +5,7 @@ export const APP_MODULES = [
   { id: 'post-pool', label: 'Post Pool', route: '/post-pool' },
   { id: 'upload', label: 'Upload', route: '/upload' },
   { id: 'messages', label: 'Messaging', route: '/messages' },
+  { id: 'connections', label: 'Connections', route: '/connections' },
   { id: 'vault', label: 'Vault', route: '/vault' },
   { id: 'logs', label: 'Logs', route: '/logs' },
   { id: 'activity', label: 'Activity', route: '/activity' },

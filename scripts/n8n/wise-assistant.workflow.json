@@ -1,0 +1,139 @@
+{
+  "name": "pwise - Wise Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wise-assistant",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000001",
+      "name": "Wise Assistant Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-780, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Wise Assistant Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst question = String(body.question ?? '').trim();\nif (!question) {\n  throw new Error('question is required');\n}\n\nconst pathname = String(body.pathname ?? '/').trim() || '/';\nconst rawHistory = Array.isArray(body.history) ? body.history : [];\nconst history = rawHistory\n  .slice(-8)\n  .map((entry) => ({\n    role: entry?.role === 'user' ? 'user' : 'assistant',\n    text: String(entry?.text ?? '').trim().slice(0, 700),\n  }))\n  .filter((entry) => entry.text);\n\nreturn [{\n  json: {\n    question: question.slice(0, 1200),\n    pathname: pathname.slice(0, 255),\n    history,\n    user: body.user ?? null,\n    source: body.source ?? 'pwise-dev-overlay',\n    requested_at: body.requested_at ?? new Date().toISOString(),\n  },\n}];"
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000002",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-520, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  '{{ String($json.question || '').replace(/'/g, \"''\") }}'::text AS question,\n  '{{ String($json.pathname || '/').replace(/'/g, \"''\") }}'::text AS pathname,\n  '{{ JSON.stringify($json.history || []).replace(/'/g, \"''\") }}'::jsonb AS history,\n  jsonb_build_object(\n    'navigations', COALESCE((SELECT jsonb_agg(to_jsonb(n) - 'id' - 'created_at' - 'updated_at' ORDER BY n.sort_order) FROM public.navigations n), '[]'::jsonb),\n    'screens', COALESCE((SELECT jsonb_agg(to_jsonb(s) - 'id' - 'created_at' - 'updated_at' ORDER BY s.sort_order) FROM public.screens s), '[]'::jsonb),\n    'controls', COALESCE((SELECT jsonb_agg(to_jsonb(c) - 'id' - 'created_at' - 'updated_at' ORDER BY c.sort_order) FROM public.controls c), '[]'::jsonb),\n    'assistant_playbook', COALESCE((SELECT jsonb_agg(to_jsonb(p) - 'id' - 'created_at' - 'updated_at' ORDER BY p.sort_order) FROM public.assistant_playbook p), '[]'::jsonb)\n  ) AS context;"
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000003",
+      "name": "Load Supabase Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-250, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_POSTGRES_CREDENTIAL_ID",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = String($json.question || '').trim();\nconst pathname = String($json.pathname || '/').trim() || '/';\nconst history = Array.isArray($json.history)\n  ? $json.history\n  : JSON.parse(String($json.history || '[]'));\nconst context = typeof $json.context === 'string' ? JSON.parse($json.context) : ($json.context || {});\n\nconst recentHistory = history.length\n  ? history.map((entry) => `${entry.role}: ${entry.text}`).join('\\n')\n  : 'No prior chat history.';\n\nconst contextJson = JSON.stringify(context, null, 2);\n\nconst systemPrompt = [\n  'You are Wise Assistant for the pwise web app.',\n  'Answer questions about layout, navigation, screen purpose, control location, and what the user should click or do.',\n  'Use the provided app context as the source of truth.',\n  'When the user asks where something is, describe the screen and visual location in plain UI terms.',\n  'When the user asks how to do something, give short actionable steps.',\n  'If the answer is not grounded in the provided context, say that the current assistant context does not include it.',\n  'Do not invent routes, buttons, or settings that are not in the context.',\n  'Keep answers concise and practical.',\n].join(' ');\n\nconst userPrompt = [\n  `Current route: ${pathname}`,\n  `User question: ${question}`,\n  'Recent chat history:',\n  recentHistory,\n  'App context JSON:',\n  contextJson,\n].join('\\n\\n');\n\nreturn [{\n  json: {\n    question,\n    pathname,\n    systemPrompt,\n    userPrompt,\n  },\n}];"
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000004",
+      "name": "Build Assistant Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20, 0]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000008",
+      "name": "DeepSeek Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [300, 200],
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REPLACE_WITH_DEEPSEEK_CREDENTIAL_ID",
+          "name": "DeepSeek"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.userPrompt }}",
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000005",
+      "name": "Wise Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [300, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const answer = String($json.output ?? '').trim();\nif (!answer) {\n  throw new Error('DeepSeek did not return an assistant answer');\n}\n\nreturn [{\n  json: {\n    answer,\n    source: 'n8n',\n    model: 'deepseek-chat',\n  },\n}];"
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000006",
+      "name": "Format Assistant Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ ({ answer: $json.answer, source: $json.source, model: $json.model }) }}",
+        "options": {}
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000007",
+      "name": "Respond to App",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [820, 0]
+    }
+  ],
+  "connections": {
+    "Wise Assistant Webhook": {
+      "main": [[{ "node": "Normalize Request", "type": "main", "index": 0 }]]
+    },
+    "Normalize Request": {
+      "main": [[{ "node": "Load Supabase Context", "type": "main", "index": 0 }]]
+    },
+    "Load Supabase Context": {
+      "main": [[{ "node": "Build Assistant Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Assistant Prompt": {
+      "main": [[{ "node": "Wise Agent", "type": "main", "index": 0 }]]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [[{ "node": "Wise Agent", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Wise Agent": {
+      "main": [[{ "node": "Format Assistant Answer", "type": "main", "index": 0 }]]
+    },
+    "Format Assistant Answer": {
+      "main": [[{ "node": "Respond to App", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "pinData": {}
+}

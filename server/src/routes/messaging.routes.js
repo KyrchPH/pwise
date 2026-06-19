@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import requireAuth from '../middleware/auth.middleware.js';
+import requireMessagingAccess from '../middleware/messaging_access.middleware.js';
 import requireServiceToken from '../middleware/service_token.middleware.js';
 import * as ctrl from '../controllers/messaging.controller.js';
 
@@ -14,6 +15,7 @@ router.get('/stream', ctrl.stream);
 router.post('/inbound', requireServiceToken, ctrl.inbound);
 
 router.use(requireAuth);
+router.use(requireMessagingAccess); // JWT routes are messaging-only (stream/inbound gate themselves above)
 router.get('/', ctrl.list); // conversations visible to this user (AI shared + own live)
 
 // Transfers + agent list — declared before the /:id routes so they aren't

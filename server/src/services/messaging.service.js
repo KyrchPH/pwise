@@ -2,6 +2,9 @@ import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { emitMessagingEvent } from './messaging.events.js';
 import { moduleAccessForUser } from '../config/modules.js';
+import { decrypt } from '../utils/crypto.util.js';
+import * as tg from './telegram.service.js';
+import * as fb from './fb.service.js';
 
 // A Live Agent conversation is bound to one user — only that user may view/reply.
 // AI Agent conversations are unbound (shared). Throws 403 on a bound chat the
@@ -77,6 +80,7 @@ function rowToMessage(row) {
     text: row.body || '',
     media: Array.isArray(media) && media.length ? media : undefined,
     replyTo: replyTo && replyTo.id ? replyTo : undefined,
+    deliveryStatus: row.delivery_status || undefined, // 'failed' surfaces in the UI
   };
 }
 
@@ -164,10 +168,168 @@ export async function getConversation(id, actor = {}) {
   return rowToConversation(rows[0], msgs);
 }
 
+// Tell the open inbox(es) that some messages' delivery_status changed, so a failed
+// send surfaces without a refresh. Same audience scoping as the messages themselves.
+function broadcastStatus(conv, updates) {
+  if (!updates.length) return;
+  emitMessagingEvent({ type: 'message:status', conversationId: String(conv.id), updates }, audienceFor(conv));
+}
+
+// Push an outgoing (agent) reply to the customer on their origin platform and
+// record whether it landed. Only Telegram is wired today; other origins leave
+// delivery_status NULL (not applicable). Self-contained and best-effort — every
+// failure resolves (logged + marked 'failed'), nothing throws. AI replies are
+// delivered by n8n's own Telegram node, so this path is Live Agent → customer only.
+//   items: [{ id, body, media }] aligned with the rows just inserted (media bubble
+//   first, then text). replyToExternalId threads the FIRST bubble onto a prior
+//   platform message, when we know its id.
+// Platform dispatcher: deliver an outgoing message to the customer on the
+// conversation's origin platform, using that page's stored credential. Telegram is
+// wired; Messenger/WhatsApp adapters drop in here. No-op for unknown origins.
+async function deliverToCustomer(conv, items = [], replyToExternalId = null) {
+  const origin = String(conv?.origin || '').toLowerCase();
+  if (origin.includes('telegram')) return deliverViaTelegram(conv, items, replyToExternalId);
+  if (origin.includes('messenger') || origin.includes('facebook')) return deliverViaMessenger(conv, items);
+  return undefined;
+}
+
+// Messenger Send API delivery (Graph) — media then text, using the page access
+// token; recipient is the conversation's customer_handle (the customer PSID).
+async function deliverViaMessenger(conv, items = []) {
+  const psid = conv?.customer_handle;
+  let token = '';
+  try {
+    if (conv.account_id != null) {
+      const rows = await query('SELECT access_token FROM platform_accounts WHERE id = ?', [conv.account_id]);
+      token = rows.length && rows[0].access_token ? decrypt(rows[0].access_token) : '';
+    }
+  } catch {
+    token = '';
+  }
+
+  const updates = [];
+  const mark = async (id, status, externalId) => {
+    await query('UPDATE messages SET delivery_status = ?, external_id = COALESCE(?, external_id) WHERE id = ?', [
+      status,
+      externalId ?? null,
+      id,
+    ]).catch(() => {});
+    updates.push({ id: String(id), deliveryStatus: status });
+  };
+
+  if (!psid || !token) {
+    for (const it of items) await mark(it.id, 'failed');
+    broadcastStatus(conv, updates);
+    return;
+  }
+
+  for (const it of items) {
+    let ok = false;
+    let extId = null;
+    let lastErr = '';
+    if (it.media && it.media.length) {
+      for (const m of it.media) {
+        const r = await fb.sendMedia(token, psid, { url: m.url, type: m.type });
+        if (r.ok) {
+          ok = true;
+          if (extId == null) extId = r.messageId;
+        } else {
+          lastErr = r.error;
+        }
+      }
+    } else if (it.body) {
+      const r = await fb.sendMessage(token, psid, it.body);
+      ok = r.ok;
+      extId = r.messageId;
+      if (!r.ok) lastErr = r.error;
+    } else {
+      continue;
+    }
+    if (!ok) console.warn(`[messaging] Messenger delivery failed (conv ${conv.id}, msg ${it.id}): ${lastErr}`);
+    await mark(it.id, ok ? 'sent' : 'failed', extId);
+  }
+  broadcastStatus(conv, updates);
+}
+
+async function deliverViaTelegram(conv, items = [], replyToExternalId = null) {
+  if (!conv || !String(conv.origin || '').toLowerCase().includes('telegram')) return;
+  const chatId = conv.customer_handle;
+
+  let token = '';
+  try {
+    if (conv.account_id != null) {
+      const rows = await query('SELECT telegram_bot_token FROM platform_accounts WHERE id = ?', [conv.account_id]);
+      token = rows.length && rows[0].telegram_bot_token ? decrypt(rows[0].telegram_bot_token) : '';
+    }
+    if (!token) {
+      // Thread not yet bound to its page (pre-binding) — fall back to the sole bot.
+      const bots = await query('SELECT telegram_bot_token FROM platform_accounts WHERE telegram_bot_token IS NOT NULL');
+      if (bots.length === 1 && bots[0].telegram_bot_token) token = decrypt(bots[0].telegram_bot_token);
+    }
+  } catch {
+    token = '';
+  }
+
+  const updates = [];
+  // Persist the outcome on the row and remember it for the SSE broadcast. We only
+  // overwrite external_id when Telegram handed us a new message id.
+  const mark = async (id, status, externalId) => {
+    await query('UPDATE messages SET delivery_status = ?, external_id = COALESCE(?, external_id) WHERE id = ?', [
+      status,
+      externalId ?? null,
+      id,
+    ]).catch(() => {});
+    updates.push({ id: String(id), deliveryStatus: status });
+  };
+
+  // Nothing can go out (no chat id / no bot) → mark them failed so the agent sees it.
+  if (!chatId || !token) {
+    for (const it of items) await mark(it.id, 'failed');
+    broadcastStatus(conv, updates);
+    return;
+  }
+
+  // Media first, then text — mirrors the stored bubble order. Only the first bubble
+  // carries the reply thread; storing Telegram's returned id lets future replies
+  // thread onto ours too.
+  let replyId = replyToExternalId;
+  for (const it of items) {
+    let ok = false;
+    let extId = null;
+    let lastErr = '';
+    if (it.media && it.media.length) {
+      for (let k = 0; k < it.media.length; k += 1) {
+        const m = it.media[k];
+        const r = await tg.sendMedia(token, chatId, { url: m.url, type: m.type, replyToMessageId: k === 0 ? replyId : null });
+        if (r.ok) {
+          ok = true;
+          if (extId == null) extId = r.messageId;
+        } else {
+          lastErr = r.error;
+        }
+      }
+    } else if (it.body) {
+      const r = await tg.sendMessage(token, chatId, it.body, { replyToMessageId: replyId });
+      ok = r.ok;
+      extId = r.messageId;
+      if (!r.ok) lastErr = r.error;
+    } else {
+      continue;
+    }
+    replyId = null;
+    if (!ok) console.warn(`[messaging] Telegram delivery failed (conv ${conv.id}, msg ${it.id}): ${lastErr}`);
+    await mark(it.id, ok ? 'sent' : 'failed', extId);
+  }
+  broadcastStatus(conv, updates);
+}
+
 // Send a reply. Messenger-style: media goes out as its own bubble first, then the
 // text as a separate bubble; the reply reference (if any) rides the first bubble.
 export async function sendMessage(id, actor = {}, { text, media, replyTo } = {}) {
-  const exists = await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE id = ?', [id]);
+  const exists = await query(
+    'SELECT id, handled_by, assigned_user_id, account_id, customer_handle, origin FROM conversations WHERE id = ?',
+    [id],
+  );
   if (!exists.length) throw ApiError.notFound('conversation not found');
   assertCanAccess(exists[0], actor); // only the bound agent may reply
 
@@ -211,6 +373,20 @@ export async function sendMessage(id, actor = {}, { text, media, replyTo } = {})
   const conversation = await conversationPatch(id);
   // Bound chat → only its owner's streams; AI chat → everyone.
   emitMessagingEvent({ type: 'message:new', conversationId: String(id), messages, conversation }, audienceFor(exists[0]));
+
+  // Deliver to the customer on their platform, threading onto the quoted message
+  // when we know its platform id. Fire-and-forget: the reply is already saved +
+  // broadcast; the delivery outcome lands later via a message:status event.
+  let replyToExternalId = null;
+  if (reply) {
+    const rr = await query('SELECT external_id FROM messages WHERE id = ?', [reply.id]).catch(() => []);
+    replyToExternalId = rr.length ? rr[0].external_id : null;
+  }
+  const outgoingItems = parts.map((p, i) => ({ id: createdIds[i], body: p.body, media: p.media }));
+  deliverToCustomer(exists[0], outgoingItems, replyToExternalId).catch((err) =>
+    console.warn(`[messaging] reply delivery error (conv ${id}): ${err?.message || err}`),
+  );
+
   return { messages, conversation };
 }
 
@@ -360,7 +536,12 @@ export async function declineTransfer(transferId, actor = {}) {
 
 // Look up a connected page by our id or its Facebook page id. Returns the row or
 // null (a message can still land on a thread with no page attached).
-async function resolveAccount({ accountId, fbPageId }) {
+//
+// Telegram has no page id of its own, but a bot is always attached to a Facebook
+// page (see platform_accounts), so we bind the chat to that page — that's what
+// makes a Telegram thread appear under the page's filter. Resolution prefers an
+// explicit bot @username; failing that, if exactly one page has a bot, we use it.
+async function resolveAccount({ accountId, fbPageId, telegramBotUsername, origin } = {}) {
   if (accountId != null && accountId !== '') {
     const rows = await query('SELECT id, account_name FROM platform_accounts WHERE id = ?', [accountId]);
     if (rows.length) return rows[0];
@@ -368,6 +549,19 @@ async function resolveAccount({ accountId, fbPageId }) {
   if (fbPageId) {
     const rows = await query('SELECT id, account_name FROM platform_accounts WHERE fb_page_id = ? LIMIT 1', [fbPageId]);
     if (rows.length) return rows[0];
+  }
+  const fromTelegram = String(origin || '').toLowerCase().includes('telegram') || !!telegramBotUsername;
+  if (fromTelegram) {
+    const handle = String(telegramBotUsername || '').replace(/^@/, '').trim();
+    if (handle) {
+      const rows = await query(
+        'SELECT id, account_name FROM platform_accounts WHERE telegram_bot_username = ? LIMIT 1',
+        [handle],
+      );
+      if (rows.length) return rows[0];
+    }
+    const bots = await query('SELECT id, account_name FROM platform_accounts WHERE telegram_bot_token IS NOT NULL');
+    if (bots.length === 1) return bots[0];
   }
   return null;
 }
@@ -441,7 +635,12 @@ export async function receiveInbound(payload = {}) {
   if (!cleanText && !mediaList.length) throw ApiError.badRequest('a message body or media is required');
 
   const side = payload.side === 'outgoing' ? 'outgoing' : 'incoming';
-  const account = await resolveAccount({ accountId: payload.accountId ?? payload.pageId, fbPageId: payload.fbPageId });
+  const account = await resolveAccount({
+    accountId: payload.accountId ?? payload.pageId,
+    fbPageId: payload.fbPageId,
+    telegramBotUsername: payload.telegramBotUsername ?? payload.botUsername,
+    origin: payload.origin,
+  });
   const { id, created } = await resolveOrCreateConversation(payload, account);
 
   const reply =
@@ -459,7 +658,7 @@ export async function receiveInbound(payload = {}) {
   const createdIds = [];
   for (let i = 0; i < parts.length; i += 1) {
     const result = await query(
-      'INSERT INTO messages (conversation_id, side, sender, body, media, reply_to) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO messages (conversation_id, side, sender, body, media, reply_to, external_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         side,
@@ -467,6 +666,7 @@ export async function receiveInbound(payload = {}) {
         parts[i].body,
         parts[i].media ? JSON.stringify(parts[i].media) : null,
         i === 0 && reply ? JSON.stringify(reply) : null,
+        payload.externalId != null && payload.externalId !== '' ? String(payload.externalId) : null,
       ],
     );
     createdIds.push(result.insertId);
@@ -490,6 +690,28 @@ export async function receiveInbound(payload = {}) {
   }
   params.push(id);
   await query(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`, params);
+
+  // Deliver an outgoing message (e.g. an AI reply posted here by n8n) to the customer
+  // on their platform — but only while the thread is still AI-handled, so the AI
+  // doesn't talk over a human who took over mid-generation. Live Agent replies are
+  // delivered by sendMessage instead.
+  if (side === 'outgoing') {
+    const dRows = await query(
+      'SELECT id, origin, customer_handle, account_id, handled_by, assigned_user_id FROM conversations WHERE id = ?',
+      [id],
+    );
+    if (dRows.length && dRows[0].handled_by === 'AI Agent') {
+      let replyExtId = null;
+      if (reply) {
+        const rr = await query('SELECT external_id FROM messages WHERE id = ?', [reply.id]).catch(() => []);
+        replyExtId = rr.length ? rr[0].external_id : null;
+      }
+      const outItems = parts.map((p, i) => ({ id: createdIds[i], body: p.body, media: p.media }));
+      deliverToCustomer(dRows[0], outItems, replyExtId).catch((e) =>
+        console.warn(`[messaging] AI reply delivery error (conv ${id}): ${e?.message || e}`),
+      );
+    }
+  }
 
   // Broadcast. A brand-new thread goes out as conversation:new with the FULL
   // conversation (so clients can insert it into the list); an existing thread just

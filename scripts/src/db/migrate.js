@@ -11,6 +11,10 @@ const schemaPath = resolve(__dirname, '../../database/schema.sql');
 const DROP_SQL = `
   SET FOREIGN_KEY_CHECKS = 0;
   DROP TABLE IF EXISTS vault_items;
+  DROP TABLE IF EXISTS user_connections;
+  DROP TABLE IF EXISTS agent_messages;
+  DROP TABLE IF EXISTS agent_conversation_participants;
+  DROP TABLE IF EXISTS agent_conversations;
   DROP TABLE IF EXISTS conversation_transfers;
   DROP TABLE IF EXISTS messages;
   DROP TABLE IF EXISTS conversations;

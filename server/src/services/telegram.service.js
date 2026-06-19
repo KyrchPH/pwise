@@ -1,8 +1,9 @@
-// Minimal Telegram Bot API client. Today it only validates a bot's API key (token)
-// via getMe — used when connecting a Telegram channel in Settings (the counterpart
-// to fb.verifyPageToken). The token IS the credential, stored encrypted as the
-// account's access_token; getMe returns the bot's id, @username and display name so
-// we can identify and show it. (Sending/receiving messages is a later step.)
+// Minimal Telegram Bot API client. getMe validates a bot's API key (token) when
+// connecting a Telegram channel in Settings (the counterpart to fb.verifyPageToken);
+// sendMessage/sendMedia push a Live Agent's reply out to the customer's chat. The
+// token IS the credential, stored encrypted in platform_accounts.telegram_bot_token;
+// getMe returns the bot's id, @username and display name so we can identify and show
+// it. (Inbound delivery still arrives via n8n -> /api/messages/inbound.)
 
 // Telegram bot tokens look like "123456789:AA…" — digits, a colon, then a secret.
 const TOKEN_RE = /^\d{5,}:[A-Za-z0-9_-]{20,}$/;
@@ -31,5 +32,135 @@ export async function getMe(token) {
   } catch (err) {
     if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out — try again.' };
     return { ok: false, error: `Couldn't reach Telegram: ${err.message}` };
+  }
+}
+
+/**
+ * Send a plain-text message from a bot to a chat. Best-effort: returns
+ * { ok, messageId } or { ok:false, error }; never throws — callers log and move on.
+ */
+// Resolve a temporary download URL for an inbound file_id (photo/document/…). The
+// URL embeds the bot token, so it's used server-side only (we fetch + re-store the
+// bytes in S3). Returns the URL or null.
+export async function getFileLink(token, fileId) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t) || !fileId) return null;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/getFile?file_id=${encodeURIComponent(fileId)}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok || !body.result?.file_path) return null;
+    return `https://api.telegram.org/file/bot${t}/${body.result.file_path}`;
+  } catch {
+    return null;
+  }
+}
+
+export async function sendMessage(token, chatId, text, { replyToMessageId } = {}) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  if (chatId == null || chatId === '') return { ok: false, error: 'missing chat id' };
+  try {
+    const payload = { chat_id: chatId, text: String(text ?? '') };
+    const rid = Number(replyToMessageId);
+    if (Number.isFinite(rid) && rid > 0) {
+      payload.reply_to_message_id = rid;
+      payload.allow_sending_without_reply = true; // don't fail if the original was deleted
+    }
+    const res = await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    return { ok: true, messageId: body.result?.message_id ?? null };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Send media by URL — images via sendPhoto, anything else via sendDocument.
+ * Telegram fetches the URL itself, so it must be publicly reachable at send time
+ * (vault presigned URLs are). Same best-effort contract as sendMessage.
+ */
+/**
+ * Point a bot's inbound webhook at our gateway so Telegram pushes its updates there.
+ * `secret` is echoed back by Telegram in the X-Telegram-Bot-Api-Secret-Token header
+ * so we can verify the call. Best-effort — returns { ok } / { ok:false, error }.
+ */
+export async function setWebhook(token, url, secret) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  if (!url) return { ok: false, error: 'missing url' };
+  try {
+    const payload = { url: String(url), allowed_updates: ['message', 'edited_message'] };
+    if (secret) payload.secret_token = String(secret);
+    const res = await fetch(`https://api.telegram.org/bot${t}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
+  }
+}
+
+// Remove a bot's webhook (when its bot is detached / the page is deleted).
+export async function deleteWebhook(token) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/deleteWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function sendMedia(token, chatId, { url, type, caption, replyToMessageId } = {}) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  if (chatId == null || chatId === '' || !url) return { ok: false, error: 'missing chat id or url' };
+  const isImage = String(type || '').toLowerCase().startsWith('image');
+  const method = isImage ? 'sendPhoto' : 'sendDocument';
+  const field = isImage ? 'photo' : 'document';
+  try {
+    const payload = { chat_id: chatId, [field]: String(url) };
+    if (caption) payload.caption = String(caption);
+    const rid = Number(replyToMessageId);
+    if (Number.isFinite(rid) && rid > 0) {
+      payload.reply_to_message_id = rid;
+      payload.allow_sending_without_reply = true;
+    }
+    const res = await fetch(`https://api.telegram.org/bot${t}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    return { ok: true, messageId: body.result?.message_id ?? null };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
   }
 }

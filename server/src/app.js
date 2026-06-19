@@ -16,7 +16,11 @@ import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
 import platformAccountsRoutes from './routes/platform_accounts.routes.js';
 import messagingRoutes from './routes/messaging.routes.js';
+import teamRoutes from './routes/team.routes.js';
+import connectionsRoutes from './routes/connections.routes.js';
+import webhooksRoutes from './routes/webhooks.routes.js';
 import vaultRoutes from './routes/vault.routes.js';
+import wiseAssistantRoutes from './routes/wise_assistant.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -26,7 +30,8 @@ export function createApp() {
   const app = express();
 
   app.use(cors({ origin: env.clientUrl, credentials: true }));
-  app.use(express.json({ limit: '1mb' }));
+  // Keep the raw body around so the Messenger webhook can verify FB's signature.
+  app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
   // Health checks (root for load balancers, /api for the client dev proxy).
   const health = (req, res) =>
@@ -50,6 +55,15 @@ export function createApp() {
   app.use('/api/pages', revalidate, platformAccountsRoutes);
   // Messaging is real-time (SSE + frequent writes), so it's left uncached.
   app.use('/api/messages', messagingRoutes);
+  // Agent-to-agent (internal team) chat — also real-time, uncached.
+  app.use('/api/team', teamRoutes);
+  // Agent-to-agent connections ("friends") — gates A2A DM replies.
+  app.use('/api/connections', connectionsRoutes);
+  app.use('/api/wise-assistant', wiseAssistantRoutes);
+
+  // Public inbound webhooks from messaging platforms (Telegram now; Messenger later).
+  // No JWT — each platform verifies itself; the page is tagged via ?accountId.
+  app.use('/api/webhooks', webhooksRoutes);
   // Vault carries rotating presigned URLs + frequent writes — left uncached.
   app.use('/api/vault', vaultRoutes);
 

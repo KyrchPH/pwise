@@ -19,6 +19,7 @@
     "db:seed": "npm run db:seed -w scripts",
     "db:seed:messaging": "npm run db:seed:messaging -w scripts",
     "db:setup": "npm run db:setup -w scripts",
+    "assistant:import-context": "npm run assistant:import-context -w scripts",
     "s3:lifecycle": "npm run s3:lifecycle -w scripts",
     "fb:import-env": "npm run fb:import-env -w scripts",
     "fb:list-pages": "npm run fb:list-pages -w scripts",

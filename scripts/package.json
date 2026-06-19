@@ -17,6 +17,7 @@
     "db:migrate:deleted-status": "node src/db/apply.js database/migrations/020_post_deleted_status.sql",
     "db:migrate:conversation-assignment": "node src/db/apply.js database/migrations/021_conversation_assignment.sql",
     "db:migrate:avatar": "node src/db/apply.js database/migrations/021_user_avatar.sql",
+    "assistant:import-context": "node src/import-wise-assistant-context.js",
     "create-admin": "node src/create-admin.js",
     "reset:demo": "node src/reset-demo.js",
     "s3:lifecycle": "node src/set-s3-lifecycle.js",
@@ -28,7 +29,9 @@
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
-    "mysql2": "^3.11.0"
+    "mysql2": "^3.11.0",
+    "pg": "^8.22.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"

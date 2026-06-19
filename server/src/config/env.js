@@ -20,6 +20,11 @@ export const env = {
   // Machine auth for n8n -> /api/scheduler/* (was SCHEDULER_SECRET in the plan).
   serviceToken: process.env.SERVICE_TOKEN || process.env.SCHEDULER_SECRET || '',
 
+  // Public base URL of THIS API (used to register inbound webhooks with platforms,
+  // e.g. https://pwise-api.sixpent.com — Telegram/Facebook POST customer messages there).
+  publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+  telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '', // secret_token Telegram echoes back
+
   aws: {
     region: process.env.AWS_REGION || '',
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
@@ -35,6 +40,8 @@ export const env = {
     pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || '',
     graphVersion: process.env.FB_GRAPH_VERSION || 'v21.0',
     pageId: process.env.FACEBOOK_PAGE_ID || '',
+    verifyToken: process.env.FB_WEBHOOK_VERIFY_TOKEN || '', // GET handshake for the Messenger webhook
+    appSecret: process.env.FB_APP_SECRET || '', // verifies X-Hub-Signature-256 on inbound Messenger POSTs
   },
 
   // "Generate with Template" delegates rendering to n8n (the "Post to n8n"
@@ -52,6 +59,12 @@ export const env = {
     // generate URL unless split out via N8N_POST_WEBHOOK_URL.
     postWebhookUrl: process.env.N8N_POST_WEBHOOK_URL || process.env.N8N_GENERATE_WEBHOOK_URL || '',
     webhookToken: process.env.N8N_WEBHOOK_TOKEN || '', // optional: sent as x-service-token
+    // The platform gateway forwards normalized inbound customer messages here for AI.
+    aiWebhookUrl: process.env.N8N_AI_WEBHOOK_URL || '',
+    aiSecret: process.env.N8N_AI_SECRET || '', // optional shared secret sent as x-gateway-secret
+    // Dev Wise Assistant overlay -> server -> n8n assistant webhook.
+    wiseAssistantWebhookUrl: process.env.N8N_WISE_ASSISTANT_WEBHOOK_URL || '',
+    wiseAssistantSecret: process.env.N8N_WISE_ASSISTANT_SECRET || '',
   },
 
   // At-rest encryption key for connected-page credentials (platform_accounts).
@@ -80,6 +93,9 @@ export function validateEnv(logger = console) {
   if (!env.aws.bucket || !env.aws.region) warnings.push('AWS S3 not fully configured — upload + presigned URLs will fail.');
   if (!env.facebook.pageAccessToken) warnings.push('FACEBOOK_PAGE_ACCESS_TOKEN is not set — deleting/editing published posts on Facebook will fail (503).');
   if (!env.n8n.generateWebhookUrl) warnings.push('N8N_GENERATE_WEBHOOK_URL is not set — "Generate with Template" will fail (503).');
+  if (!env.n8n.wiseAssistantWebhookUrl && env.nodeEnv === 'development') {
+    warnings.push('N8N_WISE_ASSISTANT_WEBHOOK_URL is not set — the dev Wise Assistant chat will return 503.');
+  }
   if (!env.encryptionKey) warnings.push('ENCRYPTION_KEY is not set — adding/using connected Facebook pages will fail (503).');
   if (!env.smtp.host) warnings.push('SMTP_HOST is not set — password-change codes are logged to the console in dev and fail (503) in production.');
   for (const w of warnings) logger.warn(`[env] ${w}`);

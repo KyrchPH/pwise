@@ -3,6 +3,7 @@ import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/messaging.service.js';
 import { onMessagingEvent } from '../services/messaging.events.js';
 import { verifyToken, findActiveById } from '../services/auth.service.js';
+import { hasMessagingAccess } from '../config/modules.js';
 
 // AI Agent threads are shared; Live Agent threads are scoped to their assigned
 // user (the service filters by req.user). Writes pass the acting user.
@@ -74,6 +75,10 @@ export async function stream(req, res) {
   }
   if (!user) {
     res.status(401).json({ success: false, message: 'unauthorized' });
+    return;
+  }
+  if (!hasMessagingAccess(user)) {
+    res.status(403).json({ success: false, message: 'forbidden' });
     return;
   }
 

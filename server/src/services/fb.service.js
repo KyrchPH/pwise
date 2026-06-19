@@ -221,3 +221,79 @@ export async function verifyPageToken({ token, fbPageId } = {}) {
   }
   return { ok: true, name: data.name ?? null, followers: data.followers_count ?? data.fan_count ?? null };
 }
+
+// ── Messenger Send API ────────────────────────────────────────────────────────
+// Deliver a Page → customer message. `recipientId` is the customer's PSID
+// (stored as the conversation's customer_handle); `token` is the page access token.
+// Best-effort — returns { ok, messageId } / { ok:false, error }; never throws.
+export async function sendMessage(token, recipientId, text) {
+  if (!token || !recipientId) return { ok: false, error: 'missing token or recipient' };
+  try {
+    const { ok, error, data } = await graph('me/messages', {
+      method: 'POST',
+      token,
+      fields: {
+        messaging_type: 'RESPONSE',
+        recipient: JSON.stringify({ id: String(recipientId) }),
+        message: JSON.stringify({ text: String(text ?? '') }),
+      },
+    });
+    if (!ok) return { ok: false, error: error?.message || 'Messenger send failed' };
+    return { ok: true, messageId: data.message_id ?? null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Deliver media by URL — image/video/audio attachment, else a generic file. The URL
+// must be publicly reachable (our presigned S3 URLs are).
+export async function sendMedia(token, recipientId, { url, type } = {}) {
+  if (!token || !recipientId || !url) return { ok: false, error: 'missing token, recipient, or url' };
+  const t = String(type || '').toLowerCase();
+  const attType = t.startsWith('image') ? 'image' : t.startsWith('video') ? 'video' : t.startsWith('audio') ? 'audio' : 'file';
+  try {
+    const { ok, error, data } = await graph('me/messages', {
+      method: 'POST',
+      token,
+      fields: {
+        messaging_type: 'RESPONSE',
+        recipient: JSON.stringify({ id: String(recipientId) }),
+        message: JSON.stringify({ attachment: { type: attType, payload: { url: String(url), is_reusable: false } } }),
+      },
+    });
+    if (!ok) return { ok: false, error: error?.message || 'Messenger media send failed' };
+    return { ok: true, messageId: data.message_id ?? null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Resolve a customer's display name from their PSID (Messenger User Profile API).
+// Best-effort — returns { name } or null.
+export async function getUserProfile(token, psid) {
+  if (!token || !psid) return null;
+  try {
+    const { ok, data } = await graph(String(psid), { fields: { fields: 'name' }, token });
+    if (!ok) return null;
+    return { name: data.name || null };
+  } catch {
+    return null;
+  }
+}
+
+// Subscribe a Page to this app's webhooks for messaging, so its inbound messages
+// reach our /api/webhooks/messenger endpoint. Best-effort.
+export async function subscribeMessaging(token, pageId) {
+  if (!token || !pageId) return { ok: false, error: 'missing token or page id' };
+  try {
+    const { ok, error } = await graph(`${pageId}/subscribed_apps`, {
+      method: 'POST',
+      token,
+      fields: { subscribed_fields: 'messages,messaging_postbacks' },
+    });
+    if (!ok) return { ok: false, error: error?.message || 'subscribe failed' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}

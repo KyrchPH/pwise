@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App.jsx';
+import DevScreenAgentHost from './components/DevScreenAgentHost.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { PageProvider } from './context/PageContext.jsx';
 import { VaultProvider } from './context/VaultContext.jsx';
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <PageProvider>
               <VaultProvider>
                 <App />
+                <DevScreenAgentHost />
               </VaultProvider>
             </PageProvider>
           </AuthProvider>
