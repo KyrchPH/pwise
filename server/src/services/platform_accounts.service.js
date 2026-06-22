@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import { encrypt, decrypt } from '../utils/crypto.util.js';
 import * as fb from './fb.service.js';
 import * as tg from './telegram.service.js';
+import { createFolder } from './vault.service.js';
 import { env } from '../config/env.js';
 
 // Connected Facebook pages. The list is shared/global (like the post pool); user_id
@@ -23,6 +24,8 @@ function toSafe(r) {
     telegram_bot_username: r.telegram_bot_username || null,
     has_telegram_bot: !!r.telegram_bot_token,
     is_active: !!r.is_active,
+    // The page's dedicated Vault folder (the AI agent's media scope).
+    vault_folder_id: r.vault_folder_id != null ? Number(r.vault_folder_id) : null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -108,6 +111,48 @@ async function ensureMessengerSubscription(accountId) {
   }
 }
 
+// Re-register this page's inbound webhooks with the platforms — the Settings
+// "Refresh" action. Unlike create/update it changes no stored credentials: it just
+// re-points Telegram's setWebhook (and re-subscribes Messenger) at our gateway, then
+// reads back the live Telegram registration so the UI can confirm it. Throws only on
+// a hard precondition (page missing, or PUBLIC_URL unset so registration is
+// impossible); per-platform outcomes come back in the result.
+export async function refreshWebhook(id) {
+  const account = await getDecrypted(id); // 404s if the page doesn't exist
+  if (!env.publicUrl) {
+    throw ApiError.badRequest(
+      'PUBLIC_URL is not set on the server, so inbound webhooks cannot be registered. Set PUBLIC_URL and restart, then try again.',
+    );
+  }
+
+  const result = { telegram: null, messenger: null };
+
+  if (account.telegram_bot_token) {
+    const url = `${env.publicUrl}/api/webhooks/telegram?accountId=${id}`;
+    const set = await tg.setWebhook(account.telegram_bot_token, url, env.telegramWebhookSecret);
+    if (!set.ok) {
+      result.telegram = { ok: false, url, error: set.error };
+    } else {
+      // Confirm what Telegram actually has now (best-effort — the set already succeeded).
+      const info = await tg.getWebhookInfo(account.telegram_bot_token);
+      result.telegram = {
+        ok: true,
+        url,
+        registeredUrl: info.ok ? info.url : null,
+        pendingUpdateCount: info.ok ? info.pendingUpdateCount : null,
+        lastErrorMessage: info.ok ? info.lastErrorMessage : null,
+      };
+    }
+  }
+
+  if (env.facebook.verifyToken && account.access_token && account.fb_page_id) {
+    const sub = await fb.subscribeMessaging(account.access_token, account.fb_page_id);
+    result.messenger = sub.ok ? { ok: true } : { ok: false, error: sub.error };
+  }
+
+  return result;
+}
+
 // Validate page credentials against Facebook BEFORE saving (the "Connect" step).
 // For edits, a blank token / page id falls back to the stored values so an admin
 // can re-test without re-entering secrets. Throws on failure.
@@ -164,6 +209,15 @@ export async function create(actor = {}, data = {}) {
       tgUsername,
     ],
   );
+  // Give the page its own Vault folder — the AI agent's media scope. Best-effort:
+  // a hiccup here must not fail the connect (the vault:backfill-folders script repairs it).
+  try {
+    const folder = await createFolder(actor, { name: account_name });
+    await query('UPDATE platform_accounts SET vault_folder_id = ? WHERE id = ?', [folder.id, result.insertId]);
+  } catch (err) {
+    console.warn(`[platform_accounts] vault folder not created for page ${result.insertId}: ${err?.message || err}`);
+  }
+
   const account = await getById(result.insertId);
   if (tgToken) ensureTelegramWebhook(account.id).catch(() => {}); // wire up the bot's webhook
   ensureMessengerSubscription(account.id).catch(() => {});
@@ -214,6 +268,14 @@ export async function update(id, data = {}) {
   if (fields.length) {
     params.push(id);
     await query(`UPDATE platform_accounts SET ${fields.join(', ')} WHERE id = ?`, params);
+  }
+  // Keep the page's Vault folder name in sync with the page name (cosmetic; the link
+  // is by id). Best-effort.
+  if (data.account_name !== undefined && existing.vault_folder_id) {
+    await query("UPDATE vault_items SET name = ? WHERE id = ? AND type = 'folder'", [
+      String(data.account_name).trim(),
+      existing.vault_folder_id,
+    ]).catch(() => {});
   }
   // Keep the Telegram webhook in sync with the new bot state.
   if (data.telegram_remove) {

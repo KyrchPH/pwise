@@ -60,3 +60,9 @@ export const update = asyncHandler(async (req, res) => {
 export const remove = asyncHandler(async (req, res) => {
   sendSuccess(res, await pages.remove(req.params.id));
 });
+
+// Re-register this page's inbound webhooks (Telegram setWebhook + Messenger sub) with
+// the platforms, without re-saving credentials. Returns per-platform results.
+export const refreshWebhook = asyncHandler(async (req, res) => {
+  sendSuccess(res, await pages.refreshWebhook(req.params.id));
+});

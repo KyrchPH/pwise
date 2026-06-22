@@ -1,5 +1,6 @@
 import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/response.util.js';
+import { env } from '../config/env.js';
 import * as service from '../services/messaging.service.js';
 import { onMessagingEvent } from '../services/messaging.events.js';
 import { verifyToken, findActiveById } from '../services/auth.service.js';
@@ -32,6 +33,18 @@ export const takeover = asyncHandler(async (req, res) => {
   sendSuccess(res, { conversation });
 });
 
+// Messaging feature flags the client needs (currently just the hand-back-to-AI
+// affordance). Cheap, no DB — read on inbox load to decide whether to enable it.
+export const config = asyncHandler(async (req, res) => {
+  sendSuccess(res, { allowTransferToAi: env.allowTransferToAi });
+});
+
+// Hand a Live Agent thread back to the AI agent (flag-gated; see service.returnToAi).
+export const returnToAi = asyncHandler(async (req, res) => {
+  const conversation = await service.returnToAi(req.params.id, req.user);
+  sendSuccess(res, { conversation });
+});
+
 // ── Transfers ────────────────────────────────────────────────────────────────
 export const agents = asyncHandler(async (req, res) => {
   sendSuccess(res, { agents: await service.listAgents(req.user) });
@@ -60,6 +73,30 @@ export const declineTransfer = asyncHandler(async (req, res) => {
 export const inbound = asyncHandler(async (req, res) => {
   const result = await service.receiveInbound(req.body || {});
   sendSuccess(res, result, 201);
+});
+
+// Machine-only (service token): the AI agent's `search_catalog` tool. Page-scoped
+// keyword lookup over products + reference answers via MySQL FULLTEXT.
+// Body: { query, accountId, limit? } — accountId scopes to the page (required).
+export const knowledge = asyncHandler(async (req, res) => {
+  const { query: q, accountId, limit } = req.body || {};
+  sendSuccess(res, await service.searchKnowledge(q, { accountId, limit }));
+});
+
+// Machine-only (service token): the AI agent's `send_media` tool. Finds a media file
+// in the page's Vault folder matching the query and sends it to the customer.
+// Body: { accountId, customerHandle, origin, query }.
+export const media = asyncHandler(async (req, res) => {
+  const { accountId, customerHandle, origin, query } = req.body || {};
+  sendSuccess(res, await service.sendVaultMedia({ accountId, customerHandle, origin, query }));
+});
+
+// Machine-only (service token): n8n escalates a thread to a human. Pauses AI auto-reply
+// for the thread and flags it for an agent to take over. Body: { accountId,
+// customerHandle, origin, reason? }.
+export const handoff = asyncHandler(async (req, res) => {
+  const result = await service.handoffToLiveAgent(req.body || {});
+  sendSuccess(res, result);
 });
 
 // Server-Sent Events stream of inbox changes (new messages, seen, take-over).

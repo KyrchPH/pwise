@@ -20,5 +20,7 @@ router.post('/test', requireAdmin, ctrl.test);
 router.post('/', requireAdmin, ctrl.create);
 router.patch('/:id', requireAdmin, ctrl.update);
 router.delete('/:id', requireAdmin, ctrl.remove);
+// Re-register this page's inbound webhooks with the platforms (no credential change).
+router.post('/:id/refresh-webhook', requireAdmin, ctrl.refreshWebhook);
 
 export default router;

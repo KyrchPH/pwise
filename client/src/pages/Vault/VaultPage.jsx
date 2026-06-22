@@ -24,6 +24,26 @@ function TrashIcon() {
   );
 }
 
+// Visible to AI (click to hide).
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+// Hidden from AI (click to show).
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
 function UploadIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -120,7 +140,7 @@ function uploadStatusLabel(entry) {
 
 export default function VaultPage() {
   const toast = useToast();
-  const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading } = useVault();
+  const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading, setItemAiHidden } = useVault();
   const [folderId, setFolderId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -223,6 +243,15 @@ export default function VaultPage() {
       toast.error(apiError(e));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const toggleAiHidden = async (file) => {
+    try {
+      const updated = await setItemAiHidden(file.id, !file.aiHidden);
+      toast.success(updated.aiHidden ? 'Hidden from the AI agent' : 'Visible to the AI agent');
+    } catch (e) {
+      toast.error(apiError(e));
     }
   };
 
@@ -456,7 +485,7 @@ export default function VaultPage() {
         {files.map((file) => (
           <div
             key={file.id}
-            className={`vault-item${dragId === file.id ? ' is-dragging' : ''}`}
+            className={`vault-item${dragId === file.id ? ' is-dragging' : ''}${file.aiHidden ? ' vault-item--ai-hidden' : ''}`}
             draggable
             onDragStart={(event) => onItemDragStart(event, file)}
             onDragEnd={onItemDragEnd}
@@ -469,11 +498,21 @@ export default function VaultPage() {
             >
               <span className="vault-item__thumb">
                 <VaultThumb item={file} />
+                {file.aiHidden && <span className="vault-item__ai-badge">Hidden from AI</span>}
               </span>
               <span className="vault-item__name">{file.name}</span>
               <span className="vault-item__meta">{formatBytes(file.size)}</span>
             </button>
             <div className="vault-item__actions">
+              <button
+                type="button"
+                className={`vault-item__act${file.aiHidden ? ' is-active' : ''}`}
+                onClick={() => toggleAiHidden(file)}
+                aria-label={file.aiHidden ? `Show ${file.name} to the AI` : `Hide ${file.name} from the AI`}
+                title={file.aiHidden ? 'Hidden from AI — click to show' : 'Visible to AI — click to hide'}
+              >
+                {file.aiHidden ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
               <button
                 type="button"
                 className="vault-item__act"

@@ -30,3 +30,9 @@ export async function remove(id) {
   const { data } = await api.delete(`/vault/${id}`);
   return data.data;
 }
+
+// Toggle a file's "Hide from AI" flag. Returns the updated item.
+export async function setAiHidden(id, aiHidden) {
+  const { data } = await api.patch(`/vault/${id}/ai-visibility`, { aiHidden });
+  return data.data.item;
+}

@@ -8,9 +8,11 @@ import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
-import { buildPageCards, messagePreview, resolveSelectedPageId } from './messagingData.js';
+import { buildPageCards, conversationPreview, messagePreview, resolveSelectedPageId } from './messagingData.js';
 import AgentChat from './AgentChat.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
+import messageAnimation from '../../assets/lotties/message.json';
+import { renderMessageText } from './messageText.jsx';
 
 // Two-way arrows for the transfer action, and an inbox glyph for the request bar.
 function TransferIcon() {
@@ -163,6 +165,7 @@ export default function MessagingPage() {
   const [transferFor, setTransferFor] = useState(null); // conversation being transferred
   const [agents, setAgents] = useState([]); // teammates for the transfer picker
   const [transferBusy, setTransferBusy] = useState(false);
+  const [allowTransferToAi, setAllowTransferToAi] = useState(false); // ALLOW_TRANSFER_TO_AI flag (hand a chat back to AI)
 
   // Load the shared inbox once on mount.
   useEffect(() => {
@@ -195,6 +198,11 @@ export default function MessagingPage() {
   // Load the transfer requests waiting for me (the incoming-request bar).
   useEffect(() => {
     messaging.incomingTransfers().then(setIncomingRequests).catch(() => {});
+  }, []);
+
+  // Messaging feature flags (e.g. whether the hand-back-to-AI affordance is on).
+  useEffect(() => {
+    messaging.getConfig().then((c) => setAllowTransferToAi(!!c.allowTransferToAi)).catch(() => {});
   }, []);
 
   // Keep it live: SSE pushes new messages, freshly opened threads, ownership
@@ -475,6 +483,29 @@ export default function MessagingPage() {
     messaging.takeOver(id).catch(() => {});
   };
 
+  // Hand the open Live Agent thread back to the AI agent (double-click the customer
+  // avatar). Gated by the ALLOW_TRANSFER_TO_AI flag; only meaningful on a thread I own.
+  const handleReturnToAi = () => {
+    if (!allowTransferToAi || !activeConversation || !isLiveAgent) return;
+    const id = activeConversation.id;
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === id
+          ? { ...conversation, handledBy: 'AI Agent', assignedUserId: null, assignedUserName: '', status: '' }
+          : conversation,
+      ),
+    );
+    setAgentView('ai');
+    setSelectedConversationId(id);
+    messaging
+      .returnToAi(id)
+      .then(() => toast.success('Conversation handed back to the AI agent'))
+      .catch((e) => {
+        toast.error(messaging.apiError(e));
+        reloadConversations(); // re-sync if the server rejected it (e.g. flag off)
+      });
+  };
+
   // Open the transfer picker for the active (owned) conversation, loading teammates.
   const openTransfer = () => {
     if (!activeConversation) return;
@@ -739,6 +770,9 @@ export default function MessagingPage() {
                       <div className="msg-conversation__row">
                         <span className="msg-conversation__tags">
                           <span className="msg-conversation__mode">{conversation.handledBy}</span>
+                          {conversation.status && (
+                            <span className="msg-conversation__status">{conversation.status}</span>
+                          )}
                           {conversation.pageName && (
                             <span className="msg-conversation__page" title={conversation.pageName}>
                               {conversation.pageName}
@@ -746,7 +780,7 @@ export default function MessagingPage() {
                           )}
                         </span>
                       </div>
-                      <p className="msg-conversation__preview">{conversation.summary}</p>
+                      <p className="msg-conversation__preview">{conversationPreview(conversation, user?.name)}</p>
                     </div>
                   </button>
                 </li>
@@ -765,11 +799,21 @@ export default function MessagingPage() {
             <>
               <div className="card__head msg-thread__head">
                 <div className="msg-thread__identity">
-                  <CustomerAvatar
-                    name={activeConversation.customerName}
-                    origin={activeConversation.origin}
-                    avatarUrl={activeConversation.avatarUrl}
-                  />
+                  <span
+                    onDoubleClick={isLiveAgent && allowTransferToAi ? handleReturnToAi : undefined}
+                    title={isLiveAgent && allowTransferToAi ? 'Double-click to hand this chat back to the AI agent' : undefined}
+                    style={{
+                      display: 'inline-flex',
+                      userSelect: 'none',
+                      ...(isLiveAgent && allowTransferToAi ? { cursor: 'pointer' } : {}),
+                    }}
+                  >
+                    <CustomerAvatar
+                      name={activeConversation.customerName}
+                      origin={activeConversation.origin}
+                      avatarUrl={activeConversation.avatarUrl}
+                    />
+                  </span>
                   <div>
                     <div className="card__title">{activeConversation.customerName}</div>
                     <div className="msg-panel__sub msg-thread__sub">
@@ -834,7 +878,7 @@ export default function MessagingPage() {
                             ))}
                           </div>
                         )}
-                        {message.text && <div className="msg-bubble__text">{message.text}</div>}
+                        {message.text && <div className="msg-bubble__text">{renderMessageText(message.text)}</div>}
                         <div className="msg-bubble__foot">
                           {message.text && (
                             <button
@@ -1082,7 +1126,7 @@ export default function MessagingPage() {
           ) : (
             <div className="card--pad">
               <EmptyState
-                icon="..."
+                lottie={messageAnimation}
                 title="Choose a conversation"
                 message="Select a conversation from the left to open the chat view."
               />

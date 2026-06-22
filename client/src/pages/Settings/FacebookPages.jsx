@@ -26,6 +26,13 @@ const GearIcon = () => (
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
 );
+const RefreshIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="23 4 23 10 17 10" />
+    <polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </svg>
+);
 
 // Small brand marks for the platforms a page is connected to.
 function FacebookLogo({ title = 'Facebook' }) {
@@ -79,6 +86,7 @@ export default function FacebookPages({ embedded = false }) {
   const [tested, setTested] = useState(false); // FB connection verified for the CURRENT field values
   const [testInfo, setTestInfo] = useState(null); // { name, followers } from the successful test
   const [menuId, setMenuId] = useState(null); // page whose options dropdown is open
+  const [refreshingId, setRefreshingId] = useState(null); // page whose webhook is re-registering
 
   const load = () => {
     setLoading(true);
@@ -239,6 +247,31 @@ export default function FacebookPages({ embedded = false }) {
     }
   };
 
+  // Re-register this page's Telegram bot webhook with the platform (the menu's
+  // "Refresh") — no re-save needed. Reports back what Telegram now has registered.
+  const refreshWebhook = async (p) => {
+    if (refreshingId != null) return;
+    setRefreshingId(p.id);
+    try {
+      const { telegram } = await pagesService.refreshWebhook(p.id);
+      if (telegram?.ok) {
+        const pending = telegram.pendingUpdateCount;
+        toast.success(
+          `Telegram webhook re-registered for "${p.account_name}".` +
+            (pending ? ` ${pending} queued message${pending === 1 ? '' : 's'} will arrive shortly.` : ''),
+        );
+      } else if (telegram && !telegram.ok) {
+        toast.error(`Couldn't register the Telegram webhook: ${telegram.error}`);
+      } else {
+        toast.success('Nothing to refresh — no Telegram bot is attached to this page.');
+      }
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
   const secretHint = (label) => (editing?.id ? 'leave blank to keep current' : label);
   // Show the "keep current"/masked affordances only when a bot is already attached.
   const botKeyHint = editing?.telegram_has ? 'leave blank to keep current' : 'required to attach a bot';
@@ -385,6 +418,22 @@ export default function FacebookPages({ embedded = false }) {
                       <EditIcon />
                       Edit
                     </button>
+                    {p.has_telegram_bot && (
+                      <button
+                        type="button"
+                        className="card-menu__item"
+                        role="menuitem"
+                        title="Re-register this page's Telegram webhook"
+                        disabled={refreshingId === p.id}
+                        onClick={() => {
+                          setMenuId(null);
+                          refreshWebhook(p);
+                        }}
+                      >
+                        <RefreshIcon />
+                        {refreshingId === p.id ? 'Refreshing…' : 'Refresh'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="card-menu__item card-menu__item--danger"

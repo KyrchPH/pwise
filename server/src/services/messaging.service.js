@@ -1,10 +1,17 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
+import { env } from '../config/env.js';
 import { emitMessagingEvent } from './messaging.events.js';
 import { moduleAccessForUser } from '../config/modules.js';
 import { decrypt } from '../utils/crypto.util.js';
 import * as tg from './telegram.service.js';
 import * as fb from './fb.service.js';
+import { searchAiMedia } from './vault.service.js';
+
+// Conversation status set when the AI escalates a thread to a human (see
+// handoffToLiveAgent). The inbound gateway stops auto-replying while a thread
+// carries this status; taking the thread over clears it.
+export const HANDOFF_STATUS = 'Needs human';
 
 // A Live Agent conversation is bound to one user — only that user may view/reply.
 // AI Agent conversations are unbound (shared). Throws 403 on a bound chat the
@@ -195,6 +202,15 @@ async function deliverToCustomer(conv, items = [], replyToExternalId = null) {
 
 // Messenger Send API delivery (Graph) — media then text, using the page access
 // token; recipient is the conversation's customer_handle (the customer PSID).
+// Plain-text channels (Messenger) can't render Markdown, so flatten the little our
+// agents emit: **bold** -> bold, `code` -> code, "- " bullets -> "• ".
+function stripMarkdown(text) {
+  return String(text ?? '')
+    .replace(/^[ \t]*[-*]\s+/gm, '• ')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`([^`\n]+?)`/g, '$1');
+}
+
 async function deliverViaMessenger(conv, items = []) {
   const psid = conv?.customer_handle;
   let token = '';
@@ -238,7 +254,7 @@ async function deliverViaMessenger(conv, items = []) {
         }
       }
     } else if (it.body) {
-      const r = await fb.sendMessage(token, psid, it.body);
+      const r = await fb.sendMessage(token, psid, stripMarkdown(it.body));
       ok = r.ok;
       extId = r.messageId;
       if (!r.ok) lastErr = r.error;
@@ -412,11 +428,33 @@ export async function takeOver(id, actor = {}) {
   if (c.handled_by === 'Live Agent' && Number(c.assigned_user_id) !== Number(actor.id)) {
     throw new ApiError(403, 'This conversation is handled by another agent — request a transfer instead.');
   }
+  // Clear any "Needs human" handoff flag — a human is now handling it.
   await query(
-    "UPDATE conversations SET handled_by = 'Live Agent', assigned_user_id = ?, assigned_user_name = ? WHERE id = ?",
+    "UPDATE conversations SET handled_by = 'Live Agent', assigned_user_id = ?, assigned_user_name = ?, status = NULL WHERE id = ?",
     [actor.id ?? null, actor.name ?? null, id],
   );
   emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(id), assignedUserId: Number(actor.id) });
+  return conversationPatch(id);
+}
+
+// Hand a Live Agent thread BACK to the AI agent — the inverse of takeOver. Gated by
+// the ALLOW_TRANSFER_TO_AI feature flag (controlled testing). Only the bound owner may
+// release it. Clears assignment + any handoff status so the inbound gateway resumes
+// forwarding the customer's messages to n8n. Broadcasts a reassignment so every inbox
+// re-fetches (the thread is shared/unbound again).
+export async function returnToAi(id, actor = {}) {
+  if (!env.allowTransferToAi) {
+    throw new ApiError(403, 'Handing a conversation back to the AI agent is disabled (ALLOW_TRANSFER_TO_AI is off).');
+  }
+  const rows = await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE id = ?', [id]);
+  if (!rows.length) throw ApiError.notFound('conversation not found');
+  assertCanAccess(rows[0], actor); // only the agent who owns it may release it
+
+  await query(
+    "UPDATE conversations SET handled_by = 'AI Agent', assigned_user_id = NULL, assigned_user_name = NULL, status = NULL WHERE id = ?",
+    [id],
+  );
+  emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(id), assignedUserId: null });
   return conversationPatch(id);
 }
 
@@ -740,4 +778,102 @@ export async function receiveInbound(payload = {}) {
     : null;
   emitMessagingEvent({ type: 'message:new', conversationId: String(id), messages, conversation }, audience);
   return { conversationId: String(id), created: false, messages, conversation };
+}
+
+// Escalate a thread to a human. Machine-authed (service token) — n8n calls this when
+// the AI decides to hand off. It does NOT change ownership: the thread stays an
+// (unbound) AI Agent chat so it remains claimable from any agent's inbox via takeOver,
+// and so the AI's own handoff reply (sent right after, via /inbound) still delivers.
+// Setting HANDOFF_STATUS is what makes the inbound gateway stop forwarding the
+// customer's future messages to n8n. Idempotent; a no-op if a human already owns it.
+export async function handoffToLiveAgent({ accountId, customerHandle, origin, reason } = {}) {
+  const handle = String(customerHandle ?? '').trim();
+  if (!handle) throw ApiError.badRequest('customerHandle is required');
+
+  const account = await resolveAccount({ accountId, origin });
+  const acctId = account?.id ?? null;
+  const rows =
+    acctId != null
+      ? await query(
+          'SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id = ? AND customer_handle = ? ORDER BY id DESC LIMIT 1',
+          [acctId, handle],
+        )
+      : await query(
+          'SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id IS NULL AND customer_handle = ? ORDER BY id DESC LIMIT 1',
+          [handle],
+        );
+  if (!rows.length) throw ApiError.notFound('no conversation found for this customer');
+
+  const conv = rows[0];
+  // A human already has it — leave their ownership untouched.
+  if (conv.handled_by === 'Live Agent') {
+    return { conversationId: String(conv.id), handedOff: false, alreadyLive: true };
+  }
+
+  await query('UPDATE conversations SET status = ?, last_message_at = NOW() WHERE id = ?', [HANDOFF_STATUS, conv.id]);
+  const conversation = await conversationPatch(conv.id);
+  // Unbound AI thread → broadcast to everyone so any agent can pick it up.
+  emitMessagingEvent({ type: 'conversation:updated', conversation, handoffReason: reason || null }, null);
+  return { conversationId: String(conv.id), handedOff: true, conversation };
+}
+
+// Product lookup the AI agent's `search_catalog` tool calls — MySQL FULLTEXT over
+// the page's catalog (products only; FAQs are answered from the Supabase vector
+// store instead). SCOPED to one page via account_id (the conversation's page,
+// passed by the tool — never the LLM), so a page's agent only ever sees its own
+// products. `LIMIT` is inlined from a sanitized integer (mysql2 won't bind LIMIT as
+// a param). Guarded so a missing index (pre-migration) degrades to [] not an error.
+export async function searchKnowledge(rawQuery, { accountId, limit = 6 } = {}) {
+  const q = String(rawQuery ?? '').trim();
+  const acct = parseInt(accountId, 10);
+  // No page → no results (never fall back to a cross-page / global search).
+  if (!q || !Number.isInteger(acct)) return { products: [] };
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 6, 1), 20);
+
+  const products = await query(
+    `SELECT id, name, category, price,
+            MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
+       FROM products
+      WHERE account_id = ?
+        AND MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE)
+      ORDER BY score DESC, id ASC
+      LIMIT ${lim}`,
+    [q, acct, q],
+  ).catch(() => []);
+
+  return { products: products.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price })) };
+}
+
+// The AI agent's `send_media` tool: find a media file in THIS page's Vault folder
+// matching the query and deliver it to the customer (same outgoing path as any
+// media — Telegram/Messenger sendMedia + inbox bubble + SSE). Scoped to the page's
+// folder and skips ai_hidden files; accountId/customerHandle come from the
+// conversation (the tool), never the LLM. Returns a short status the agent speaks to.
+export async function sendVaultMedia({ accountId, customerHandle, origin, query: rawQuery } = {}) {
+  const acct = parseInt(accountId, 10);
+  const handle = String(customerHandle ?? '').trim();
+  const q = String(rawQuery ?? '').trim();
+  if (!Number.isInteger(acct) || !handle || !q) {
+    return { sent: false, reason: 'accountId, customerHandle, and query are required' };
+  }
+
+  const rows = await query('SELECT vault_folder_id FROM platform_accounts WHERE id = ?', [acct]);
+  const folderId = rows.length ? rows[0].vault_folder_id : null;
+  if (folderId == null) return { sent: false, reason: "this page has no media folder yet" };
+
+  const matches = await searchAiMedia(folderId, q, { limit: 4 });
+  if (!matches.length) return { sent: false, reason: "no matching file found in this page's folder" };
+
+  const top = matches[0];
+  // side:'outgoing' + AI-handled → receiveInbound delivers it to the customer and
+  // records the bubble. (It won't send if a human has taken the thread over.)
+  await receiveInbound({
+    accountId: acct,
+    customerHandle: handle,
+    origin,
+    side: 'outgoing',
+    media: [{ type: top.mediaType, url: top.url, name: top.name }],
+  });
+
+  return { sent: true, file: top.name, alternatives: matches.slice(1).map((m) => m.name) };
 }

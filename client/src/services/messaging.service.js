@@ -31,6 +31,19 @@ export async function takeOver(id) {
   return data.data.conversation;
 }
 
+// Messaging feature flags (e.g. whether handing a chat back to the AI is enabled).
+export async function getConfig() {
+  const { data } = await api.get('/messages/config');
+  return data.data; // { allowTransferToAi }
+}
+
+// Hand a Live Agent thread back to the AI agent (inverse of takeOver). Flag-gated
+// server-side — throws 403 when ALLOW_TRANSFER_TO_AI is off.
+export async function returnToAi(id) {
+  const { data } = await api.post(`/messages/${id}/return-to-ai`);
+  return data.data.conversation;
+}
+
 // ── Transfers ────────────────────────────────────────────────────────────────
 // Teammates a chat can be transferred to (active users with Messaging access).
 export async function agents() {

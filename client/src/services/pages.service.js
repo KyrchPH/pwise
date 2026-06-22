@@ -51,3 +51,11 @@ export async function remove(id) {
   const { data } = await api.delete(`/pages/${id}`);
   return data.data;
 }
+
+// Re-register this page's Telegram webhook (and Messenger subscription) with the
+// platform — the Settings "Refresh" action. Returns { telegram, messenger } where
+// each is { ok, ... } | null (null = nothing of that kind attached to the page).
+export async function refreshWebhook(id) {
+  const { data } = await api.post(`/pages/${id}/refresh-webhook`);
+  return data.data;
+}

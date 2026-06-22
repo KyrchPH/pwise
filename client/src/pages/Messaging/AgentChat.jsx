@@ -3,6 +3,8 @@ import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
+import messageAnimation from '../../assets/lotties/message.json';
+import { renderMessageText } from './messageText.jsx';
 import * as connections from '../../services/connections.service.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -580,7 +582,7 @@ export default function AgentChat() {
                             ))}
                           </div>
                         )}
-                        {message.text && <div className="msg-bubble__text">{message.text}</div>}
+                        {message.text && <div className="msg-bubble__text">{renderMessageText(message.text)}</div>}
                         <div className="msg-bubble__foot">
                           <span className="msg-bubble__time">{message.time}</span>
                         </div>
@@ -679,7 +681,7 @@ export default function AgentChat() {
         ) : (
           <div className="card--pad">
             <EmptyState
-              icon="..."
+              lottie={messageAnimation}
               title="Choose a conversation"
               message="Pick a chat on the left, or search a teammate to start a new one."
             />

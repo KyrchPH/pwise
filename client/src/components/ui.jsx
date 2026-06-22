@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import LottiePlayer from './LottiePlayer.jsx';
 
 export function Button({ as: Comp = 'button', variant = 'primary', size = 'md', className = '', ...props }) {
   const cls = ['btn', `btn--${variant}`, size !== 'md' && `btn--${size}`, className].filter(Boolean).join(' ');
@@ -402,10 +403,14 @@ export function StatusBadge({ status }) {
   return <span className={`badge badge--${status || 'draft'}`}>{status || 'unknown'}</span>;
 }
 
-export function EmptyState({ icon = '📭', title, message, action }) {
+export function EmptyState({ icon = '📭', title, message, action, lottie }) {
   return (
     <div className="empty">
-      <div className="empty__icon">{icon}</div>
+      {lottie ? (
+        <LottiePlayer animationData={lottie} className="empty__lottie" />
+      ) : (
+        <div className="empty__icon">{icon}</div>
+      )}
       {title && <div className="empty__title">{title}</div>}
       {message && <div>{message}</div>}
       {action && <div className="mt-lg">{action}</div>}

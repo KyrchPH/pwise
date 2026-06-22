@@ -8,6 +8,22 @@
 // Telegram bot tokens look like "123456789:AA…" — digits, a colon, then a secret.
 const TOKEN_RE = /^\d{5,}:[A-Za-z0-9_-]{20,}$/;
 
+// Telegram only renders formatting when a parse_mode is set. Our agents emit a
+// little CommonMark (**bold**, `code`, "- " bullets); convert that to Telegram-safe
+// HTML so it shows as real bold/bullets instead of literal asterisks. All text is
+// HTML-escaped first and we only ever emit balanced <b>/<code> tags, so the markup
+// stays valid — and sendMessage falls back to plain text if Telegram still objects.
+function escapeHtml(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+export function toTelegramHtml(text) {
+  return escapeHtml(text)
+    .replace(/^[ \t]*[-*]\s+/gm, '• ') // markdown bullet -> real bullet
+    .replace(/`([^`\n]+?)`/g, (_, code) => `<code>${code}</code>`)
+    .replace(/\*\*(.+?)\*\*/g, (_, bold) => `<b>${bold}</b>`);
+}
+const looksLikeParseError = (description = '') => /parse|entit|tag|offset/i.test(description);
+
 /**
  * Validate a Telegram bot token and fetch the bot's profile.
  * Returns { ok, id, username, name } on success, or { ok:false, error } otherwise.
@@ -61,20 +77,32 @@ export async function sendMessage(token, chatId, text, { replyToMessageId } = {}
   const t = String(token || '').trim();
   if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
   if (chatId == null || chatId === '') return { ok: false, error: 'missing chat id' };
-  try {
-    const payload = { chat_id: chatId, text: String(text ?? '') };
-    const rid = Number(replyToMessageId);
-    if (Number.isFinite(rid) && rid > 0) {
-      payload.reply_to_message_id = rid;
-      payload.allow_sending_without_reply = true; // don't fail if the original was deleted
-    }
+
+  const raw = String(text ?? '');
+  const base = { chat_id: chatId };
+  const rid = Number(replyToMessageId);
+  if (Number.isFinite(rid) && rid > 0) {
+    base.reply_to_message_id = rid;
+    base.allow_sending_without_reply = true; // don't fail if the original was deleted
+  }
+
+  const post = async (payload) => {
     const res = await fetch(`https://api.telegram.org/bot${t}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(10_000),
     });
-    const body = await res.json().catch(() => null);
+    return { res, body: await res.json().catch(() => null) };
+  };
+
+  try {
+    // Send formatted (HTML) first; if Telegram rejects the markup, resend as plain
+    // text so the message still gets through.
+    let { res, body } = await post({ ...base, text: toTelegramHtml(raw), parse_mode: 'HTML' });
+    if ((!res.ok || !body?.ok) && looksLikeParseError(body?.description)) {
+      ({ res, body } = await post({ ...base, text: raw }));
+    }
     if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
     return { ok: true, messageId: body.result?.message_id ?? null };
   } catch (err) {
@@ -135,6 +163,31 @@ export async function deleteWebhook(token) {
   }
 }
 
+/**
+ * Read a bot's current webhook registration. Returns
+ * { ok, url, pendingUpdateCount, lastErrorMessage } — url is '' when no webhook is
+ * set. Used by the Settings "Refresh" action to confirm where Telegram is pointing.
+ */
+export async function getWebhookInfo(token) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${t}/getWebhookInfo`, { signal: AbortSignal.timeout(10_000) });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    const r = body.result || {};
+    return {
+      ok: true,
+      url: r.url || '',
+      pendingUpdateCount: r.pending_update_count ?? 0,
+      lastErrorMessage: r.last_error_message || null,
+    };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function sendMedia(token, chatId, { url, type, caption, replyToMessageId } = {}) {
   const t = String(token || '').trim();
   if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
@@ -142,21 +195,32 @@ export async function sendMedia(token, chatId, { url, type, caption, replyToMess
   const isImage = String(type || '').toLowerCase().startsWith('image');
   const method = isImage ? 'sendPhoto' : 'sendDocument';
   const field = isImage ? 'photo' : 'document';
-  try {
-    const payload = { chat_id: chatId, [field]: String(url) };
-    if (caption) payload.caption = String(caption);
-    const rid = Number(replyToMessageId);
-    if (Number.isFinite(rid) && rid > 0) {
-      payload.reply_to_message_id = rid;
-      payload.allow_sending_without_reply = true;
-    }
+  const rawCaption = caption ? String(caption) : '';
+  const base = { chat_id: chatId, [field]: String(url) };
+  const rid = Number(replyToMessageId);
+  if (Number.isFinite(rid) && rid > 0) {
+    base.reply_to_message_id = rid;
+    base.allow_sending_without_reply = true;
+  }
+
+  const post = async (payload) => {
     const res = await fetch(`https://api.telegram.org/bot${t}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(15_000),
     });
-    const body = await res.json().catch(() => null);
+    return { res, body: await res.json().catch(() => null) };
+  };
+
+  try {
+    const formatted = rawCaption
+      ? { ...base, caption: toTelegramHtml(rawCaption), parse_mode: 'HTML' }
+      : base;
+    let { res, body } = await post(formatted);
+    if (rawCaption && (!res.ok || !body?.ok) && looksLikeParseError(body?.description)) {
+      ({ res, body } = await post({ ...base, caption: rawCaption }));
+    }
     if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
     return { ok: true, messageId: body.result?.message_id ?? null };
   } catch (err) {

@@ -1,9 +1,43 @@
 import { env } from '../config/env.js';
+import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 
 const MAX_QUESTION_LEN = 1200;
 const MAX_HISTORY_ITEMS = 8;
 const MAX_HISTORY_TEXT_LEN = 700;
+// Cap the per-user conversation we keep server-side (the intro greeting is added
+// back client-side, so it's never stored).
+const MAX_STORED_MESSAGES = 50;
+
+// Load a user's saved Rovi conversation ([{ role, text }], oldest first). Empty when
+// none. Tolerates a JSON column returned as a string.
+export async function getHistory(user) {
+  if (!user?.id) return [];
+  const rows = await query('SELECT messages FROM wise_assistant_chats WHERE user_id = ?', [user.id]);
+  if (!rows.length) return [];
+  const raw = rows[0].messages;
+  const arr = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+  return Array.isArray(arr)
+    ? arr.filter((m) => m && typeof m.text === 'string' && (m.role === 'user' || m.role === 'agent'))
+    : [];
+}
+
+// Append exchanges to a user's saved conversation (capped). Upsert one row per user.
+async function appendHistory(userId, entries) {
+  if (!userId || !entries.length) return;
+  const rows = await query('SELECT messages FROM wise_assistant_chats WHERE user_id = ?', [userId]);
+  let current = [];
+  if (rows.length) {
+    const raw = rows[0].messages;
+    const arr = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+    if (Array.isArray(arr)) current = arr;
+  }
+  const next = [...current, ...entries].slice(-MAX_STORED_MESSAGES);
+  await query(
+    'INSERT INTO wise_assistant_chats (user_id, messages) VALUES (?, ?) ON DUPLICATE KEY UPDATE messages = VALUES(messages)',
+    [userId, JSON.stringify(next)],
+  );
+}
 
 function normalizeQuestion(value) {
   const text = String(value ?? '').trim();
@@ -104,8 +138,21 @@ export async function ask(user, { question, pathname = '/', history = [] } = {})
     throw new ApiError(502, 'Wise Assistant workflow did not return an answer');
   }
 
+  const cleanAnswer = String(answer).trim();
+
+  // Persist this exchange so the conversation follows the user across devices.
+  // Best-effort — a storage hiccup must not fail an otherwise-good answer.
+  try {
+    await appendHistory(user?.id, [
+      { role: 'user', text: normalizedQuestion },
+      { role: 'agent', text: cleanAnswer },
+    ]);
+  } catch (e) {
+    console.warn(`[wise-assistant] couldn't persist chat history: ${e?.message || e}`);
+  }
+
   return {
-    answer: String(answer).trim(),
+    answer: cleanAnswer,
     source: 'n8n',
   };
 }

@@ -22,7 +22,12 @@ const INBOUND_MEDIA_TTL = 7 * 24 * 60 * 60;
 // Hand a normalized message to the n8n AI workflow. Fire-and-forget: a slow or
 // down n8n must never block (or fail) the platform's webhook delivery.
 async function forwardToAi(payload) {
-  if (!env.n8n.aiWebhookUrl) return;
+  const dev = env.nodeEnv === 'development';
+  if (!env.n8n.aiWebhookUrl) {
+    if (dev) console.warn('[gateway] forwardToAi skipped: N8N_AI_WEBHOOK_URL is not set — nothing is sent to n8n.');
+    return;
+  }
+  if (dev) console.log(`[gateway] forwarding ${payload.platform} chat ${payload.chatId} -> ${env.n8n.aiWebhookUrl}`);
   try {
     const res = await fetch(env.n8n.aiWebhookUrl, {
       method: 'POST',
@@ -33,10 +38,19 @@ async function forwardToAi(payload) {
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(15_000),
     });
-    if (!res.ok) console.warn(`[gateway] n8n forward HTTP ${res.status}`);
+    if (!res.ok) console.warn(`[gateway] n8n forward HTTP ${res.status} (is the workflow Active? does the path match its production URL?)`);
+    else if (dev) console.log(`[gateway] n8n forward ok (HTTP ${res.status})`);
   } catch (e) {
     console.warn(`[gateway] n8n forward failed: ${e?.message || e}`);
   }
+}
+
+// Whether the AI should auto-reply to this thread. The AI handles unbound 'AI Agent'
+// threads — UNLESS it has escalated the thread to a human (HANDOFF_STATUS), in which
+// case we stay quiet until an agent takes over (which clears the status). A Live Agent
+// takeover also flips handledBy, so that path is covered too.
+function aiShouldReply(conv) {
+  return conv?.handledBy === 'AI Agent' && conv?.status !== messaging.HANDOFF_STATUS;
 }
 
 // Fetch each remote media URL and re-store it in S3 so the inbox can show it via a
@@ -131,8 +145,14 @@ export async function handleTelegramUpdate(accountId, update = {}) {
     externalId: msg.message_id,
   });
 
-  if (text && result?.conversation?.handledBy === 'AI Agent') {
+  if (text && aiShouldReply(result?.conversation)) {
     forwardToAi({ accountId: acct, platform: 'telegram', chatId, text, author: { first_name: from.first_name || '', last_name: from.last_name || '' } }).catch(() => {});
+  } else if (env.nodeEnv === 'development') {
+    console.log(
+      `[gateway] telegram recorded but NOT forwarded to AI: text=${text ? 'present' : 'empty'} ` +
+        `handledBy=${result?.conversation?.handledBy ?? '(none)'} status=${result?.conversation?.status || '(none)'} ` +
+        '(forwarded only for non-empty text on an AI Agent thread that has not been handed off to a human).',
+    );
   }
 }
 
@@ -196,7 +216,7 @@ export async function handleMessengerEvent(body = {}) {
         externalId: message.mid,
       });
 
-      if (text && result?.conversation?.handledBy === 'AI Agent') {
+      if (text && aiShouldReply(result?.conversation)) {
         forwardToAi({ accountId: acct, platform: 'messenger', chatId: psid, text, author: { first_name: customerName, last_name: '' } }).catch(() => {});
       }
     }

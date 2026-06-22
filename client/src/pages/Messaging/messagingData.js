@@ -581,3 +581,23 @@ export function messagePreview(text, limit = 88) {
   if (limit <= 3) return clean.slice(0, limit);
   return `${clean.slice(0, limit - 3)}...`;
 }
+
+// The conversation-list preview, prefixed with who sent the last message — like
+// "You: …" / "AI Agent: …" / "Demo User: …". Only OUTGOING messages get a prefix;
+// an incoming (customer) message is shown bare since the card title is already the
+// customer. The prefix collapses to "You" when the sender matches the current user,
+// so after a transfer a teammate still sees the original sender (e.g. "Demo User:").
+// `sender` is the agent's display name on outgoing messages (see sendMessage), which
+// equals the auth user's name — that's the match.
+export function conversationPreview(conversation, currentUserName = '') {
+  const text = conversation.summary || '';
+  const messages = conversation.messages || [];
+  const last = messages[messages.length - 1];
+  if (!text || !last || last.side !== 'outgoing') return text;
+
+  const sender = String(last.sender || '').trim();
+  if (!sender) return text;
+
+  const label = currentUserName && sender === currentUserName ? 'You' : sender;
+  return `${label}: ${text}`;
+}

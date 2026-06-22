@@ -28,3 +28,9 @@ export const move = asyncHandler(async (req, res) => {
 export const remove = asyncHandler(async (req, res) => {
   sendSuccess(res, await service.remove(req.params.id));
 });
+
+// Toggle whether a file is hidden from the AI agent's media search. Body: { aiHidden }.
+export const setAiVisibility = asyncHandler(async (req, res) => {
+  const item = await service.setAiHidden(req.params.id, !!(req.body || {}).aiHidden);
+  sendSuccess(res, { item });
+});

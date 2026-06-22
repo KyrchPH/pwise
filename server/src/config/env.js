@@ -25,6 +25,11 @@ export const env = {
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
   telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '', // secret_token Telegram echoes back
 
+  // Feature flag (runtime): when true, a live agent can hand a conversation BACK to
+  // the AI agent from the inbox (double-click the customer's avatar in a Live Agent
+  // thread). Off by default — meant for controlled testing in production.
+  allowTransferToAi: bool(process.env.ALLOW_TRANSFER_TO_AI, false),
+
   aws: {
     region: process.env.AWS_REGION || '',
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',

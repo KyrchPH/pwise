@@ -1019,6 +1019,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 /* --- Empty state --- */
 .empty { text-align: center; padding: 56px 24px; color: var(--muted); }
 .empty__icon { font-size: 2.8rem; margin-bottom: 12px; }
+.empty__lottie { width: 240px; height: 240px; margin: 0 auto 8px; }
 .empty__title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 700; color: var(--text); margin-bottom: 6px; }
 
 /* --- Spinner --- */
@@ -1153,8 +1154,6 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .dev-agent {
   position: absolute;
-  right: calc(env(safe-area-inset-right, 0px) + 20px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
   width: 100px;
   height: 100px;
   opacity: 0;
@@ -1163,6 +1162,15 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   transition: opacity 0.18s ease;
   pointer-events: auto;
 }
+/* Docked corner (drag-to-move). The robot anchors to one corner; the chat + bubble
+   flip their side to open toward the screen interior (is-top/bottom/left/right below). */
+.dev-agent.is-right { right: calc(env(safe-area-inset-right, 0px) + 20px); left: auto; }
+.dev-agent.is-left { left: calc(env(safe-area-inset-left, 0px) + 20px); right: auto; }
+.dev-agent.is-bottom { bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); top: auto; }
+.dev-agent.is-top { top: calc(env(safe-area-inset-top, 0px) + 20px); bottom: auto; }
+/* While dragging, the robot follows the pointer via inline left/top — freeze the
+   float so it doesn't fight the live position. */
+.dev-agent.is-dragging { animation: none; }
 .dev-agent.is-ready { opacity: 1; }
 /* Soft spotlight around the agent — clear right around the robot, fading to a color
    that contrasts the theme (white in dark, black in light) just outside it. Sits
@@ -1183,10 +1191,18 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   padding: 0;
   border: none;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
   border-radius: 999px;
   transition: transform 0.14s ease, filter 0.14s ease;
+  touch-action: none; /* pointer-drag on touch without scrolling the page */
+  user-select: none;
+  -webkit-user-select: none;
 }
+.dev-agent.is-dragging .dev-agent__trigger { cursor: grabbing; }
+/* The popover header is a drag handle too, so the assistant can be repositioned
+   while the chat is open (the drawer's header keeps the default cursor). */
+.dev-agent__chat .dev-agent__chat-head { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.dev-agent.is-dragging .dev-agent__chat .dev-agent__chat-head { cursor: grabbing; }
 .dev-agent__trigger:hover {
   transform: translateY(-2px) scale(1.03);
   filter: brightness(1.03);
@@ -1201,13 +1217,11 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .dev-agent__bubble {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
   width: max-content;
   max-width: min(220px, calc(100vw - 96px));
   padding: 10px 12px;
   border: 1.5px solid var(--border);
-  border-radius: 16px 16px 6px 16px;
+  border-radius: 16px;
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 14px 28px rgba(15, 60, 95, 0.18);
@@ -1216,45 +1230,59 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   line-height: 1.35;
   animation: devAgentBubbleIn 0.22s ease;
 }
+.dev-agent.is-bottom .dev-agent__bubble { bottom: calc(100% + 8px); top: auto; }
+.dev-agent.is-top .dev-agent__bubble { top: calc(100% + 8px); bottom: auto; }
+.dev-agent.is-right .dev-agent__bubble { right: 0; left: auto; }
+.dev-agent.is-left .dev-agent__bubble { left: 0; right: auto; }
+.dev-agent.is-bottom.is-right .dev-agent__bubble { border-radius: 16px 16px 6px 16px; }
+.dev-agent.is-bottom.is-left .dev-agent__bubble { border-radius: 16px 16px 16px 6px; }
+.dev-agent.is-top.is-right .dev-agent__bubble { border-radius: 16px 6px 16px 16px; }
+.dev-agent.is-top.is-left .dev-agent__bubble { border-radius: 6px 16px 16px 16px; }
 .dev-agent__bubble::after {
   content: '';
   position: absolute;
-  right: 48px;
-  bottom: -10px;
   width: 16px;
   height: 16px;
   background: var(--surface);
-  border-right: 1.5px solid var(--border);
-  border-bottom: 1.5px solid var(--border);
   transform: rotate(45deg);
 }
+.dev-agent.is-bottom .dev-agent__bubble::after { bottom: -10px; top: auto; border-right: 1.5px solid var(--border); border-bottom: 1.5px solid var(--border); }
+.dev-agent.is-top .dev-agent__bubble::after { top: -10px; bottom: auto; border-left: 1.5px solid var(--border); border-top: 1.5px solid var(--border); }
+.dev-agent.is-right .dev-agent__bubble::after { right: 48px; left: auto; }
+.dev-agent.is-left .dev-agent__bubble::after { left: 48px; right: auto; }
 .dev-agent__chat {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 14px);
   width: min(320px, calc(100vw - 40px));
   max-height: min(420px, calc(100vh - 180px));
   display: flex;
   flex-direction: column;
   border: 1.5px solid var(--border);
-  border-radius: 20px 20px 10px 20px;
+  border-radius: 20px;
   background: var(--surface);
   box-shadow: 0 18px 36px rgba(15, 60, 95, 0.2);
   overflow: hidden;
   animation: devAgentBubbleIn 0.22s ease;
 }
+.dev-agent.is-bottom .dev-agent__chat { bottom: calc(100% + 14px); top: auto; }
+.dev-agent.is-top .dev-agent__chat { top: calc(100% + 14px); bottom: auto; }
+.dev-agent.is-right .dev-agent__chat { right: 0; left: auto; }
+.dev-agent.is-left .dev-agent__chat { left: 0; right: auto; }
+.dev-agent.is-bottom.is-right .dev-agent__chat { border-radius: 20px 20px 10px 20px; }
+.dev-agent.is-bottom.is-left .dev-agent__chat { border-radius: 20px 20px 20px 10px; }
+.dev-agent.is-top.is-right .dev-agent__chat { border-radius: 20px 10px 20px 20px; }
+.dev-agent.is-top.is-left .dev-agent__chat { border-radius: 10px 20px 20px 20px; }
 .dev-agent__chat::after {
   content: '';
   position: absolute;
-  right: 48px;
-  bottom: -10px;
   width: 16px;
   height: 16px;
   background: var(--surface);
-  border-right: 1.5px solid var(--border);
-  border-bottom: 1.5px solid var(--border);
   transform: rotate(45deg);
 }
+.dev-agent.is-bottom .dev-agent__chat::after { bottom: -10px; top: auto; border-right: 1.5px solid var(--border); border-bottom: 1.5px solid var(--border); }
+.dev-agent.is-top .dev-agent__chat::after { top: -10px; bottom: auto; border-left: 1.5px solid var(--border); border-top: 1.5px solid var(--border); }
+.dev-agent.is-right .dev-agent__chat::after { right: 48px; left: auto; }
+.dev-agent.is-left .dev-agent__chat::after { left: 48px; right: auto; }
 .dev-agent__chat-head {
   display: flex;
   align-items: center;
@@ -1283,6 +1311,24 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   font-size: 0.72rem; font-weight: 600; color: var(--muted);
 }
 .dev-agent__status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
+.dev-agent__chat-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.dev-agent__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.dev-agent__icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.dev-agent__icon-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.dev-agent__icon-btn svg { display: block; }
 .dev-agent__close {
   width: 30px;
   height: 30px;
@@ -1300,7 +1346,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .dev-agent__messages {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   padding: 12px 14px;
   overflow-y: auto;
   min-height: 120px;
@@ -1325,11 +1371,48 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .dev-agent__msg {
   max-width: 88%;
-  padding: 8px 10px;
+  padding: 9px 12px;
   border-radius: 14px;
-  font-size: 0.82rem;
-  line-height: 1.4;
+  font-size: 0.84rem;
+  line-height: 1.55;
   word-break: break-word;
+}
+/* Rich-formatted assistant text */
+.dev-agent__md-p {
+  margin: 0;
+}
+.dev-agent__md-p + .dev-agent__md-p {
+  margin-top: 0.55em;
+}
+.dev-agent__md-p + .dev-agent__md-list {
+  margin-top: 0.4em;
+}
+.dev-agent__md-list {
+  margin: 0.15em 0 0;
+  padding-left: 1.3em;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dev-agent__md-list + .dev-agent__md-p {
+  margin-top: 0.55em;
+}
+.dev-agent__md-list li {
+  padding-left: 3px;
+}
+.dev-agent__md-list li::marker {
+  color: var(--muted);
+}
+.dev-agent__msg strong {
+  font-weight: 700;
+}
+.dev-agent__msg code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  padding: 0.5px 5px;
+  border-radius: 6px;
 }
 .dev-agent__msg--agent {
   align-self: flex-start;
@@ -1345,6 +1428,22 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .dev-agent__msg.is-pending {
   color: var(--muted);
   font-style: italic;
+}
+/* Blinking cursor shown at the tail of an answer while it types out. */
+.dev-agent__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  vertical-align: -0.16em;
+  background: currentColor;
+  opacity: 0.75;
+  animation: devAgentCaret 1.05s steps(1, end) infinite;
+}
+@keyframes devAgentCaret {
+  0%, 50% { opacity: 0.75; }
+  50.01%, 100% { opacity: 0; }
 }
 .dev-agent__composer {
   display: flex;
@@ -1377,6 +1476,36 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .dev-agent__anim svg {
   width: 100% !important; height: 100% !important; display: block;
 }
+/* Expanded view: the same conversation, docked full-height to the right edge.
+   Lives directly under the overlay (not inside .dev-agent) so the float
+   animation / drop-shadow on .dev-agent can't become its containing block. */
+.dev-agent__drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1.5px solid var(--border);
+  box-shadow: -22px 0 50px rgba(15, 60, 95, 0.2);
+  pointer-events: auto;
+  animation: slideInRight 0.22s ease;
+}
+.dev-agent__drawer .dev-agent__chat-head {
+  padding: 16px 18px 14px;
+}
+.dev-agent__drawer .dev-agent__messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  gap: 14px;
+  padding: 16px 18px;
+}
+.dev-agent__drawer .dev-agent__composer {
+  padding: 14px 18px 18px;
+}
 @keyframes devAgentFloat {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
@@ -1389,7 +1518,9 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   .dev-agent { animation: none; }
   .dev-agent__bubble { animation: none; }
   .dev-agent__chat { animation: none; }
+  .dev-agent__drawer { animation: none; }
   .dev-agent__trigger { transition: none; }
+  .dev-agent__caret { animation: none; opacity: 0; }
 }
 
 /* --- Auth page --- */
@@ -2162,6 +2293,14 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em; line-height: 1.35;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Attention chip (e.g. "Needs human") shown when a thread is flagged for an agent. */
+.msg-conversation__status {
+  padding: 2px 6px; border-radius: 4px;
+  background: rgba(245, 158, 11, 0.16); color: #b45309;
+  font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em;
+  line-height: 1.35; white-space: nowrap; flex-shrink: 0;
+}
+[data-theme="dark"] .msg-conversation__status { color: #fbbf24; }
 .msg-conversation__preview {
   margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -2867,6 +3006,17 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .vault-item__act:hover { background: rgba(15, 30, 45, 0.82); }
 .vault-item__act--danger:hover { background: var(--red); }
+.vault-item__act.is-active { background: var(--blue); } /* "Hide from AI" toggle, when hidden */
+/* A file hidden from the AI: dimmed/desaturated preview + a persistent badge. */
+.vault-item--ai-hidden .vault-item__thumb { filter: grayscale(0.85); opacity: 0.6; }
+.vault-item--ai-hidden .vault-item__name { color: var(--muted); }
+.vault-item__ai-badge {
+  position: absolute; left: 6px; bottom: 6px; z-index: 2;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82); color: #fff;
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em;
+  pointer-events: none;
+}
 
 /* Drag-and-drop move: dim the dragged card, highlight valid drop targets
    (folder cards + breadcrumbs). Rules sit after the folder hover styles so the

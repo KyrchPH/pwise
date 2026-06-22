@@ -23,6 +23,7 @@ async function withUrls(row) {
     size: Number(row.size) || 0,
     uploadedBy: row.uploaded_by || '',
     createdAt: row.created_at,
+    aiHidden: !!row.ai_hidden, // per-file "Hide from AI" flag (files only; folders are always 0)
     url: '',
     thumbUrl: '',
   };
@@ -163,4 +164,59 @@ export async function remove(id) {
     if (f.thumbnail_s3_key) await deleteObject(f.thumbnail_s3_key);
   }
   return { id: Number(id), deleted: true };
+}
+
+// Toggle a FILE's "Hide from AI" flag — hidden files are excluded from the agent's
+// media search (searchAiMedia) and shown with a distinct card in the Vault UI.
+// Folders aren't AI-searched directly, so the flag only applies to files.
+export async function setAiHidden(id, hidden) {
+  const row = await getRow(id); // 404 if missing
+  if (row.type !== 'file') throw ApiError.badRequest('only files can be hidden from the AI');
+  await query('UPDATE vault_items SET ai_hidden = ? WHERE id = ?', [hidden ? 1 : 0, id]);
+  return getItem(id);
+}
+
+// AI media search: media files (image/video, NOT ai_hidden) anywhere under
+// `folderId`'s subtree whose name matches the query keywords, ranked by how many
+// keywords hit the name, each with a fresh signed URL. The page's folder is the
+// scope, so the messaging `send_media` tool only ever reaches that page's files.
+export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
+  const fid = parseInt(folderId, 10);
+  const q = String(rawQuery ?? '').trim().toLowerCase();
+  if (!Number.isInteger(fid) || !q) return [];
+
+  const ids = await collectSubtree(fid); // [folder, ...descendants]
+  if (!ids.length) return [];
+  const rows = await query(
+    `SELECT id, name, media_type, s3_key FROM vault_items
+      WHERE type = 'file' AND ai_hidden = 0 AND media_type IN ('image', 'video')
+        AND parent_id IN (${ids.map(() => '?').join(',')})`,
+    ids,
+  );
+  if (!rows.length) return [];
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const ranked = rows
+    .map((row) => {
+      const name = String(row.name || '').toLowerCase();
+      const score = tokens.reduce((s, t) => (name.includes(t) ? s + 1 : s), 0);
+      return { row, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.row.name).localeCompare(String(b.row.name)))
+    .slice(0, Math.min(Math.max(parseInt(limit, 10) || 5, 1), 10));
+
+  const out = [];
+  for (const { row } of ranked) {
+    let url = '';
+    if (row.s3_key) {
+      try {
+        url = await createDownloadUrl(row.s3_key);
+      } catch {
+        /* S3 not configured / object missing — skip this one */
+      }
+    }
+    if (url) out.push({ id: String(row.id), name: row.name, mediaType: row.media_type || 'image', url });
+  }
+  return out;
 }

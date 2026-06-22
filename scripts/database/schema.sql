@@ -334,6 +334,16 @@ CREATE TABLE IF NOT EXISTS user_connections (
   INDEX idx_connection_requester (requester_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- wise_assistant_chats — Rovi's per-user help chat, stored server-side so it
+-- follows a user across devices. One row per user; messages JSON = capped
+-- [{ role, text }] list (intro greeting excluded, newest last).
+CREATE TABLE IF NOT EXISTS wise_assistant_chats (
+  user_id    INT NOT NULL PRIMARY KEY,
+  messages   JSON NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_wise_chat_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- vault_items — shared file manager (folders + files in one self-referencing tree)
 -- Global like the rest of the app: every signed-in user sees/edits all items.
 -- Files carry an S3 key (+ optional thumbnail). Folder deletes cascade to children

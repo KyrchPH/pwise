@@ -152,6 +152,13 @@ export function VaultProvider({ children }) {
     return updated;
   }, []);
 
+  // Flip a file's "Hide from AI" flag and patch it into the tree in place.
+  const setItemAiHidden = useCallback(async (id, aiHidden) => {
+    const updated = await vaultApi.setAiHidden(id, aiHidden);
+    setItems((cur) => cur.map((it) => (it.id === updated.id ? { ...it, ...updated } : it)));
+    return updated;
+  }, []);
+
   const deleteItem = useCallback(async (id) => {
     await vaultApi.remove(id);
     setItems((cur) => {
@@ -172,8 +179,8 @@ export function VaultProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem }),
-    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem],
+    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden }),
+    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden],
   );
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
