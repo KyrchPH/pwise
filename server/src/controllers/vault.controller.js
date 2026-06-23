@@ -34,3 +34,11 @@ export const setAiVisibility = asyncHandler(async (req, res) => {
   const item = await service.setAiHidden(req.params.id, !!(req.body || {}).aiHidden);
   sendSuccess(res, { item });
 });
+
+// Edit a file's AI metadata — free-text description + curated tags. The agent
+// matches a customer's words against these (tags weighted highest) when picking
+// media. Body: { description, tags } — tags as an array or comma-separated string.
+export const updateMeta = asyncHandler(async (req, res) => {
+  const item = await service.updateMeta(req.params.id, req.body || {});
+  sendSuccess(res, { item });
+});

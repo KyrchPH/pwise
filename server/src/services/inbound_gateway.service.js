@@ -3,7 +3,7 @@ import { query } from '../config/db.js';
 import * as messaging from './messaging.service.js';
 import * as tg from './telegram.service.js';
 import * as fb from './fb.service.js';
-import { getDecrypted } from './platform_accounts.service.js';
+import { getDecrypted, getAiSystemMessages } from './platform_accounts.service.js';
 import { putObject, createDownloadUrl } from './s3.service.js';
 
 /**
@@ -28,6 +28,14 @@ async function forwardToAi(payload) {
     return;
   }
   if (dev) console.log(`[gateway] forwarding ${payload.platform} chat ${payload.chatId} -> ${env.n8n.aiWebhookUrl}`);
+  // Attach this page's per-agent system prompts (admin-configured persona + the
+  // immutable guardrails). Composer falls back to defaults; this never throws.
+  let agentPrompts = {};
+  try {
+    agentPrompts = await getAiSystemMessages(payload.accountId);
+  } catch (e) {
+    if (dev) console.warn(`[gateway] could not load AI prompts (sending without): ${e?.message || e}`);
+  }
   try {
     const res = await fetch(env.n8n.aiWebhookUrl, {
       method: 'POST',
@@ -35,7 +43,7 @@ async function forwardToAi(payload) {
         'Content-Type': 'application/json',
         ...(env.n8n.aiSecret ? { 'x-gateway-secret': env.n8n.aiSecret } : {}),
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, ...agentPrompts }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) console.warn(`[gateway] n8n forward HTTP ${res.status} (is the workflow Active? does the path match its production URL?)`);

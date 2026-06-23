@@ -4,6 +4,7 @@ import * as pagesService from '../../services/pages.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Card, Button, Field, Spinner, PageAvatar } from '../../components/ui.jsx';
 
 const EditIcon = () => (
@@ -73,12 +74,21 @@ const BLANK = {
   telegram_remove: false,
   telegram_has: false,
   telegram_username: '',
+  ai_prompt_sales: '',
+  ai_prompt_support: '',
+  ai_prompt_general: '',
+  ai_defaults: null,
+  an_periodDays: 7,
+  an_crrHours: 12,
+  an_frtMin: 5,
+  an_artMin: 5,
 };
 
 export default function FacebookPages({ embedded = false }) {
   const toast = useToast();
   const { hash } = useLocation();
   const { refresh: refreshSwitcher } = usePages();
+  const { isAdmin } = useAuth();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { id?, ...fields }
@@ -133,6 +143,26 @@ export default function FacebookPages({ embedded = false }) {
   const startAdd = () => {
     resetTest();
     setEditing({ ...BLANK });
+    // Pre-fill the per-agent prompts with the built-in defaults so the admin edits
+    // from a working base (all three are required to connect).
+    if (isAdmin) {
+      pagesService
+        .getAiDefaults()
+        .then((d) =>
+          setEditing((ed) =>
+            ed && !ed.id
+              ? {
+                  ...ed,
+                  ai_prompt_sales: d.sales || '',
+                  ai_prompt_support: d.support || '',
+                  ai_prompt_general: d.general || '',
+                  ai_defaults: d,
+                }
+              : ed,
+          ),
+        )
+        .catch((e) => toast.error(apiError(e)));
+    }
   };
   const startEdit = (p) => {
     resetTest();
@@ -144,7 +174,30 @@ export default function FacebookPages({ embedded = false }) {
       telegram_bot_name: p.telegram_bot_name || '',
       telegram_has: !!p.has_telegram_bot,
       telegram_username: p.telegram_bot_username || '',
+      an_periodDays: p.analytics_config?.periodDays ?? 7,
+      an_crrHours: p.analytics_config?.crrWindowHours ?? 12,
+      an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
+      an_artMin: Math.round((p.analytics_config?.artTargetSeconds ?? 300) / 60),
     });
+    // Pull this page's per-agent AI prompts (+ defaults) for the editor (admin only).
+    if (isAdmin) {
+      pagesService
+        .getAiConfig(p.id)
+        .then((cfg) =>
+          setEditing((ed) =>
+            ed && ed.id === p.id
+              ? {
+                  ...ed,
+                  ai_prompt_sales: cfg.prompts.sales || cfg.defaults?.sales || '',
+                  ai_prompt_support: cfg.prompts.support || cfg.defaults?.support || '',
+                  ai_prompt_general: cfg.prompts.general || cfg.defaults?.general || '',
+                  ai_defaults: cfg.defaults || null,
+                }
+              : ed,
+          ),
+        )
+        .catch((e) => toast.error(apiError(e)));
+    }
   };
   const cancel = () => {
     resetTest();
@@ -159,6 +212,11 @@ export default function FacebookPages({ embedded = false }) {
   // Telegram fields are independent of the Facebook connection test, so editing
   // them does NOT reset the test gate.
   const setTgField = (k) => (e) => {
+    const v = e.target.value;
+    setEditing((ed) => ({ ...ed, [k]: v }));
+  };
+  // AI prompt fields are independent of the Facebook connection test too.
+  const setAiField = (k) => (e) => {
     const v = e.target.value;
     setEditing((ed) => ({ ...ed, [k]: v }));
   };
@@ -195,6 +253,11 @@ export default function FacebookPages({ embedded = false }) {
     const fbPageId = editing.fb_page_id.trim();
     if (!name) return toast.error('Give the page a name.');
     if (!fbPageId) return toast.error('Facebook Page ID is required.');
+    // All three agent prompts are required (admins configure them here).
+    if (isAdmin) {
+      const blank = ['sales', 'support', 'general'].find((r) => !String(editing[`ai_prompt_${r}`] || '').trim());
+      if (blank) return toast.error('Set the AI system prompt for all three agents before saving.');
+    }
     // Attaching a bot needs its API key (the bot name alone isn't enough).
     const attachingBot = !editing.telegram_has && !editing.telegram_remove && editing.telegram_bot_name.trim();
     if (attachingBot && !editing.telegram_api_key.trim()) {
@@ -213,6 +276,23 @@ export default function FacebookPages({ embedded = false }) {
       } else {
         payload.telegram_bot_name = editing.telegram_bot_name.trim();
         if (editing.telegram_api_key.trim()) payload.telegram_api_key = editing.telegram_api_key.trim();
+      }
+      // Per-agent AI prompts (admin-only) — sent on both connect and edit. The server
+      // trims; blanks are blocked above, so every page is saved with all three set.
+      if (isAdmin) {
+        payload.ai_prompt_sales = editing.ai_prompt_sales ?? '';
+        payload.ai_prompt_support = editing.ai_prompt_support ?? '';
+        payload.ai_prompt_general = editing.ai_prompt_general ?? '';
+      }
+      // Messaging-analytics thresholds (admin-only; existing pages). Minutes → seconds;
+      // the server clamps to sane ranges.
+      if (editing.id && isAdmin) {
+        payload.analytics_config = {
+          periodDays: Number(editing.an_periodDays) || 7,
+          crrWindowHours: Number(editing.an_crrHours) || 12,
+          frtTargetSeconds: Math.round((Number(editing.an_frtMin) || 5) * 60),
+          artTargetSeconds: Math.round((Number(editing.an_artMin) || 5) * 60),
+        };
       }
       if (editing.id) await pagesService.update(editing.id, payload);
       else await pagesService.create(payload);
@@ -352,6 +432,73 @@ export default function FacebookPages({ embedded = false }) {
               </>
             )}
           </div>
+
+          {/* Per-page AI assistant prompts — admin only; all three required to connect/save. */}
+          {isAdmin && (
+            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+              <div className="text-sm" style={{ fontWeight: 600 }}>AI Assistant prompts</div>
+              <div className="text-sm text-muted" style={{ margin: '4px 0 8px' }}>
+                How this page&apos;s AI replies for each intent. Pre-filled with sensible defaults — edit them for this
+                business. All three are required. The tool-grounding, human-handoff, and formatting rules are always
+                enforced on top and can&apos;t be removed here.
+              </div>
+              {[
+                { role: 'sales', label: 'Sales agent' },
+                { role: 'support', label: 'Support agent' },
+                { role: 'general', label: 'General inquiry agent' },
+              ].map(({ role, label }) => {
+                const key = `ai_prompt_${role}`;
+                const def = editing.ai_defaults?.[role] || '';
+                const isDefault = !!def && editing[key]?.trim() === def.trim();
+                return (
+                  <Field key={role} label={label} hint={isDefault ? 'default' : 'custom'}>
+                    <textarea
+                      className="input"
+                      rows={7}
+                      value={editing[key]}
+                      onChange={setAiField(key)}
+                      placeholder="Describe how this agent should behave…"
+                    />
+                    {def && !isDefault && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        style={{ marginTop: 4 }}
+                        onClick={() => setEditing((ed) => ({ ...ed, [key]: def }))}
+                      >
+                        Reset to default
+                      </Button>
+                    )}
+                  </Field>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Messaging analytics thresholds — admin only, existing pages (drives the inbox rail gauges). */}
+          {isAdmin && editing.id && (
+            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+              <div className="text-sm" style={{ fontWeight: 600 }}>Messaging analytics</div>
+              <div className="text-sm text-muted" style={{ margin: '4px 0 8px' }}>
+                Thresholds for this page&apos;s live-agent response metrics (CRR / FRT / ART) in the inbox rail. CRR counts
+                customer chats answered within the window; FRT/ART score the average reply time against the target.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <Field label="Measurement period (days)">
+                  <input className="input" type="number" min="1" max="365" value={editing.an_periodDays} onChange={setAiField('an_periodDays')} />
+                </Field>
+                <Field label="CRR window (hours)">
+                  <input className="input" type="number" min="1" max="720" value={editing.an_crrHours} onChange={setAiField('an_crrHours')} />
+                </Field>
+                <Field label="FRT target (minutes)">
+                  <input className="input" type="number" min="1" max="1440" value={editing.an_frtMin} onChange={setAiField('an_frtMin')} />
+                </Field>
+                <Field label="ART target (minutes)">
+                  <input className="input" type="number" min="1" max="1440" value={editing.an_artMin} onChange={setAiField('an_artMin')} />
+                </Field>
+              </div>
+            </div>
+          )}
 
           <div className="row gap-sm" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>

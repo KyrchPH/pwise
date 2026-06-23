@@ -2,16 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
+import ProductsDrawer from '../../components/ProductsDrawer.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
+import * as productsApi from '../../services/products.service.js';
 import { buildPageCards, conversationPreview, messagePreview, resolveSelectedPageId } from './messagingData.js';
 import AgentChat from './AgentChat.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
 import messageAnimation from '../../assets/lotties/message.json';
+import MessagingMetricsRail from './MessagingMetricsRail.jsx';
 import { renderMessageText } from './messageText.jsx';
 
 // Two-way arrows for the transfer action, and an inbox glyph for the request bar.
@@ -151,6 +154,9 @@ export default function MessagingPage() {
   const [attachments, setAttachments] = useState([]); // vault media staged for the next message
   const [pickerOpen, setPickerOpen] = useState(false); // vault attach dialog
   const [templateOpen, setTemplateOpen] = useState(false); // template drawer
+  const [productsOpen, setProductsOpen] = useState(false); // products drawer
+  const [productList, setProductList] = useState([]); // products for the open thread's page
+  const [productsLoading, setProductsLoading] = useState(false);
   const [dropActive, setDropActive] = useState(false); // template being dragged over the thread
   const [replyTo, setReplyTo] = useState(null);
   const [messageMode, setMessageMode] = useState('customer'); // customer = current inbox, agent = unfiltered team view
@@ -438,11 +444,60 @@ export default function MessagingPage() {
   };
   const handleUseTemplate = (template) => insertTemplateText(template.body);
 
+  // ── Products drawer ───────────────────────────────────────────────────────────
+  const productToText = (p) => {
+    const lines = [];
+    if (p?.name) lines.push(p.name);
+    if (p?.basePrice != null) lines.push(`Price: ${Number(p.basePrice).toLocaleString()}`);
+    if (p?.description) lines.push(p.description);
+    return lines.join('\n');
+  };
+
+  // Drop a "product card" into the composer: stage the photo as an image attachment
+  // (same single-type/max-5 rules as the Vault) and fill the message box with the text.
+  const insertProduct = (product) => {
+    if (!product) return;
+    if (product.photoUrl) {
+      setAttachments((prev) => {
+        const pid = `product-${product.id}`;
+        if (prev.length >= 5 || prev.some((x) => x.id === pid)) return prev;
+        if (prev.length && prev[0].mediaType !== 'image') return prev; // don't mix media types
+        return [...prev, { id: pid, mediaType: 'image', url: product.photoUrl, name: product.name || 'product' }];
+      });
+    }
+    const text = productToText(product);
+    if (text) setDraft((current) => (current.trim() ? `${current}\n${text}` : text));
+    setProductsOpen(false);
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  };
+  const handleUseProduct = (product) => insertProduct(product);
+
+  // Open the products drawer and load the open thread's page products.
+  const openProducts = () => {
+    setTemplateOpen(false);
+    setProductsOpen(true);
+    const pageId = activeConversation?.pageId;
+    if (!pageId) {
+      setProductList([]);
+      return;
+    }
+    setProductsLoading(true);
+    productsApi
+      .list(pageId)
+      .then(setProductList)
+      .catch(() => setProductList([]))
+      .finally(() => setProductsLoading(false));
+  };
+
+  // ── Drag-and-drop onto the live thread (templates + products) ─────────────────
   const hasTemplateDrag = (event) =>
     Array.from(event.dataTransfer?.types || []).includes('application/x-pwise-template');
+  const hasProductDrag = (event) =>
+    Array.from(event.dataTransfer?.types || []).includes('application/x-pwise-product');
+  const hasInsertableDrag = (event) => hasTemplateDrag(event) || hasProductDrag(event);
 
   const handleTemplateDragOver = (event) => {
-    if (!isLiveAgent || !hasTemplateDrag(event)) return;
+    if (!isLiveAgent || !hasInsertableDrag(event)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     if (!dropActive) setDropActive(true);
@@ -454,12 +509,20 @@ export default function MessagingPage() {
     setDropActive(false);
   };
 
-  // Drag-and-drop: drop a template anywhere on the live thread to fill the composer.
+  // A template fills the composer; a product drops a "product card" (photo + text).
   const handleTemplateDrop = (event) => {
-    if (!isLiveAgent || !hasTemplateDrag(event)) return;
+    if (!isLiveAgent || !hasInsertableDrag(event)) return;
     event.preventDefault();
     event.stopPropagation();
     setDropActive(false);
+    if (hasProductDrag(event)) {
+      try {
+        insertProduct(JSON.parse(event.dataTransfer.getData('application/x-pwise-product')));
+      } catch {
+        /* ignore a malformed product payload */
+      }
+      return;
+    }
     insertTemplateText(
       event.dataTransfer.getData('application/x-pwise-template') ||
         event.dataTransfer.getData('text/plain'),
@@ -563,7 +626,7 @@ export default function MessagingPage() {
   useEffect(() => () => clearTimeout(copyTimerRef.current), []);
 
   return (
-    <div className={`messaging-page${templateOpen ? ' is-template-open' : ''}`}>
+    <div className={`messaging-page${templateOpen || productsOpen ? ' is-template-open' : ''}`}>
       <aside className="msg-mode-rail" aria-label="Messaging mode">
         <button
           type="button"
@@ -598,6 +661,7 @@ export default function MessagingPage() {
             </svg>
           </span>
         </button>
+        <MessagingMetricsRail accountId={selectedPageId || preferredPageId} />
       </aside>
       <section className="msg-workspace">
         {isAgentToAgent ? (
@@ -1025,7 +1089,10 @@ export default function MessagingPage() {
                   <button
                     type="button"
                     className={`msg-composer__iconbtn${templateOpen ? ' is-active' : ''}`}
-                    onClick={() => setTemplateOpen(true)}
+                    onClick={() => {
+                      setProductsOpen(false);
+                      setTemplateOpen(true);
+                    }}
                     aria-label="Templates"
                     title="Templates"
                   >
@@ -1044,6 +1111,29 @@ export default function MessagingPage() {
                       <line x1="8" y1="9" x2="16" y2="9" />
                       <line x1="8" y1="13" x2="16" y2="13" />
                       <line x1="8" y1="17" x2="13" y2="17" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className={`msg-composer__iconbtn${productsOpen ? ' is-active' : ''}`}
+                    onClick={openProducts}
+                    aria-label="Products"
+                    title="Products"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="18"
+                      height="18"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+                      <line x1="3" y1="6" x2="21" y2="6" />
+                      <path d="M16 10a4 4 0 0 1-8 0" />
                     </svg>
                   </button>
                   <div className="msg-composer__inputwrap">
@@ -1139,6 +1229,13 @@ export default function MessagingPage() {
 
       <VaultPickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} onAttach={handleAttach} />
       <TemplateDrawer open={templateOpen} onClose={() => setTemplateOpen(false)} onUse={handleUseTemplate} />
+      <ProductsDrawer
+        open={productsOpen}
+        onClose={() => setProductsOpen(false)}
+        onUse={handleUseProduct}
+        products={productList}
+        loading={productsLoading}
+      />
       <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />
 
       {/* Incoming transfer requests — a right-side drawer opened from the request bar. */}

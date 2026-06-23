@@ -1,5 +1,5 @@
 import { query } from '../config/db.js';
-import { moduleAccessForUser } from '../config/modules.js';
+import { APP_MODULES, moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
 // All accounts for the admin Accounts tab (password hash never exposed).
@@ -23,4 +23,22 @@ export async function softDelete(id) {
   const res = await query('UPDATE users SET deleted_at = UTC_TIMESTAMP(), is_active = 0 WHERE id = ?', [id]);
   if (!res.affectedRows) throw ApiError.notFound('user not found');
   return { id: Number(id), deleted: true };
+}
+
+// Replace a user's module access. Admin-only modules (e.g. Accounts) are never
+// grantable here. Admins already have full access by role, so editing their list
+// has no effect — the UI only offers this for non-admin users.
+export async function setModuleAccess(id, modules) {
+  const rows = await query('SELECT id, deleted_at FROM users WHERE id = ?', [id]);
+  const target = rows[0];
+  if (!target || target.deleted_at) throw ApiError.notFound('user not found');
+  const requested = normalizeModuleAccess(modules);
+  if (!requested || requested.length === 0) throw ApiError.badRequest('select at least one module');
+  const adminOnly = requested.filter((mid) => APP_MODULES.find((m) => m.id === mid)?.adminOnly);
+  if (adminOnly.length) throw ApiError.badRequest("admin-only modules can't be granted");
+  await query('UPDATE users SET module_access = ? WHERE id = ? AND deleted_at IS NULL', [
+    serializeModuleAccess(requested),
+    id,
+  ]);
+  return { id: Number(id), module_access: requested };
 }

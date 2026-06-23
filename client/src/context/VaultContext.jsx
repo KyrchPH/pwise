@@ -159,6 +159,13 @@ export function VaultProvider({ children }) {
     return updated;
   }, []);
 
+  // Save a file's AI metadata (description + tags) and patch it into the tree.
+  const setItemMeta = useCallback(async (id, meta) => {
+    const updated = await vaultApi.updateMeta(id, meta);
+    setItems((cur) => cur.map((it) => (it.id === updated.id ? { ...it, ...updated } : it)));
+    return updated;
+  }, []);
+
   const deleteItem = useCallback(async (id) => {
     await vaultApi.remove(id);
     setItems((cur) => {
@@ -179,8 +186,8 @@ export function VaultProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden }),
-    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden],
+    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta }),
+    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta],
   );
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;

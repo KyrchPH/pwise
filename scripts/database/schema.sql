@@ -334,6 +334,28 @@ CREATE TABLE IF NOT EXISTS user_connections (
   INDEX idx_connection_requester (requester_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- page_products — per-page product catalog (Workspace → Products + the chat
+-- composer's Products drawer). Bound to a connected page; the photo is a stable S3
+-- key (the API presigns photo_url on read). tags = JSON array of strings.
+CREATE TABLE IF NOT EXISTS page_products (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  account_id  INT NOT NULL,
+  name        VARCHAR(255) NOT NULL,
+  base_price  DECIMAL(12, 2) NULL,
+  description TEXT NULL,
+  category    VARCHAR(120) NULL,
+  tags        JSON NULL,
+  photo_key   VARCHAR(512) NULL,
+  created_by  INT NULL,
+  updated_by  INT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_page_products_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_page_products_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_page_products_editor  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_page_products_account (account_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- wise_assistant_chats — Rovi's per-user help chat, stored server-side so it
 -- follows a user across devices. One row per user; messages JSON = capped
 -- [{ role, text }] list (intro greeting excluded, newest last).

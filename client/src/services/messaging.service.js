@@ -37,6 +37,14 @@ export async function getConfig() {
   return data.data; // { allowTransferToAi }
 }
 
+// Live-agent (human) response metrics for a page: CRR / FRT / ART over the page's
+// configured window. The rail refetches on inbox SSE activity + a slow poll, so it
+// stays ~real-time. Returns { crr, frt, art, config } | null (no/invalid page).
+export async function getAnalytics(accountId) {
+  const { data } = await api.get('/messages/analytics', { params: { accountId } });
+  return data.data.metrics;
+}
+
 // Hand a Live Agent thread back to the AI agent (inverse of takeOver). Flag-gated
 // server-side — throws 403 when ALLOW_TRANSFER_TO_AI is off.
 export async function returnToAi(id) {

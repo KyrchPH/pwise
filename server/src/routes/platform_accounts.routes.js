@@ -17,9 +17,13 @@ router.post('/refresh', ctrl.refresh);
 
 // Manage credentials — admins only.
 router.post('/test', requireAdmin, ctrl.test);
+// Built-in default agent prompts for the connect/new-page editor.
+router.get('/ai-defaults', requireAdmin, ctrl.aiDefaults);
 router.post('/', requireAdmin, ctrl.create);
 router.patch('/:id', requireAdmin, ctrl.update);
 router.delete('/:id', requireAdmin, ctrl.remove);
+// Per-agent AI system prompts for the page settings editor.
+router.get('/:id/ai-config', requireAdmin, ctrl.aiConfig);
 // Re-register this page's inbound webhooks with the platforms (no credential change).
 router.post('/:id/refresh-webhook', requireAdmin, ctrl.refreshWebhook);
 

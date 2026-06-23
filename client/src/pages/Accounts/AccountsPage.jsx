@@ -76,6 +76,9 @@ export default function AccountsPage() {
   const [link, setLink] = useState('');
   const [details, setDetails] = useState(null); // account whose details dialog is open
   const [menuId, setMenuId] = useState(null); // account whose options dropdown is open
+  const [editUser, setEditUser] = useState(null); // user whose module access is being edited
+  const [editModules, setEditModules] = useState([]);
+  const [savingAccess, setSavingAccess] = useState(false);
 
   const { data, loading, error, refresh } = useCachedResource('accounts', () =>
     Promise.all([adminService.listUsers(), adminService.listInvites()]).then(([users, invites]) => ({ users, invites })),
@@ -113,6 +116,44 @@ export default function AccountsPage() {
     setSelectedModules((current) =>
       current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
     );
+  };
+
+  // Edit an existing user's module access. Pre-checks their current grantable
+  // modules (core is always on); admin-only modules aren't offered.
+  const openEditAccess = (u) => {
+    const editableIds = availableModules.map((m) => m.id);
+    const current = normalizeModuleAccess(u.module_access) || [];
+    const next = editableIds.filter((id) => current.includes(id));
+    if (!next.includes('dashboard')) next.push('dashboard');
+    setEditUser(u);
+    setEditModules(next);
+  };
+
+  const toggleEditModule = (module) => {
+    if (module.core) return;
+    setEditModules((current) =>
+      current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
+    );
+  };
+
+  const saveAccess = async () => {
+    if (!editUser || editModules.length === 0) {
+      toast.error('Select at least one module');
+      return;
+    }
+    setSavingAccess(true);
+    try {
+      const res = await adminService.setModuleAccess(editUser.id, editModules);
+      toast.success(`Updated access for ${editUser.name}`);
+      // Keep the details dialog in sync if it's showing this user.
+      setDetails((cur) => (cur && cur.id === editUser.id ? { ...cur, module_access: res.module_access } : cur));
+      setEditUser(null);
+      refresh();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingAccess(false);
+    }
   };
 
   const generate = async () => {
@@ -231,7 +272,12 @@ export default function AccountsPage() {
                     const self = u.id === user.id;
                     const deleted = !!u.deleted_at;
                     return (
-                      <tr key={u.id} className="acct-row" onClick={() => setDetails(u)}>
+                      <tr
+                        key={u.id}
+                        className="acct-row"
+                        style={{ opacity: deleted ? 0.5 : undefined }}
+                        onClick={() => setDetails(u)}
+                      >
                         <td data-label="Name">{u.name}</td>
                         <td className="cell-muted" data-label="Email">{u.email}</td>
                         <td data-label="Role">
@@ -244,12 +290,11 @@ export default function AccountsPage() {
                         <td className="cell-muted" data-label="Joined">{fmt(u.created_at)}</td>
                         {/* No options menu for your own account; stop row-click on the menu otherwise. */}
                         <td onClick={self ? undefined : (e) => e.stopPropagation()}>
-                          {!self && (
+                          {!self && !deleted && (
                             <div className="acct-menu">
                               <button
                                 type="button"
                                 className="card-iconbtn"
-                                disabled={deleted}
                                 aria-haspopup="menu"
                                 aria-expanded={menuId === u.id}
                                 title="Options"
@@ -260,6 +305,19 @@ export default function AccountsPage() {
                               </button>
                               {menuId === u.id && (
                                 <div className="card-menu" role="menu">
+                                  {u.role !== 'admin' && (
+                                    <button
+                                      type="button"
+                                      className="card-menu__item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        openEditAccess(u);
+                                      }}
+                                    >
+                                      Edit access
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     className="card-menu__item"
@@ -363,9 +421,23 @@ export default function AccountsPage() {
         title={details?.name || 'Account'}
         onClose={() => setDetails(null)}
         footer={
-          <Button variant="ghost" onClick={() => setDetails(null)}>
-            Close
-          </Button>
+          <>
+            {details && details.role !== 'admin' && details.id !== user.id && !details.deleted_at && (
+              <Button
+                variant="subtle"
+                onClick={() => {
+                  const target = details;
+                  setDetails(null);
+                  openEditAccess(target);
+                }}
+              >
+                Edit access
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => setDetails(null)}>
+              Close
+            </Button>
+          </>
         }
       >
         {details && (
@@ -431,6 +503,53 @@ export default function AccountsPage() {
                     <span className="module-access__name">{module.label}</span>
                     <span className="module-access__hint">
                       {module.core ? 'Required safe landing page' : 'Allow access after signup'}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!editUser}
+        title={editUser ? `Module access — ${editUser.name}` : 'Module access'}
+        onClose={() => (!savingAccess ? setEditUser(null) : undefined)}
+        className="modal--module-access"
+        dismissable={!savingAccess}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditUser(null)} disabled={savingAccess}>
+              Cancel
+            </Button>
+            <Button onClick={saveAccess} disabled={savingAccess || editModules.length === 0}>
+              {savingAccess ? 'Saving…' : 'Save'}
+            </Button>
+          </>
+        }
+      >
+        <div className="module-access">
+          <p className="module-access__intro">
+            Choose which modules {editUser?.name || 'this user'} can open. Changes take effect the next time they reload
+            the app.
+          </p>
+          <div className="module-access__list">
+            {availableModules.map((module) => {
+              const checked = editModules.includes(module.id);
+              return (
+                <label className={`module-access__item${checked ? ' is-checked' : ''}`} key={module.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={module.core || savingAccess}
+                    onChange={() => toggleEditModule(module)}
+                  />
+                  <span className="module-access__check" aria-hidden="true" />
+                  <span>
+                    <span className="module-access__name">{module.label}</span>
+                    <span className="module-access__hint">
+                      {module.core ? 'Always available' : 'Can open this module'}
                     </span>
                   </span>
                 </label>

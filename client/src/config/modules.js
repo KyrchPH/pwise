@@ -4,6 +4,7 @@ export const APP_MODULES = [
   { id: 'analytics', label: 'Analytics', route: '/analytics' },
   { id: 'post-pool', label: 'Post Pool', route: '/post-pool' },
   { id: 'upload', label: 'Upload', route: '/upload' },
+  { id: 'products', label: 'Products', route: '/products' },
   { id: 'messages', label: 'Messaging', route: '/messages' },
   { id: 'connections', label: 'Connections', route: '/connections' },
   { id: 'vault', label: 'Vault', route: '/vault' },
@@ -40,7 +41,10 @@ export function canAccessModule(user, moduleId) {
   if (!user) return false;
   const module = APP_MODULES.find((m) => m.id === moduleId);
   if (!module) return false;
-  if (module.adminOnly && user.role !== 'admin') return false;
+  // Admins have full access regardless of their stored module_access (which may
+  // predate newer modules) — mirrors the server's canUseModule.
+  if (user.role === 'admin') return true;
+  if (module.adminOnly) return false;
   return moduleAccessForUser(user).includes(moduleId);
 }
 

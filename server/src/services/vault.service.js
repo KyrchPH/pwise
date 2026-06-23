@@ -10,6 +10,42 @@ import { createDownloadUrl, deleteObject } from './s3.service.js';
  */
 
 const ALLOWED_MEDIA = ['image', 'video'];
+const MAX_DESCRIPTION_LEN = 2000;
+const MAX_TAGS = 20;
+const MAX_TAG_LEN = 40;
+
+// Stored tags are a normalized comma-separated string; hand the client an array.
+function splitTags(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// Accept tags as an array or a comma string; normalize to a clean, de-duped,
+// lowercased comma string (trimmed, capped in count + length) for storage.
+function normalizeTags(input) {
+  const list = Array.isArray(input) ? input : String(input ?? '').split(',');
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const tag = String(raw ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .slice(0, MAX_TAG_LEN);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out.join(',');
+}
+
+function normalizeDescription(input) {
+  const text = String(input ?? '').trim();
+  return text ? text.slice(0, MAX_DESCRIPTION_LEN) : null;
+}
 
 // Shape a row for the client. For files, attach a presigned URL for the object
 // (used for preview + download) and, when present, the optimized thumbnail.
@@ -24,6 +60,8 @@ async function withUrls(row) {
     uploadedBy: row.uploaded_by || '',
     createdAt: row.created_at,
     aiHidden: !!row.ai_hidden, // per-file "Hide from AI" flag (files only; folders are always 0)
+    description: row.description || '', // AI metadata: free-text description…
+    tags: splitTags(row.tags), //                …and curated keyword tags
     url: '',
     thumbUrl: '',
   };
@@ -176,9 +214,21 @@ export async function setAiHidden(id, hidden) {
   return getItem(id);
 }
 
+// Update a file's AI metadata — free-text `description` and curated `tags` (the
+// agent matches a customer's words against both, with tags weighted highest; see
+// searchAiMedia). Either field may be omitted to leave it unchanged.
+export async function updateMeta(id, { description, tags } = {}) {
+  const row = await getRow(id); // 404 if missing
+  const nextDescription = description === undefined ? (row.description ?? null) : normalizeDescription(description);
+  const nextTags = tags === undefined ? (row.tags ?? '') : normalizeTags(tags);
+  await query('UPDATE vault_items SET description = ?, tags = ? WHERE id = ?', [nextDescription, nextTags, row.id]);
+  return getItem(row.id);
+}
+
 // AI media search: media files (image/video, NOT ai_hidden) anywhere under
-// `folderId`'s subtree whose name matches the query keywords, ranked by how many
-// keywords hit the name, each with a fresh signed URL. The page's folder is the
+// `folderId`'s subtree whose tags / name / description match the query keywords,
+// ranked by a weighted score (curated tags beat the filename, which beats the
+// free-text description), each with a fresh signed URL. The page's folder is the
 // scope, so the messaging `send_media` tool only ever reaches that page's files.
 export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
   const fid = parseInt(folderId, 10);
@@ -188,7 +238,7 @@ export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
   const ids = await collectSubtree(fid); // [folder, ...descendants]
   if (!ids.length) return [];
   const rows = await query(
-    `SELECT id, name, media_type, s3_key FROM vault_items
+    `SELECT id, name, media_type, s3_key, tags, description FROM vault_items
       WHERE type = 'file' AND ai_hidden = 0 AND media_type IN ('image', 'video')
         AND parent_id IN (${ids.map(() => '?').join(',')})`,
     ids,
@@ -199,7 +249,17 @@ export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
   const ranked = rows
     .map((row) => {
       const name = String(row.name || '').toLowerCase();
-      const score = tokens.reduce((s, t) => (name.includes(t) ? s + 1 : s), 0);
+      const tags = String(row.tags || '').toLowerCase();
+      const description = String(row.description || '').toLowerCase();
+      // Weighting: curated tags (3) > filename (2) > free-text description (1).
+      // A token can score in several fields; the contributions add up.
+      const score = tokens.reduce((s, t) => {
+        let hit = 0;
+        if (tags.includes(t)) hit += 3;
+        if (name.includes(t)) hit += 2;
+        if (description.includes(t)) hit += 1;
+        return s + hit;
+      }, 0);
       return { row, score };
     })
     .filter((x) => x.score > 0)
@@ -216,7 +276,16 @@ export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
         /* S3 not configured / object missing — skip this one */
       }
     }
-    if (url) out.push({ id: String(row.id), name: row.name, mediaType: row.media_type || 'image', url });
+    if (url) {
+      out.push({
+        id: String(row.id),
+        name: row.name,
+        mediaType: row.media_type || 'image',
+        url,
+        description: row.description || '', // so the agent can describe what it picked…
+        tags: splitTags(row.tags), //          …and reason over / offer alternatives
+      });
+    }
   }
   return out;
 }

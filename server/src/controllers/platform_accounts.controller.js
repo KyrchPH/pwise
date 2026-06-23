@@ -57,6 +57,16 @@ export const update = asyncHandler(async (req, res) => {
   sendSuccess(res, { page: await pages.update(req.params.id, req.body || {}) });
 });
 
+// The page's per-agent AI prompts (+ built-in defaults) for the settings editor.
+export const aiConfig = asyncHandler(async (req, res) => {
+  sendSuccess(res, await pages.getAiConfig(req.params.id));
+});
+
+// The built-in default agent prompts (for the connect/new-page editor, no id yet).
+export const aiDefaults = asyncHandler(async (req, res) => {
+  sendSuccess(res, { defaults: pages.aiDefaults() });
+});
+
 export const remove = asyncHandler(async (req, res) => {
   sendSuccess(res, await pages.remove(req.params.id));
 });

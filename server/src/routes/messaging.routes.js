@@ -24,6 +24,7 @@ router.use(requireAuth);
 router.use(requireMessagingAccess); // JWT routes are messaging-only (stream/inbound gate themselves above)
 router.get('/', ctrl.list); // conversations visible to this user (AI shared + own live)
 router.get('/config', ctrl.config); // messaging feature flags (e.g. hand-back-to-AI)
+router.get('/analytics', ctrl.analytics); // live-agent response metrics for a page (?accountId)
 
 // Transfers + agent list — declared before the /:id routes so they aren't
 // swallowed by the :id param.

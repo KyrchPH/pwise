@@ -2,6 +2,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/response.util.js';
 import { env } from '../config/env.js';
 import * as service from '../services/messaging.service.js';
+import * as analyticsService from '../services/messaging_analytics.service.js';
 import { onMessagingEvent } from '../services/messaging.events.js';
 import { verifyToken, findActiveById } from '../services/auth.service.js';
 import { hasMessagingAccess } from '../config/modules.js';
@@ -37,6 +38,14 @@ export const takeover = asyncHandler(async (req, res) => {
 // affordance). Cheap, no DB — read on inbox load to decide whether to enable it.
 export const config = asyncHandler(async (req, res) => {
   sendSuccess(res, { allowTransferToAi: env.allowTransferToAi });
+});
+
+// Live-agent (human) response metrics for one page — CRR / FRT / ART over the page's
+// configured window. Read-only; page scope comes from ?accountId (pages are shared,
+// so any messaging user may read a page's metrics). null metrics when no/invalid page.
+export const analytics = asyncHandler(async (req, res) => {
+  const metrics = await analyticsService.computeAgentMetrics(req.query.accountId);
+  sendSuccess(res, { metrics });
 });
 
 // Hand a Live Agent thread back to the AI agent (flag-gated; see service.returnToAi).

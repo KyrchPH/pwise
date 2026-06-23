@@ -1,15 +1,12 @@
 {
+  "name": "Main Workflow",
   "nodes": [
     {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "ai-inbound",
-        "options": {}
-      },
+      "parameters": { "httpMethod": "POST", "path": "ai-inbound", "options": {} },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-1248, -192],
-      "id": "f56ad093-69f3-4672-99a2-b70b03df18b5",
+      "position": [1120, 304],
+      "id": "98f6f2fd-3296-45b0-8c97-734ebc2ac6eb",
       "name": "AI Inbound",
       "webhookId": "ai-inbound-15dd300f"
     },
@@ -21,60 +18,68 @@
             { "id": "22222222-2222-4222-8222-222222222222", "name": "chat_id", "value": "={{ $json.body.chatId }}", "type": "string" },
             { "id": "33333333-3333-4333-8333-333333333333", "name": "accountId", "value": "={{ $json.body.accountId }}", "type": "string" },
             { "id": "44444444-4444-4444-8444-444444444444", "name": "platform", "value": "={{ $json.body.platform }}", "type": "string" },
-            { "id": "55555555-5555-4555-8555-555555555555", "name": "SERVICE_TOKEN", "value": "REPLACE_WITH_SERVICE_TOKEN", "type": "string" }
+            { "id": "55555555-5555-4555-8555-555555555555", "name": "SERVICE_TOKEN", "value": "REPLACE_WITH_SERVICE_TOKEN", "type": "string" },
+            { "id": "66666666-6666-4666-8666-666666666666", "name": "systemSales", "value": "={{ $json.body.systemSales }}", "type": "string" },
+            { "id": "77777777-7777-4777-8777-777777777777", "name": "systemSupport", "value": "={{ $json.body.systemSupport }}", "type": "string" },
+            { "id": "88888888-8888-4888-8888-888888888888", "name": "systemGeneral", "value": "={{ $json.body.systemGeneral }}", "type": "string" }
           ]
         },
         "options": {}
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [-1056, -192],
-      "id": "c48288bd-0cab-4e5c-9308-c3fa9dc13eb9",
+      "position": [1312, 304],
+      "id": "0fc6f137-f4a3-4240-b8ae-2c0456af14fb",
       "name": "Message"
     },
     {
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [-848, 160],
-      "id": "99efc423-4a9e-400f-865f-541591352a88",
+      "position": [1520, 656],
+      "id": "9fca98bc-9ba6-40eb-8cf4-b7966344322e",
       "name": "DeepSeek Chat Model",
       "credentials": { "deepSeekApi": { "id": "68UvPwiyV4L6DKry", "name": "DeepSeek account" } }
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "={{ $('Message').item.json.message }}",
+        "text": "={{ $('Message').first().json.message }}",
         "options": {
           "systemMessage": "You are an Intent Identifier Agent. Your only job is to classify the customer's latest message into one intent for routing.\n\nAllowed intents:\n- sales: The customer is asking about prices, packages, availability, booking, quotation, services offered, promos, or wants to hire/purchase a service.\n- support: The customer has an existing booking/order/service issue, complaint, reschedule request, cancellation, refund concern, follow-up, or needs help with something already arranged.\n- general_inquiry: The customer is asking general questions that are not clearly sales or support, such as business hours, location, contact details, cleaning process, payment methods, or basic information.\n\nRules:\n- Classify based on the customer's latest message and available conversation context.\n- If the customer wants to book, get a quote, asks “how much,” or asks if a service is available, choose sales.\n- If the customer mentions a previous booking, problem, complaint, delay, missed appointment, payment issue, or asks for an update, choose support.\n- If the message is informational and does not show purchase intent or an existing issue, choose general_inquiry.\n- If uncertain, choose the closest intent with lower confidence.\n- Do not answer the customer.\n- Do not ask follow-up questions.\n- Output only valid JSON. No markdown, no explanation outside JSON.\n\nJSON output format:\n{\n  \"intent\": \"sales | support | general_inquiry\",\n  \"confidence\": 0.0,\n  \"reason\": \"short reason for the classification\"\n}"
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [-848, -192],
-      "id": "56231fb8-e131-4f62-8ec8-0336e1949740",
+      "position": [1520, 304],
+      "id": "b5f74a02-4488-44ce-9ca4-7fe7d4c52854",
       "name": "Intent Identifier",
       "retryOnFail": true,
       "alwaysOutputData": true,
       "onError": "continueErrorOutput"
     },
     {
-      "parameters": { "sessionIdType": "customKey", "sessionKey": "={{ $('Message').item.json.chat_id }}", "sessionTTL": 604800, "contextWindowLength": 20 },
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Message').first().json.chat_id }}",
+        "sessionTTL": 604800,
+        "contextWindowLength": 20
+      },
       "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
       "typeVersion": 1.5,
-      "position": [-752, 0],
-      "id": "0b4dac48-4876-41dc-8360-b4cfb1be77d6",
+      "position": [1616, 496],
+      "id": "17fa57cc-9357-4bfb-aea6-5ec72adfdfd5",
       "name": "Redis Chat Memory",
       "credentials": { "redis": { "id": "wsDUn34ZvM59Tj1t", "name": "Redis account" } }
     },
     {
       "parameters": {
-        "jsCode": "const raw = ($input.first().json.output ?? '').toString();\nconst cleaned = raw.replace(/```(?:json)?/gi, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (error) {\n  parsed = {\n    intent: 'general_inquiry',\n    confidence: 0,\n    reason: 'Could not parse intent classifier output',\n  };\n}\n\nreturn [\n  {\n    json: {\n      intent: parsed.intent || 'general_inquiry',\n      confidence: Number(parsed.confidence || 0),\n      reason: parsed.reason || '',\n    },\n  },\n];"
+        "jsCode": "const raw = ($input.first().json.output ?? '').toString();\nconst cleaned = raw.replace(/```(?:json)?/gi, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (error) {\n  parsed = {\n    intent: 'general_inquiry',\n    confidence: 0,\n    reason: 'Could not parse intent classifier output',\n  };\n}\n\nreturn [\n  {\n    json: {\n      intent: parsed.intent || 'general_inquiry',\n      confidence: Number(parsed.confidence || 0),\n      reason: parsed.reason || '',\n    },\n    pairedItem: { item: 0 },\n  },\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-528, -192],
-      "id": "627f7da3-2ef2-418d-a808-10b193de471e",
+      "position": [1840, 304],
+      "id": "b57a4118-9524-435f-a840-cd4cca4d7dc5",
       "name": "Parsed Output"
     },
     {
@@ -90,8 +95,8 @@
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
-      "position": [-336, -192],
-      "id": "782da678-8aa7-44bd-8c7b-97c3a65c11b9",
+      "position": [2032, 304],
+      "id": "6894e978-c618-47f2-8efc-c6b955d011cd",
       "name": "Intent check"
     },
     {
@@ -107,22 +112,20 @@
       },
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
-      "position": [-96, -336],
-      "id": "358510c9-a56d-4f4e-8661-6d378eda3506",
+      "position": [2272, 160],
+      "id": "4fc67d34-c1b8-4562-935a-adb4b17afa86",
       "name": "Intent Routes"
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "={{ $('Message').item.json.message }}",
-        "options": {
-          "systemMessage": "You are the Sales Agent for Wise Cleaner Shop. Your job is to help customers understand services, collect booking details, answer pricing questions when information is available, and move qualified leads toward a booking or quotation.\n\nMain goals:\n- Identify what cleaning service the customer needs.\n- Ask for missing details needed to quote or book.\n- If the customer has a complaint, existing-booking issue, refund, reschedule, cancellation, or follow-up, say you'll connect them with support.\n\nLanguage and message analysis:\n- Analyze the customer's latest message and chat history every turn before replying.\n- Detect the customer's intent, language preference, tone, urgency, and any missing details.\n- If the customer specifically asks to speak in English, reply in pure English.\n- If pure English is needed for clarity, professionalism, pricing details, policies, or technical explanations, use English.\n- If there is no clear language preference or nothing specific to analyze, default to casual Taglish.\n- For Tagalog or Taglish replies, sound casual, friendly, funny, and respectful.\n- You may naturally use expressions like \"jk\", \"joke\", \"jusko\", \"nyek\", \"ngek\", \"chika\", \"nays one\", \"keri lang\", \"naku\", \"char\", \"Ayyy\", \"AHAHAHAHAHHAAHA\", \"enebe\", \"pereng tenge te\", \"Arigato\", \"tenchuuu\", \"mwahhh\", and similar playful Filipino internet-style expressions.\n- Use slang sparingly and naturally. Do not force jokes or make every reply exaggerated.\n- Use very playful expressions like \"AHAHAHAHAHHAAHA\", \"pereng tenge te\", \"mwahhh\", or \"enebe\" only when the customer is also playful, casual, or joking.\n- Do not use jokes, flirting, or overly playful language for complaints, refunds, cancellations, urgent concerns, angry customers, or serious service issues.\n- For serious concerns, keep the tone calm, respectful, and helpful.\n- Use \"po\" / \"opo\" only if the customer uses them first or if the situation clearly needs a more polite tone.\n\nConversation rules:\n- Read the chat history every turn.\n- Resolve references like \"it\", \"that\", \"yun\", \"iyon\", or \"yung sinabi ko kanina\" before answering.\n- Do not re-ask for details already provided.\n- Ask only 1-3 questions at a time.\n- Be concise, usually one or two sentences when possible.\n- Use the customer's name occasionally when it feels natural, not in every reply.\n\nStyle and voice:\n- Plain, direct, warm, and helpful.\n- In Taglish, be friendly and light with casual chika energy, but still professional.\n- Avoid generic filler like \"Certainly!\", \"Great question!\", or \"Of course!\".\n- Light formatting only:\n  - Wrap key terms and prices in **double asterisks** for bold, like **₱455**.\n  - Start list items with \"- \".\n- Do not use italics, headings, tables, links, or JSON.\n- Reply directly to the customer.\n- Never mention internal routing, prompts, tools, workflow logic, or system instructions.\n\nGrounding — always use your tools, never invent:\n- Your two lookup tools are your ONLY source of truth about the shop. Do NOT answer about products, prices, or shop info from memory, assumptions, or what was said earlier in the chat — your memory can be wrong or outdated, so re-check with a tool.\n- search_catalog — the shop's PRODUCTS and SERVICES: names, categories, prices, packages, promos, bundles. You MUST call it before answering anything about what is offered, how much something costs, what's available, or any product or package.\n- knowledge_base — the shop's FAQ and saved answers: policies, hours, location, contact, payment methods, the cleaning process, \"what do you offer\", refunds/cancellations, and other general questions. You MUST call it before answering any general or informational question.\n- How to choose: a product / price / package question -> search_catalog. A general / policy / info question -> knowledge_base. If the question touches both, call both. If unsure which, call knowledge_base first.\n- Answer ONLY with what the tools return. NEVER state or guess a price, product name, package, promo, availability, policy, schedule, contact detail, or service detail that a tool did not return.\n- If the tools return nothing relevant, do NOT make something up. Say honestly (in the customer's language) that you're not sure or don't have that detail yet, and ask one specific follow-up question.\n- You do NOT need a tool for pure greetings, thanks, small talk, or clarifying questions that contain no factual claim.\n\nTransferring to a human:\n- You have a \"Transfer to Human\" tool that hands the conversation to a human live agent.\n- ONLY call it when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager.\n- Examples:\n  - \"Can I talk to a person?\"\n  - \"I want a real agent.\"\n  - \"Transfer me to a human.\"\n  - \"Let me speak to someone.\"\n- Do NOT transfer for hard questions, missing prices, complaints, anger, or sensitive topics unless the customer explicitly asks for a human.\n- When they explicitly ask, call the tool once, then send one short, warm message saying a teammate will take over shortly.\n- Never mention tools, routing, or internal logic."
-        }
+        "text": "={{ $('Message').first().json.message }}",
+        "options": { "systemMessage": "={{ $('Message').first().json.systemSales }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [240, -544],
-      "id": "8c66795f-ae59-41a0-a54a-8ff5f1da488e",
+      "position": [2592, -64],
+      "id": "f3968588-8439-4200-bdb1-358d073ae7d5",
       "name": "Sales Agent",
       "retryOnFail": true,
       "alwaysOutputData": true,
@@ -132,48 +135,98 @@
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [160, -352],
-      "id": "bd08edcc-63bb-42f0-ad4a-bd93ffca0a0e",
+      "position": [2528, 144],
+      "id": "4e30de76-6909-4964-b311-ed4c934cfbe9",
       "name": "DeepSeek Chat Model2",
       "credentials": { "deepSeekApi": { "id": "68UvPwiyV4L6DKry", "name": "DeepSeek account" } }
     },
     {
-      "parameters": { "sessionIdType": "customKey", "sessionKey": "={{ $('Message').item.json.chat_id }}", "contextWindowLength": 20 },
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Message').first().json.chat_id }}",
+        "contextWindowLength": 20
+      },
       "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
       "typeVersion": 1.5,
-      "position": [304, -352],
-      "id": "48b941e1-8007-4870-819f-1a43dd3f6775",
+      "position": [2672, 144],
+      "id": "f2a2ce76-61f4-428f-be55-18aefb419dbc",
       "name": "Sales Agent Memory",
       "credentials": { "redis": { "id": "wsDUn34ZvM59Tj1t", "name": "Redis account" } }
     },
     {
       "parameters": {
-        "toolDescription": "Hand off THIS conversation to a human live agent. Use this ONLY when the customer explicitly asks to speak to or be transferred to a human, live agent, real person, staff, or manager. Do not use it for any other reason.",
-        "method": "POST",
-        "url": "https://pwise-api.sixpent.com/api/messages/handoff",
-        "sendHeaders": true,
-        "parametersHeaders": { "values": [ { "name": "x-service-token", "value": "={{ $('Message').item.json.SERVICE_TOKEN }}" } ] },
-        "sendBody": true,
-        "parametersBody": { "values": [ { "name": "accountId", "value": "={{ String($('Message').item.json.accountId) }}" }, { "name": "customerHandle", "value": "={{ $('Message').item.json.chat_id }}" }, { "name": "origin", "value": "={{ $('Message').item.json.platform }}" } ] }
+        "description": "Hand off THIS conversation to a human live agent. Use ONLY when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "handoff",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "customerHandle": "={{ $('Message').first().json.chat_id }}",
+            "origin": "={{ $('Message').first().json.platform }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
       },
-      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
-      "typeVersion": 1.1,
-      "position": [880, 400],
-      "id": "98b36aed-642e-4e94-a7bb-26c096ce7168",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3360, 768],
+      "id": "de72a3cf-f1c2-4f62-a511-d6381b43c806",
       "name": "Transfer to Human"
     },
     {
       "parameters": {
-        "promptType": "define",
-        "text": "={{ $('Message').item.json.message }}",
-        "options": {
-          "systemMessage": "You are the Support Agent for Wise Cleaner Shop. Help customers with existing bookings, service issues, complaints, reschedules, cancellations, refunds, and follow-ups.\n\nMain goals:\n- Understand the customer's existing booking or issue.\n- Gather the details needed to resolve it, such as booking reference, date, service, and what went wrong.\n- Set clear expectations on next steps.\n- If the customer is actually asking for a new service, new booking, quotation, or sales inquiry, say you'll connect them with sales.\n\nLanguage and message analysis:\n- Analyze the customer's latest message and the chat history every turn before replying.\n- Identify the customer's intent, issue, language preference, tone, urgency, and missing details.\n- If the customer specifically asks to speak in English, reply in pure English.\n- If pure English is needed for clarity, professionalism, policies, refunds, or serious support issues, use English.\n- If there is no clear language preference or nothing specific to analyze, default to casual Taglish.\n- For Tagalog or Taglish replies, sound casual, friendly, funny, and respectful.\n- You may naturally use expressions like \"jk\", \"joke\", \"jusko\", \"nyek\", \"ngek\", \"chika\", \"nays one\", \"keri lang\", \"naku\", \"char\", \"Ayyy\", \"AHAHAHAHAHHAAHA\", \"enebe\", \"pereng tenge te\", \"Arigato\", \"tenchuuu\", \"mwahhh\", and similar playful Filipino internet-style expressions.\n- Use slang sparingly and naturally. Do not force jokes or make every reply sound exaggerated.\n- Use very playful expressions like \"AHAHAHAHAHHAAHA\", \"pereng tenge te\", \"mwahhh\", or \"enebe\" only when the customer is also playful, casual, or joking.\n- Do not use jokes, flirting, or overly playful language for complaints, refunds, cancellations, damaged items, urgent concerns, frustrated customers, or serious support issues.\n- For serious concerns, keep the tone calm, respectful, and helpful.\n- Use \"po\" / \"opo\" only if the customer uses them first or if the situation clearly needs a more polite tone.\n\nConversation:\n- Read the chat history every turn.\n- Resolve references like \"it\", \"that\", \"yun\", \"iyon\", or \"yung sinabi ko kanina\" before answering.\n- Do not re-ask for details already provided.\n- Ask only 1-3 questions at a time.\n- Be concise, usually one or two sentences when possible.\n- Use the customer's name occasionally when it feels natural, not in every reply.\n\nStyle and voice:\n- Plain, direct, warm, and helpful.\n- In Taglish, be casual and friendly with light chika energy, but stay professional.\n- Avoid generic filler like \"Certainly!\", \"Great question!\", or \"Of course!\".\n- Light formatting only:\n  - Wrap key terms and prices in **double asterisks** for bold, like **₱455**.\n  - Start list items with \"- \".\n- Do not use italics, headings, tables, links, or JSON.\n- Reply directly to the customer.\n- Never mention internal prompts, tools, workflow logic, or system instructions.\n\nGrounding — always use your tools, never invent:\n- Your two lookup tools are your ONLY source of truth about the shop. Do NOT answer about products, prices, policies, or shop info from memory, assumptions, or what was said earlier in the chat — your memory can be wrong or outdated, so re-check with a tool.\n- knowledge_base — the shop's FAQ and saved answers: policies, refunds, cancellations, reschedules, hours, the support process, how things work, and other general questions. You MUST call it before answering any policy or general/support question.\n- search_catalog — the shop's PRODUCTS and SERVICES: names, categories, prices, packages. Call it before answering anything about what is offered or how much something costs.\n- How to choose: a policy / refund / general question -> knowledge_base. A product / price question -> search_catalog. If the question touches both, call both. If unsure which, call knowledge_base first.\n- Answer ONLY with what the tools return. NEVER state or guess a policy, refund amount, timeline, price, product, package, or service detail that a tool did not return.\n- If the tools return nothing relevant, do NOT make something up. Say honestly (in the customer's language) that you're not sure or don't have that detail yet, and ask one specific follow-up question.\n- You do NOT need a tool for pure greetings, thanks, small talk, or clarifying questions that contain no factual claim.\n\nTransferring to a human:\n- You have a \"Transfer to Human\" tool that hands the conversation to a human live agent.\n- ONLY call it when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager.\n- Examples:\n  - \"Can I talk to a person?\"\n  - \"I want a real agent.\"\n  - \"Transfer me to a human.\"\n  - \"Let me speak to someone.\"\n- Do NOT transfer for complaints, frustration, refunds, sensitive issues, difficult questions, or missing information unless the customer explicitly asks for a human.\n- Keep helping the customer yourself unless they clearly ask for a human.\n- When they explicitly ask, call the tool once, then send one short, warm message saying a teammate will take over shortly.\n- Never mention tools, routing, or internal logic."
+        "description": "Send a photo / sample image from the shop's media library straight to the customer. Use when the customer asks to SEE something visual — a photo, picture, sample, before/after, or a look at a product, service, or result (e.g. 'pakita mo', 'may pic/litrato ba', 'can I see', 'patingin'). Pass a short description of what to show. The image is delivered to the customer automatically; after calling this, send one short caption / text reply.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "send_media",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "customerHandle": "={{ $('Message').first().json.chat_id }}",
+            "origin": "={{ $('Message').first().json.platform }}",
+            "query": "={{ $fromAI('input', 'A short description of the photo or sample to show, e.g. \"before and after deep cleaning\", \"sofa cleaning result\"', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
         }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3248, 1120],
+      "id": "89928fb6-6a85-4eba-b1ad-9a05bcaad133",
+      "name": "Send Media"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Message').first().json.message }}",
+        "options": { "systemMessage": "={{ $('Message').first().json.systemSupport }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [240, -192],
-      "id": "8d0f4153-c645-4f4b-b98e-2dc34909072b",
+      "position": [2608, 304],
+      "id": "4abcaaf0-7601-434c-ab79-6e0046a6ea1e",
       "name": "Support Agent",
       "retryOnFail": true,
       "alwaysOutputData": true,
@@ -183,32 +236,34 @@
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [160, -16],
-      "id": "ad7afff9-9097-4a3d-aa65-c2748032e323",
+      "position": [2528, 480],
+      "id": "59e09308-c7fe-42a5-a1c2-15a8aca0c924",
       "name": "DeepSeek Chat Model3",
       "credentials": { "deepSeekApi": { "id": "68UvPwiyV4L6DKry", "name": "DeepSeek account" } }
     },
     {
-      "parameters": { "sessionIdType": "customKey", "sessionKey": "={{ $('Message').item.json.chat_id }}", "contextWindowLength": 20 },
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Message').first().json.chat_id }}",
+        "contextWindowLength": 20
+      },
       "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
       "typeVersion": 1.5,
-      "position": [304, -16],
-      "id": "ab248662-2cdf-4882-865f-550f03f57640",
+      "position": [2672, 480],
+      "id": "5f07fb9b-8a2b-46b2-bb0d-1b90d16d8802",
       "name": "Support Agent Memory",
       "credentials": { "redis": { "id": "wsDUn34ZvM59Tj1t", "name": "Redis account" } }
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "={{ $('Message').item.json.message }}",
-        "options": {
-          "systemMessage": "You are the General Inquiry Agent for Wise Cleaner Shop. Answer general questions about hours, location, contact details, the cleaning process, payment methods, and basic service information.\n\nMain goals:\n- Help customers with general questions about Wise Cleaner Shop.\n- If the customer clearly wants a quote, booking, or new service request, say you'll connect them with sales.\n- If the customer asks about an existing booking, service issue, complaint, reschedule, cancellation, refund, or follow-up, say you'll connect them with support.\n\nLanguage and message analysis:\n- Analyze the customer's latest message and the chat history every turn before replying.\n- Identify the customer's intent, language preference, tone, urgency, and missing details.\n- If the customer specifically asks to speak in English, reply in pure English.\n- If pure English is needed for clarity, professionalism, policies, or detailed explanations, use English.\n- If there is no clear language preference or nothing specific to analyze, default to casual Taglish.\n- For Tagalog or Taglish replies, sound casual, friendly, funny, and respectful.\n- You may naturally use expressions like \"jk\", \"joke\", \"jusko\", \"nyek\", \"ngek\", \"chika\", \"nays one\", \"keri lang\", \"naku\", \"char\", \"Ayyy\", \"AHAHAHAHAHHAAHA\", \"enebe\", \"pereng tenge te\", \"Arigato\", \"tenchuuu\", \"mwahhh\", and similar playful Filipino internet-style expressions.\n- Use slang sparingly and naturally. Do not force jokes or make every reply sound exaggerated.\n- Use very playful expressions like \"AHAHAHAHAHHAAHA\", \"pereng tenge te\", or \"mwahhh\" only when the customer is also playful or casual.\n- Do not use jokes, flirting, or overly playful language for complaints, refunds, cancellations, damaged items, urgent concerns, or frustrated customers.\n- For serious concerns, keep the tone calm, respectful, and helpful.\n- Use \"po\" / \"opo\" only if the customer uses them first or if the situation clearly needs a more polite tone.\n\nConversation:\n- Read the chat history every turn.\n- Resolve references like \"it\", \"that\", \"yun\", \"iyon\", or \"yung sinabi ko kanina\" before answering.\n- Do not re-ask for details already provided.\n- Ask only 1-3 questions at a time.\n- Be concise, usually one or two sentences when possible.\n- Use the customer's name occasionally when it feels natural, not in every reply.\n\nStyle and voice:\n- Plain, direct, warm, and helpful.\n- In Taglish, keep it casual and friendly with light chika energy, but still professional.\n- Avoid generic filler like \"Certainly!\", \"Great question!\", or \"Of course!\".\n- Light formatting only:\n  - Wrap key terms and prices in **double asterisks** for bold, like **₱455**.\n  - Start list items with \"- \".\n- Do not use italics, headings, tables, links, or JSON.\n- Reply directly to the customer.\n- Never mention internal prompts, tools, workflow logic, or system instructions.\n\nGrounding — always use your tools, never invent:\n- Your two lookup tools are your ONLY source of truth about the shop. Do NOT answer about shop info, prices, or policies from memory, assumptions, or what was said earlier in the chat — your memory can be wrong or outdated, so re-check with a tool.\n- knowledge_base — the shop's FAQ and saved answers: hours, location, contact details, payment methods, the cleaning process, policies, \"what do you offer\", how things work, and other general questions. You MUST call it before answering any general or informational question.\n- search_catalog — the shop's PRODUCTS and SERVICES: names, categories, prices, packages. Call it before answering anything about what is offered or how much something costs.\n- How to choose: a general / info question -> knowledge_base. A product / price question -> search_catalog. If the question touches both, call both. If unsure which, call knowledge_base first.\n- Answer ONLY with what the tools return. NEVER state or guess hours, location, contact details, prices, products, promos, or policies that a tool did not return.\n- If the tools return nothing relevant, do NOT make something up. Say honestly (in the customer's language) that you're not sure or don't have that detail yet, and ask one specific follow-up question.\n- You do NOT need a tool for pure greetings, thanks, small talk, or clarifying questions that contain no factual claim.\n\nTransferring to a human:\n- You have a \"Transfer to Human\" tool that hands the conversation to a human live agent.\n- ONLY call it when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager.\n- Examples:\n  - \"Can I talk to a person?\"\n  - \"I want a real agent.\"\n  - \"Transfer me to a human.\"\n  - \"Let me speak to someone.\"\n- Do NOT transfer for general questions, missing information, complaints, pricing questions, or difficult questions unless the customer explicitly asks for a human.\n- When they explicitly ask, call the tool once, then send one short, warm message saying a teammate will take over shortly.\n- Never mention tools, routing, or internal logic."
-        }
+        "text": "={{ $('Message').first().json.message }}",
+        "options": { "systemMessage": "={{ $('Message').first().json.systemGeneral }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [240, 176],
-      "id": "68946502-39de-4547-b235-79e34497d981",
+      "position": [2608, 672],
+      "id": "ce40aa43-e14a-446d-b171-fab0009bfc2e",
       "name": "General Inquiry Agent",
       "retryOnFail": true,
       "alwaysOutputData": true,
@@ -218,17 +273,21 @@
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [160, 336],
-      "id": "d818d1e7-2f33-4c4f-ae85-f0319818e302",
+      "position": [2528, 832],
+      "id": "7c39d2e1-17d3-4efa-bb5e-aaafd9640122",
       "name": "DeepSeek Chat Model1",
       "credentials": { "deepSeekApi": { "id": "68UvPwiyV4L6DKry", "name": "DeepSeek account" } }
     },
     {
-      "parameters": { "sessionIdType": "customKey", "sessionKey": "={{ $('Message').item.json.chat_id }}", "contextWindowLength": 20 },
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Message').first().json.chat_id }}",
+        "contextWindowLength": 20
+      },
       "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
       "typeVersion": 1.5,
-      "position": [304, 336],
-      "id": "a71c7f8f-fbae-4d05-b234-ee33728001f8",
+      "position": [2672, 832],
+      "id": "fb41550c-cb63-4904-bff1-8ff3060e5bf3",
       "name": "General Inquiry Agent Memory",
       "credentials": { "redis": { "id": "wsDUn34ZvM59Tj1t", "name": "Redis account" } }
     },
@@ -237,17 +296,17 @@
         "assignments": {
           "assignments": [
             { "id": "5859dd5d-03a2-4c3e-924b-ab3730358c5d", "name": "message", "value": "={{ $json.output }}", "type": "string" },
-            { "id": "7cb10168-5caa-4ed6-9b7b-706235eb8990", "name": "chat_id", "value": "={{ $('Message').item.json.chat_id }}", "type": "string" },
-            { "id": "a1aa52bb-bc53-4f8e-b8b8-0addd164dca8", "name": "accountId", "value": "={{ $('Message').item.json.accountId }}", "type": "string" },
-            { "id": "3152b13a-1161-457a-a17d-0bd4c51a7f4c", "name": "platform", "value": "={{ $('Message').item.json.platform }}", "type": "string" }
+            { "id": "7cb10168-5caa-4ed6-9b7b-706235eb8990", "name": "chat_id", "value": "={{ $('Message').first().json.chat_id }}", "type": "string" },
+            { "id": "a1aa52bb-bc53-4f8e-b8b8-0addd164dca8", "name": "accountId", "value": "={{ $('Message').first().json.accountId }}", "type": "string" },
+            { "id": "3152b13a-1161-457a-a17d-0bd4c51a7f4c", "name": "platform", "value": "={{ $('Message').first().json.platform }}", "type": "string" }
           ]
         },
         "options": {}
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1136, -192],
-      "id": "a2ac41b5-9153-4434-a788-2f2ff326ab28",
+      "position": [3504, 304],
+      "id": "1c771f0e-350a-4a32-8b84-5f046d069135",
       "name": "Normalize Reply"
     },
     {
@@ -255,7 +314,7 @@
         "method": "POST",
         "url": "https://pwise-api.sixpent.com/api/messages/inbound",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $('Message').item.json.SERVICE_TOKEN }}" } ] },
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $('Message').first().json.SERVICE_TOKEN }}" } ] },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -270,8 +329,8 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
-      "position": [1328, -192],
-      "id": "86ebeb01-728c-42cc-a3bd-9ced9d47000f",
+      "position": [3712, 304],
+      "id": "3f0cb9f2-f603-4c92-844b-016422711c89",
       "name": "Post Reply"
     },
     {
@@ -282,32 +341,47 @@
       },
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
-      "position": [1136, 0],
-      "id": "079ba3b5-2b26-490e-a553-3ff6d95590c1",
+      "position": [3504, 496],
+      "id": "78f38b83-c478-4a8d-9ff0-884733bb57ef",
       "name": "On Agent Error"
     },
     {
       "parameters": {
-        "toolDescription": "Look up the shop's PRODUCTS by keyword — names, categories, and prices. Pass a short query like 'dishwashing liquid 5L kit' or 'car shampoo'. Returns the closest product rows (name, category, price). Use it for anything about products, prices, or packages, and ground your reply in what it returns — never invent prices or items.",
-        "method": "POST",
-        "url": "https://pwise-api.sixpent.com/api/messages/knowledge",
-        "sendHeaders": true,
-        "parametersHeaders": { "values": [ { "name": "x-service-token", "value": "={{ $('Message').item.json.SERVICE_TOKEN }}" } ] },
-        "sendBody": true,
-        "parametersBody": { "values": [ { "name": "accountId", "value": "={{ String($('Message').item.json.accountId) }}" }, { "name": "query", "value": "={{ $fromAI('query', 'product keywords', 'string') }}" } ] }
+        "description": "Look up the shop's PRODUCTS by keyword — names, categories, and prices. Pass a short query like 'dishwashing liquid 5L kit' or 'car shampoo'. Returns the closest product rows. Use it for anything about products, prices, or packages, and ground your reply in what it returns — never invent prices or items.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "search_catalog",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "query": "={{ $fromAI('input', 'product keywords to search the catalog for', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
       },
-      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
-      "typeVersion": 1.1,
-      "position": [656, 512],
-      "id": "24c31fa8-41cb-44d7-9a06-2d2f6824b105",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3024, 1008],
+      "id": "754cd652-1f90-404b-95e9-2c20adf52b70",
       "name": "Search Catalog"
     },
     {
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
-      "position": [1024, 656],
-      "id": "ab9bdeb8-d8f4-46bf-a8e0-403a8f8f48a3",
+      "position": [3392, 1152],
+      "id": "21c475b1-18b7-4d3a-9c01-2a89f83e662c",
       "name": "Embeddings OpenAI",
       "credentials": { "openAiApi": { "id": "g0Kl7ZL1RswRmHnP", "name": "OpenAI account" } }
     },
@@ -321,8 +395,8 @@
       },
       "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
       "typeVersion": 1.1,
-      "position": [1024, 464],
-      "id": "453c33a1-4c0e-46d8-b1e2-09829a7a4252",
+      "position": [3392, 960],
+      "id": "e89f33e2-55b9-461c-8012-9adc526d79e3",
       "name": "Knowledge Base",
       "credentials": { "supabaseApi": { "id": "laDeVmHXe7YYZkKQ", "name": "Supabase account" } }
     }
@@ -340,6 +414,7 @@
     "DeepSeek Chat Model2": { "ai_languageModel": [ [ { "node": "Sales Agent", "type": "ai_languageModel", "index": 0 } ] ] },
     "Sales Agent Memory": { "ai_memory": [ [ { "node": "Sales Agent", "type": "ai_memory", "index": 0 } ] ] },
     "Transfer to Human": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
+    "Send Media": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Support Agent": { "main": [ [ { "node": "Normalize Reply", "type": "main", "index": 0 } ], [ { "node": "On Agent Error", "type": "main", "index": 0 } ] ] },
     "DeepSeek Chat Model3": { "ai_languageModel": [ [ { "node": "Support Agent", "type": "ai_languageModel", "index": 0 } ] ] },
     "Support Agent Memory": { "ai_memory": [ [ { "node": "Support Agent", "type": "ai_memory", "index": 0 } ] ] },
@@ -352,8 +427,5 @@
     "Knowledge Base": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] }
   },
   "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "65920e30f382a1064e38243457955455c5337d9c4dd5c8a89a6e793460e8da22"
-  }
+  "meta": { "templateCredsSetupCompleted": true, "instanceId": "65920e30f382a1064e38243457955455c5337d9c4dd5c8a89a6e793460e8da22" }
 }

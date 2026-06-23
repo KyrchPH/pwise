@@ -5,6 +5,8 @@ import * as fb from './fb.service.js';
 import * as tg from './telegram.service.js';
 import { createFolder } from './vault.service.js';
 import { env } from '../config/env.js';
+import { composeAgentSystemMessages, DEFAULT_AGENT_PROMPTS, AGENT_ROLES } from './ai_prompt.service.js';
+import { resolveConfig as resolveAnalyticsConfig } from './messaging_analytics.service.js';
 
 // Connected Facebook pages. The list is shared/global (like the post pool); user_id
 // is the admin creator (audit). Secrets (app_secret, app_client_token, access_token)
@@ -26,6 +28,8 @@ function toSafe(r) {
     is_active: !!r.is_active,
     // The page's dedicated Vault folder (the AI agent's media scope).
     vault_folder_id: r.vault_folder_id != null ? Number(r.vault_folder_id) : null,
+    // Messaging-analytics thresholds (resolved with defaults) for the live-agent metrics.
+    analytics_config: resolveAnalyticsConfig(r.analytics_config),
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -63,6 +67,56 @@ export async function getDecrypted(id) {
     telegram_bot_token: decrypt(r.telegram_bot_token),
     is_active: !!r.is_active,
   };
+}
+
+// The per-agent prompts as stored for one page (raw, possibly empty) plus the
+// built-in defaults — feeds the admin "AI Assistant prompts" editor.
+export async function getAiConfig(id) {
+  const rows = await query(
+    'SELECT ai_prompt_sales, ai_prompt_support, ai_prompt_general FROM platform_accounts WHERE id = ?',
+    [id],
+  );
+  if (!rows.length) throw ApiError.notFound('page not found');
+  const r = rows[0];
+  return {
+    prompts: {
+      sales: r.ai_prompt_sales || '',
+      support: r.ai_prompt_support || '',
+      general: r.ai_prompt_general || '',
+    },
+    defaults: DEFAULT_AGENT_PROMPTS,
+  };
+}
+
+// The three ready-to-send agent system messages for a page (the admin prompt or the
+// default, each with the immutable guardrails appended). Used by the inbound gateway
+// when forwarding to n8n. Always returns all three; unknown/blank account → defaults.
+// Never throws — a lookup hiccup must not break the AI reply.
+export async function getAiSystemMessages(accountId) {
+  let prompts = {};
+  if (accountId != null && accountId !== '') {
+    try {
+      const rows = await query(
+        'SELECT ai_prompt_sales, ai_prompt_support, ai_prompt_general FROM platform_accounts WHERE id = ?',
+        [accountId],
+      );
+      if (rows.length) {
+        prompts = {
+          sales: rows[0].ai_prompt_sales || '',
+          support: rows[0].ai_prompt_support || '',
+          general: rows[0].ai_prompt_general || '',
+        };
+      }
+    } catch {
+      /* fall back to defaults */
+    }
+  }
+  return composeAgentSystemMessages(prompts);
+}
+
+// The built-in default prompts — pre-fills the connect/new-page editor (no row yet).
+export function aiDefaults() {
+  return DEFAULT_AGENT_PROMPTS;
 }
 
 function requireStr(value, label) {
@@ -191,11 +245,13 @@ export async function create(actor = {}, data = {}) {
     tgName = (data.telegram_bot_name && String(data.telegram_bot_name).trim()) || tgUsername || 'Telegram bot';
   }
 
+  const promptVal = (v) => String(v ?? '').trim() || null;
   const result = await query(
     `INSERT INTO platform_accounts
        (user_id, platform_name, account_name, fb_page_id, app_id, app_secret, app_client_token, access_token,
-        telegram_bot_name, telegram_bot_token, telegram_bot_username, is_active)
-     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        telegram_bot_name, telegram_bot_token, telegram_bot_username, is_active,
+        ai_prompt_sales, ai_prompt_support, ai_prompt_general)
+     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       actor.id ?? null,
       account_name,
@@ -207,6 +263,9 @@ export async function create(actor = {}, data = {}) {
       tgName,
       tgToken,
       tgUsername,
+      promptVal(data.ai_prompt_sales),
+      promptVal(data.ai_prompt_support),
+      promptVal(data.ai_prompt_general),
     ],
   );
   // Give the page its own Vault folder — the AI agent's media scope. Best-effort:
@@ -263,6 +322,18 @@ export async function update(id, data = {}) {
     if (data.telegram_bot_name !== undefined && (apiKey || existing.has_telegram_bot)) {
       set('telegram_bot_name', String(data.telegram_bot_name).trim() || existing.telegram_bot_username || 'Telegram bot');
     }
+  }
+
+  // Per-agent AI system prompts (admin-configured in page settings). Empty → NULL,
+  // which makes the agent fall back to the built-in default at send time.
+  for (const role of AGENT_ROLES) {
+    const key = `ai_prompt_${role}`;
+    if (data[key] !== undefined) set(key, String(data[key] ?? '').trim() || null);
+  }
+
+  // Messaging-analytics thresholds — stored resolved/clamped (blanks → defaults).
+  if (data.analytics_config !== undefined) {
+    set('analytics_config', JSON.stringify(resolveAnalyticsConfig(data.analytics_config)));
   }
 
   if (fields.length) {

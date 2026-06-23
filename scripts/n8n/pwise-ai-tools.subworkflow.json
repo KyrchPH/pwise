@@ -1,0 +1,150 @@
+{
+  "name": "Pwise AI Tools",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            { "name": "action", "type": "string" },
+            { "name": "accountId", "type": "string" },
+            { "name": "serviceToken", "type": "string" },
+            { "name": "query", "type": "string" },
+            { "name": "customerHandle", "type": "string" },
+            { "name": "origin", "type": "string" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-320, 0],
+      "id": "11110000-0000-4000-8000-000000000001",
+      "name": "When Called by Agent"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000001", "leftValue": "={{ $json.action }}", "rightValue": "search_catalog", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "search_catalog"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000002", "leftValue": "={{ $json.action }}", "rightValue": "handoff", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "handoff"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000003", "leftValue": "={{ $json.action }}", "rightValue": "send_media", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "send_media"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [-96, 0],
+      "id": "11110000-0000-4000-8000-000000000002",
+      "name": "Action"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/knowledge",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "query", "value": "={{ $json.query }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, -112],
+      "id": "11110000-0000-4000-8000-000000000003",
+      "name": "Search Catalog API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/handoff",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
+            { "name": "origin", "value": "={{ $json.origin }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 112],
+      "id": "11110000-0000-4000-8000-000000000004",
+      "name": "Handoff API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/media",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
+            { "name": "origin", "value": "={{ $json.origin }}" },
+            { "name": "query", "value": "={{ $json.query }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 336],
+      "id": "11110000-0000-4000-8000-000000000005",
+      "name": "Send Media API"
+    }
+  ],
+  "connections": {
+    "When Called by Agent": { "main": [ [ { "node": "Action", "type": "main", "index": 0 } ] ] },
+    "Action": {
+      "main": [
+        [ { "node": "Search Catalog API", "type": "main", "index": 0 } ],
+        [ { "node": "Handoff API", "type": "main", "index": 0 } ],
+        [ { "node": "Send Media API", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": { "instanceId": "65920e30f382a1064e38243457955455c5337d9c4dd5c8a89a6e793460e8da22" }
+}

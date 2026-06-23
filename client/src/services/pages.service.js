@@ -47,6 +47,19 @@ export async function update(id, payload) {
   return data.data.page;
 }
 
+// The page's per-agent AI prompts (+ built-in defaults) for the settings editor.
+// Admin-only on the server. Returns { prompts: { sales, support, general }, defaults }.
+export async function getAiConfig(id) {
+  const { data } = await api.get(`/pages/${id}/ai-config`);
+  return data.data;
+}
+
+// The built-in default agent prompts — pre-fills the connect/new-page editor.
+export async function getAiDefaults() {
+  const { data } = await api.get('/pages/ai-defaults');
+  return data.data.defaults; // { sales, support, general }
+}
+
 export async function remove(id) {
   const { data } = await api.delete(`/pages/${id}`);
   return data.data;

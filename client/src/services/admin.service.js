@@ -29,3 +29,9 @@ export async function softDelete(id) {
   const { data } = await api.delete(`/admin/users/${id}`);
   return data.data;
 }
+
+// Replace a user's module access. modules = array of module ids.
+export async function setModuleAccess(id, modules) {
+  const { data } = await api.patch(`/admin/users/${id}/access`, { modules });
+  return data.data; // { id, module_access }
+}

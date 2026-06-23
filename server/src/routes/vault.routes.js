@@ -10,6 +10,7 @@ router.post('/folder', ctrl.createFolder); // create a folder
 router.post('/file', ctrl.createFile); // record a file already uploaded to S3
 router.patch('/:id/move', ctrl.move); // move a file/folder into another folder
 router.patch('/:id/ai-visibility', ctrl.setAiVisibility); // toggle "Hide from AI" on a file
+router.patch('/:id/meta', ctrl.updateMeta); // edit a file's description + tags (AI metadata)
 router.delete('/:id', ctrl.remove); // delete a file, or a folder + its contents
 
 export default router;

@@ -15,6 +15,7 @@ import contentNotesRoutes from './routes/content_notes.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
 import platformAccountsRoutes from './routes/platform_accounts.routes.js';
+import pageProductsRoutes from './routes/page_products.routes.js';
 import messagingRoutes from './routes/messaging.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import connectionsRoutes from './routes/connections.routes.js';
@@ -53,6 +54,7 @@ export function createApp() {
   app.use('/api/analytics', revalidate, analyticsRoutes);
   app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
   app.use('/api/pages', revalidate, platformAccountsRoutes);
+  app.use('/api/page-products', revalidate, pageProductsRoutes);
   // Messaging is real-time (SSE + frequent writes), so it's left uncached.
   app.use('/api/messages', messagingRoutes);
   // Agent-to-agent (internal team) chat — also real-time, uncached.

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { query } from '../config/db.js';
 import { env } from '../config/env.js';
-import { moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
+import { APP_MODULES, MODULE_IDS, moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
 function generateToken() {
@@ -17,10 +17,15 @@ export async function create(adminId, modules) {
   const requested = normalizeModuleAccess(modules);
   if (!requested || requested.length === 0) throw ApiError.badRequest('select at least one module');
 
-  const creatorAccess = new Set(moduleAccessForUser(creator));
+  // Admins can grant any (non-admin-only) module regardless of their own stored
+  // access list, which may predate newer modules; non-admins (who can't reach this
+  // UI anyway) are still limited to what they hold.
+  const creatorAccess = new Set(creator.role === 'admin' ? MODULE_IDS : moduleAccessForUser(creator));
   const invalid = requested.some((id) => !creatorAccess.has(id));
   if (invalid) throw ApiError.forbidden("you can't grant access to a module you do not have");
-  if (requested.includes('accounts')) throw ApiError.badRequest("admin-only modules can't be granted by login link");
+  // Admin-only modules (e.g. Accounts) are never grantable via a signup link.
+  const adminOnly = requested.filter((id) => APP_MODULES.find((m) => m.id === id)?.adminOnly);
+  if (adminOnly.length) throw ApiError.badRequest("admin-only modules can't be granted by login link");
 
   const token = generateToken();
   await query('INSERT INTO invites (token, created_by, module_access) VALUES (?, ?, ?)', [

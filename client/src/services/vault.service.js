@@ -36,3 +36,10 @@ export async function setAiHidden(id, aiHidden) {
   const { data } = await api.patch(`/vault/${id}/ai-visibility`, { aiHidden });
   return data.data.item;
 }
+
+// Update a file's AI metadata — description + tags (tags as an array or a
+// comma-separated string). Returns the updated item.
+export async function updateMeta(id, { description, tags }) {
+  const { data } = await api.patch(`/vault/${id}/meta`, { description, tags });
+  return data.data.item;
+}

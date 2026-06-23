@@ -253,6 +253,9 @@ async function deliverViaMessenger(conv, items = []) {
           lastErr = r.error;
         }
       }
+      // Messenger has no native photo caption — a captioned bubble's text (in `body`)
+      // follows the media as its own message (best-effort).
+      if (it.body) await fb.sendMessage(token, psid, stripMarkdown(it.body)).catch(() => {});
     } else if (it.body) {
       const r = await fb.sendMessage(token, psid, stripMarkdown(it.body));
       ok = r.ok;
@@ -316,7 +319,9 @@ async function deliverViaTelegram(conv, items = [], replyToExternalId = null) {
     if (it.media && it.media.length) {
       for (let k = 0; k < it.media.length; k += 1) {
         const m = it.media[k];
-        const r = await tg.sendMedia(token, chatId, { url: m.url, type: m.type, replyToMessageId: k === 0 ? replyId : null });
+        // A captioned bubble (single image + text) carries its caption in `body` — ride
+        // it on the first photo so the customer gets one photo-with-caption message.
+        const r = await tg.sendMedia(token, chatId, { url: m.url, type: m.type, caption: k === 0 ? it.body : null, replyToMessageId: k === 0 ? replyId : null });
         if (r.ok) {
           ok = true;
           if (extId == null) extId = r.messageId;
@@ -358,9 +363,13 @@ export async function sendMessage(id, actor = {}, { text, media, replyTo } = {})
   const reply =
     replyTo && replyTo.id ? { id: String(replyTo.id), sender: replyTo.sender || '', text: replyTo.text || '' } : null;
 
+  // Caption a single image with the accompanying text (one photo-with-caption message)
+  // instead of a separate photo bubble + text bubble — e.g. a dropped product card.
+  const captionSingleImage = !!cleanText && mediaList.length === 1 && mediaList[0].type === 'image';
+
   const parts = [];
-  if (mediaList.length) parts.push({ body: null, media: mediaList });
-  if (cleanText) parts.push({ body: cleanText, media: null });
+  if (mediaList.length) parts.push({ body: captionSingleImage ? cleanText : null, media: mediaList });
+  if (cleanText && !captionSingleImage) parts.push({ body: cleanText, media: null });
 
   const createdIds = [];
   for (let i = 0; i < parts.length; i += 1) {
@@ -875,5 +884,17 @@ export async function sendVaultMedia({ accountId, customerHandle, origin, query:
     media: [{ type: top.mediaType, url: top.url, name: top.name }],
   });
 
-  return { sent: true, file: top.name, alternatives: matches.slice(1).map((m) => m.name) };
+  // Hand the agent the sent file's description/tags (so it can tell the customer
+  // what it sent) plus the same for the runners-up (so it can offer them).
+  return {
+    sent: true,
+    file: top.name,
+    description: top.description || '',
+    tags: top.tags || [],
+    alternatives: matches.slice(1).map((m) => ({
+      name: m.name,
+      description: m.description || '',
+      tags: m.tags || [],
+    })),
+  };
 }

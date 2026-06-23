@@ -13,6 +13,7 @@ router.get('/invites', ctrl.listInvites);
 router.delete('/invites/:id', ctrl.deleteInvite);
 router.get('/users', ctrl.listUsers);
 router.patch('/users/:id', ctrl.setActive); // { is_active: boolean }
+router.patch('/users/:id/access', ctrl.setModuleAccess); // { modules: string[] }
 router.delete('/users/:id', ctrl.softDelete);
 
 export default router;
