@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isVariable, priceRangeLabel } from '../config/variants.js';
 
 const PER_PAGE = 10;
 
@@ -11,18 +12,13 @@ function SearchIcon() {
   );
 }
 
-function formatPrice(value) {
-  if (value == null) return '';
-  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
 /**
  * Products Drawer — a right-side panel opened from the chat composer's Products
  * button. Lists the active page's products with a search box. Each card is draggable
  * into the conversation (drops a "product card": photo + name/price/description) and
  * has a "Use" button that does the same via onUse.
  */
-export default function ProductsDrawer({ open, onClose, onUse, products = [], loading = false }) {
+export default function ProductsDrawer({ open, onClose, onUse, products = [], loading = false, currency }) {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
 
@@ -124,7 +120,9 @@ export default function ProductsDrawer({ open, onClose, onUse, products = [], lo
                   </button>
                 </div>
                 <div className="product-card__meta">
-                  {product.basePrice != null && <span className="product-card__price">{formatPrice(product.basePrice)}</span>}
+                  {(product.basePrice != null || isVariable(product)) && (
+                    <span className="product-card__price">{priceRangeLabel(product, currency)}</span>
+                  )}
                   {product.category && <span className="product-card__cat">{product.category}</span>}
                 </div>
               </div>

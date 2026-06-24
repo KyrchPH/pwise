@@ -102,12 +102,6 @@ function parseStoredConfig(raw) {
   return cfg;
 }
 
-// Pull the rendered video URL out of whatever shape n8n responds with.
-function extractRenderUrl(body) {
-  const obj = Array.isArray(body) ? body[0] : body;
-  return obj?.url || obj?.video_url || obj?.output_url || obj?.data?.url || null;
-}
-
 // Basic SSRF guard before the server fetches a URL handed in by the client.
 function assertFetchableUrl(raw) {
   let u;
@@ -132,12 +126,13 @@ function assertFetchableUrl(raw) {
 }
 
 /**
- * Trigger an n8n render for a saved template + the just-uploaded input video,
- * and return the rendered video URL n8n (→ Creatomate) responds with. The
- * request stays open for the whole render, so the n8n webhook must be set to
- * respond when its flow finishes.
+ * Kick off an ASYNC render: create a render-job row, fire the n8n webhook (which
+ * starts the Creatomate render and returns right away — no poll loop), and hand back
+ * the job id immediately. The render finishes later and Creatomate → n8n calls our
+ * /renders/callback (see recordRenderResult). The job id rides `render_job_id` →
+ * Creatomate `metadata` → the callback, so the result correlates back to this job.
  */
-export async function startRender(templateDbId, { videoS3Key = null, caption = null } = {}) {
+export async function startRender(actor, templateDbId, { videoS3Key = null, caption = null } = {}) {
   ensureWebhook();
   const tpl = await getById(templateDbId); // 404s if the template is gone
   const cfg = parseStoredConfig(tpl.config);
@@ -146,14 +141,22 @@ export async function startRender(templateDbId, { videoS3Key = null, caption = n
   const modifications = { ...(cfg.modifications || {}) };
   if (videoUrl) modifications[env.creatomate.videoKey] = videoUrl;
 
+  const renderJobId = crypto.randomUUID();
+  await query('INSERT INTO creatomate_renders (id, user_id, template_id, status) VALUES (?, ?, ?, ?)', [
+    renderJobId,
+    actor?.id ?? null,
+    templateDbId,
+    'rendering',
+  ]);
+
   const headers = { 'Content-Type': 'application/json' };
   if (env.n8n.webhookToken) headers['x-service-token'] = env.n8n.webhookToken;
 
-  // The input clip stays in S3 under tmp/ — the client deletes it on "Drop &
-  // close", and an S3 lifecycle rule on tmp/ expires any that slip through.
-  let res;
+  // The input clip stays in S3 under tmp/; an S3 lifecycle rule on tmp/ expires it.
+  // We only wait for the quick "start render" round-trip (n8n creates the Creatomate
+  // render and responds), NOT the whole render.
   try {
-    res = await fetch(env.n8n.generateWebhookUrl, {
+    const res = await fetch(env.n8n.generateWebhookUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -163,22 +166,72 @@ export async function startRender(templateDbId, { videoS3Key = null, caption = n
         caption,
         page_id: env.facebook.pageId || null,
         modifications,
+        render_job_id: renderJobId, // → Creatomate `metadata` → echoed to the callback
+        render_complete_url: env.n8n.renderCompleteWebhookUrl || null, // → Creatomate `webhook_url`
       }),
-      signal: AbortSignal.timeout(4 * 60 * 1000), // renders can take a while
+      signal: AbortSignal.timeout(30_000),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      await markRenderFailed(renderJobId, `n8n render webhook error: ${body?.message || res.statusText}`);
+      throw new ApiError(res.status, `n8n render webhook error: ${body?.message || res.statusText}`);
+    }
   } catch (err) {
-    if (err?.name === 'TimeoutError') throw new ApiError(504, 'the render timed out — try again');
+    if (err instanceof ApiError) throw err;
+    await markRenderFailed(renderJobId, err.message).catch(() => {});
+    if (err?.name === 'TimeoutError') throw new ApiError(504, 'could not start the render — n8n did not respond in time');
     throw new ApiError(502, `couldn't reach the n8n render webhook: ${err.message}`);
   }
 
-  const body = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, `n8n render webhook error: ${body?.message || res.statusText}`);
+  return { renderJobId, status: 'rendering' };
+}
 
-  const url = extractRenderUrl(body);
-  if (!url) {
-    throw new ApiError(502, 'n8n did not return a rendered video URL (is the webhook set to respond with the render result?)');
+async function markRenderFailed(renderJobId, message) {
+  await query('UPDATE creatomate_renders SET status = ?, error_message = ? WHERE id = ?', [
+    'failed',
+    message ? String(message).slice(0, 2000) : null,
+    renderJobId,
+  ]);
+}
+
+/**
+ * Record a finished render — called by the n8n render-complete webhook through the
+ * service-token callback. Correlated to the job via render_job_id.
+ */
+export async function recordRenderResult(renderJobId, { status, videoUrl = null, snapshotUrl = null, errorMessage = null } = {}) {
+  const id = String(renderJobId || '').trim();
+  if (!id) throw ApiError.badRequest('render_job_id is required');
+  const finalStatus = status === 'succeeded' ? 'succeeded' : 'failed';
+  const result = await query(
+    'UPDATE creatomate_renders SET status = ?, video_url = ?, snapshot_url = ?, error_message = ? WHERE id = ?',
+    [finalStatus, videoUrl || null, snapshotUrl || null, errorMessage ? String(errorMessage).slice(0, 2000) : null, id],
+  );
+  if (!result.affectedRows) throw ApiError.notFound('render job not found');
+  return { renderJobId: id, status: finalStatus };
+}
+
+/**
+ * Current state of a render job — the composer polls this until succeeded/failed.
+ * Scoped to the owner so one user can't read another's render.
+ */
+export async function getRenderJob(jobId, actor = {}) {
+  const id = String(jobId || '').trim();
+  const rows = await query(
+    'SELECT id, user_id, status, video_url, snapshot_url, error_message FROM creatomate_renders WHERE id = ?',
+    [id],
+  );
+  if (!rows.length) throw ApiError.notFound('render job not found');
+  const r = rows[0];
+  if (r.user_id != null && actor?.id != null && Number(r.user_id) !== Number(actor.id)) {
+    throw ApiError.notFound('render job not found');
   }
-  return { url };
+  return {
+    renderJobId: r.id,
+    status: r.status,
+    url: r.video_url || null,
+    snapshotUrl: r.snapshot_url || null,
+    errorMessage: r.error_message || null,
+  };
 }
 
 /**

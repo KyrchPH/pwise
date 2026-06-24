@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import ProductsDrawer from '../../components/ProductsDrawer.jsx';
+import { formatPrice } from '../../config/currency.js';
+import { isVariable, priceRangeLabel } from '../../config/variants.js';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { usePages } from '../../context/PageContext.jsx';
@@ -10,12 +12,26 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
 import * as productsApi from '../../services/products.service.js';
+import * as templatesApi from '../../services/message_templates.service.js';
 import { buildPageCards, conversationPreview, messagePreview, resolveSelectedPageId } from './messagingData.js';
 import AgentChat from './AgentChat.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
 import messageAnimation from '../../assets/lotties/message.json';
 import MessagingMetricsRail from './MessagingMetricsRail.jsx';
+import TemplatesSection from './TemplatesSection.jsx';
 import { renderMessageText } from './messageText.jsx';
+import NotesDrawer, { NoteSticky } from '../../components/NotesDrawer.jsx';
+import * as notesApi from '../../services/notes.service.js';
+
+const AGENT_VIEW_STORAGE_KEY = 'pwise:messaging-agent-view';
+
+function storedAgentView() {
+  try {
+    return localStorage.getItem(AGENT_VIEW_STORAGE_KEY) === 'foryou' ? 'foryou' : 'ai';
+  } catch {
+    return 'ai';
+  }
+}
 
 // Two-way arrows for the transfer action, and an inbox glyph for the request bar.
 function TransferIcon() {
@@ -25,6 +41,15 @@ function TransferIcon() {
       <path d="M3 11V9a4 4 0 0 1 4-4h14" />
       <polyline points="7 23 3 19 7 15" />
       <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+    </svg>
+  );
+}
+// Folded-corner note glyph for the Notes button in the conversation header.
+function NotesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 4h16v11l-5 5H4z" />
+      <path d="M15 20v-5h5" />
     </svg>
   );
 }
@@ -131,6 +156,37 @@ function CustomerAvatar({ name, origin, avatarUrl }) {
   );
 }
 
+function findTemplateSuggestion(templates, value) {
+  const q = String(value || '').trim().toLowerCase();
+  if (!q) return null;
+
+  const scored = [];
+  for (const template of templates || []) {
+    const title = String(template.title || '').toLowerCase();
+    const body = String(template.body || '').toLowerCase();
+    const tags = Array.isArray(template.tags) ? template.tags.map((tag) => String(tag || '').toLowerCase()) : [];
+    if (body.trim() === q) continue;
+
+    let score = null;
+    if (title.startsWith(q)) score = 0;
+    else if (tags.some((tag) => tag.startsWith(q))) score = 1;
+    else if (body.startsWith(q)) score = 2;
+    else if (title.includes(q)) score = 3;
+    else if (tags.some((tag) => tag.includes(q))) score = 4;
+    else if (body.includes(q)) score = 5;
+
+    if (score != null) scored.push({ template, score });
+  }
+
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      String(a.template.title || '').length - String(b.template.title || '').length ||
+      Number(a.template.id || 0) - Number(b.template.id || 0),
+  );
+  return scored[0]?.template || null;
+}
+
 export default function MessagingPage() {
   const { pages, activePage } = usePages();
   const { user } = useAuth();
@@ -144,8 +200,9 @@ export default function MessagingPage() {
   const copyTimerRef = useRef(null);
   const composerInputRef = useRef(null);
   const messagesRef = useRef(null); // scroll container for the open thread
+  const inboxRefreshSeqRef = useRef(0);
   const stickBottomRef = useRef(true); // follow new messages unless the reader scrolled up
-  const prevConvIdRef = useRef(null);
+  const prevThreadScrollKeyRef = useRef(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false); // "scroll to latest" affordance when scrolled up
   const [lightbox, setLightbox] = useState(null); // media item being viewed fullscreen
 
@@ -155,12 +212,18 @@ export default function MessagingPage() {
   const [pickerOpen, setPickerOpen] = useState(false); // vault attach dialog
   const [templateOpen, setTemplateOpen] = useState(false); // template drawer
   const [productsOpen, setProductsOpen] = useState(false); // products drawer
+  const [notesOpen, setNotesOpen] = useState(false); // notes drawer
+  const [notes, setNotes] = useState([]); // notes for the open thread (newest first)
+  const [noteIndex, setNoteIndex] = useState(0); // which note the floating sticky shows
+  const [noteBusy, setNoteBusy] = useState(false); // a note create in flight
   const [productList, setProductList] = useState([]); // products for the open thread's page
   const [productsLoading, setProductsLoading] = useState(false);
+  const [composerTemplates, setComposerTemplates] = useState([]); // templates used for inline composer suggestions
   const [dropActive, setDropActive] = useState(false); // template being dragged over the thread
   const [replyTo, setReplyTo] = useState(null);
   const [messageMode, setMessageMode] = useState('customer'); // customer = current inbox, agent = unfiltered team view
-  const [agentView, setAgentView] = useState('ai'); // 'ai' = AI Agent · 'foryou' = live-agent queue
+  const [templatesView, setTemplatesView] = useState(false); // templates browse section in the content view (mode rail toggle)
+  const [agentView, setAgentView] = useState(storedAgentView); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
   const [copiedId, setCopiedId] = useState(null); // message whose copy just succeeded
   const [conversations, setConversations] = useState([]);
@@ -172,6 +235,14 @@ export default function MessagingPage() {
   const [agents, setAgents] = useState([]); // teammates for the transfer picker
   const [transferBusy, setTransferBusy] = useState(false);
   const [allowTransferToAi, setAllowTransferToAi] = useState(false); // ALLOW_TRANSFER_TO_AI flag (hand a chat back to AI)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AGENT_VIEW_STORAGE_KEY, agentView);
+    } catch {
+      /* storage unavailable — the view just resets on reload */
+    }
+  }, [agentView]);
 
   // Load the shared inbox once on mount.
   useEffect(() => {
@@ -196,10 +267,27 @@ export default function MessagingPage() {
     };
   }, []);
 
-  // Refetch the conversations I'm allowed to see (used after an ownership change).
-  const reloadConversations = useCallback(() => {
-    messaging.listConversations().then(setConversations).catch(() => {});
+  // Refetch the conversations I'm allowed to see. This doubles as a silent
+  // ownership validity check: the server only returns shared AI threads and Live
+  // Agent threads still assigned to me, so stale/unowned rows disappear.
+  const reloadConversations = useCallback(({ silent = true } = {}) => {
+    const seq = ++inboxRefreshSeqRef.current;
+    return messaging
+      .listConversations()
+      .then((list) => {
+        if (seq === inboxRefreshSeqRef.current) setConversations(list);
+        return list;
+      })
+      .catch((err) => {
+        if (!silent && seq === inboxRefreshSeqRef.current) setLoadError(messaging.apiError(err));
+        return null;
+      });
   }, []);
+
+  const selectAgentView = (nextView) => {
+    setAgentView(nextView);
+    reloadConversations(); // silent validity/ownership check for the target list
+  };
 
   // Load the transfer requests waiting for me (the incoming-request bar).
   useEffect(() => {
@@ -251,6 +339,15 @@ export default function MessagingPage() {
         setIncomingRequests((cur) => (cur.some((t) => t.id === event.transfer.id) ? cur : [event.transfer, ...cur]));
       } else if (event.type === 'transfer:resolved') {
         setIncomingRequests((cur) => cur.filter((t) => t.id !== event.transferId));
+      } else if (event.type === 'note:new' && event.note) {
+        if (String(event.conversationId) === String(activeIdRef.current)) {
+          setNotes((cur) => (cur.some((n) => n.id === event.note.id) ? cur : [event.note, ...cur]));
+          setNoteIndex(0);
+        }
+      } else if (event.type === 'note:deleted') {
+        if (String(event.conversationId) === String(activeIdRef.current)) {
+          setNotes((cur) => cur.filter((n) => String(n.id) !== String(event.noteId)));
+        }
       }
     });
   }, [reloadConversations]);
@@ -289,15 +386,31 @@ export default function MessagingPage() {
     if (isAgentToAgent) setFilterOpen(false);
   }, [isAgentToAgent]);
 
+  useEffect(() => {
+    if (isAgentToAgent || templatesView) return undefined;
+    const refresh = () => reloadConversations();
+    const refreshWhenVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [isAgentToAgent, reloadConversations, templatesView]);
+
   // The list is the selected page's conversations (or every page when 'all'),
   // narrowed to the active tab: AI-handled threads vs. the live-agent queue.
   const wantedHandler = agentView === 'ai' ? 'AI Agent' : 'Live Agent';
+  const currentUserId = Number(user?.id);
   const visibleConversations = isAgentToAgent
     ? conversations
     : conversations.filter(
         (conversation) =>
           (isAllPages || conversation.pageId === selectedPageId) &&
-          conversation.handledBy === wantedHandler,
+          conversation.handledBy === wantedHandler &&
+          (agentView === 'ai' || (Number.isFinite(currentUserId) && Number(conversation.assignedUserId) === currentUserId)),
       );
   const conversationSnapshot = visibleConversations.map((conversation) => conversation.id).join('|');
 
@@ -313,12 +426,119 @@ export default function MessagingPage() {
     visibleConversations.find((conversation) => conversation.id === selectedConversationId) ||
     visibleConversations[0] ||
     null;
+  const composerPageId = activeConversation?.pageId || selectedPageId || preferredPageId;
+
+  const isAdmin = user?.role === 'admin';
+
+  // Notes for the open thread. activeIdRef lets the (stable) SSE subscription check
+  // whether a note:new / note:deleted event belongs to the conversation on screen
+  // without resubscribing every time the selection changes.
+  const activeIdRef = useRef(null);
+  useEffect(() => {
+    activeIdRef.current = activeConversation?.id || null;
+  }, [activeConversation?.id]);
+
+  useEffect(() => {
+    const id = activeConversation?.id;
+    if (!id) {
+      setNotes([]);
+      setNoteIndex(0);
+      return undefined;
+    }
+    let alive = true;
+    notesApi
+      .list(id)
+      .then((rows) => {
+        if (alive) {
+          setNotes(rows);
+          setNoteIndex(0);
+        }
+      })
+      .catch(() => {
+        if (alive) setNotes([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeConversation?.id]);
+
+  // Keep the sticky's index in range as notes are added or removed.
+  useEffect(() => {
+    setNoteIndex((i) => Math.min(Math.max(i, 0), Math.max(0, notes.length - 1)));
+  }, [notes.length]);
+
+  const addNote = async (body) => {
+    if (!activeConversation) return;
+    setNoteBusy(true);
+    try {
+      const note = await notesApi.create(activeConversation.id, body);
+      setNotes((cur) => (cur.some((n) => n.id === note.id) ? cur : [note, ...cur]));
+      setNoteIndex(0);
+      toast.success('Note added');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Could not add the note');
+      throw err;
+    } finally {
+      setNoteBusy(false);
+    }
+  };
+
+  const deleteNote = async (id) => {
+    try {
+      await notesApi.remove(id);
+      setNotes((cur) => cur.filter((n) => String(n.id) !== String(id)));
+      toast.success('Note deleted');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Could not delete the note');
+    }
+  };
 
   // The composer is enabled only on a Live Agent thread BOUND TO ME. AI-agent
   // threads are read-only until taken over; another agent's bound thread isn't
   // shown here at all (the server filters it out).
   const isLiveAgent =
     activeConversation?.handledBy === 'Live Agent' && activeConversation?.assignedUserId === user?.id;
+
+  // A pending outgoing transfer locks the composer until the recipient accepts (the
+  // thread then leaves this view) or declines (it unlocks). Server-backed, so it
+  // survives a reload and arrives live over SSE.
+  const transferPending = !!activeConversation?.transferPending;
+
+  useEffect(() => {
+    if (!composerPageId) {
+      setComposerTemplates([]);
+      return undefined;
+    }
+    let alive = true;
+    templatesApi
+      .list(composerPageId)
+      .then((rows) => {
+        if (alive) setComposerTemplates(rows);
+      })
+      .catch(() => {
+        if (alive) setComposerTemplates([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [composerPageId]);
+
+  const templateSuggestion = isLiveAgent ? findTemplateSuggestion(composerTemplates, draft) : null;
+  const acceptTemplateSuggestion = () => {
+    if (!templateSuggestion?.body) return;
+    const next = templateSuggestion.body;
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const input = composerInputRef.current;
+      input?.focus();
+      input?.setSelectionRange?.(next.length, next.length);
+    });
+  };
+  const handleComposerKeyDown = (event) => {
+    if (event.key !== 'Tab' || event.shiftKey || !templateSuggestion) return;
+    event.preventDefault();
+    acceptTemplateSuggestion();
+  };
 
   // Unread "chats" = conversations not yet seen (unread > 0). These drive the
   // page-filter badges — a per-page count and a grand total.
@@ -358,20 +578,42 @@ export default function MessagingPage() {
   }, [activeConversation?.id]);
 
   // Keep the thread pinned to the newest message. Switching threads jumps to the
-  // bottom; a new bubble only follows down if the reader is already near the bottom,
-  // so someone scrolled up reading history isn't yanked back down.
+  // bottom; returning from Agent-to-Agent/templates is also treated as a fresh
+  // open even if the selected conversation id did not change. A new bubble only
+  // follows down if the reader is already near the bottom, so someone scrolled up
+  // reading history isn't yanked back down.
   useEffect(() => {
+    const threadScrollKey =
+      !isAgentToAgent && !templatesView && activeConversation?.id
+        ? `${agentView}:${activeConversation.id}`
+        : null;
+
+    if (!threadScrollKey) {
+      prevThreadScrollKeyRef.current = null;
+      stickBottomRef.current = true;
+      setShowScrollBtn(false);
+      return undefined;
+    }
+
     const el = messagesRef.current;
-    if (!el) return;
-    if (prevConvIdRef.current !== activeConversation?.id) {
-      prevConvIdRef.current = activeConversation?.id;
+    if (!el) return undefined;
+
+    if (prevThreadScrollKeyRef.current !== threadScrollKey) {
+      prevThreadScrollKeyRef.current = threadScrollKey;
       stickBottomRef.current = true;
     }
-    if (stickBottomRef.current) {
+
+    if (!stickBottomRef.current) return undefined;
+
+    const scrollToBottom = () => {
       el.scrollTop = el.scrollHeight;
       setShowScrollBtn(false);
-    }
-  }, [activeConversation?.id, activeConversation?.messages.length]);
+    };
+
+    scrollToBottom();
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversation?.id, activeConversation?.messages.length, agentView, isAgentToAgent, templatesView]);
 
   // Re-evaluate "stuck to bottom" as the reader scrolls (80px slack for near-bottom),
   // and reveal the "scroll to latest" arrow once they're well above the bottom.
@@ -394,7 +636,7 @@ export default function MessagingPage() {
   const handleSend = async (event) => {
     event.preventDefault();
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || !activeConversation || !isLiveAgent) return;
+    if ((!text && attachments.length === 0) || !activeConversation || !isLiveAgent || transferPending) return;
 
     const conversationId = activeConversation.id;
     const sentAttachments = attachments;
@@ -448,7 +690,8 @@ export default function MessagingPage() {
   const productToText = (p) => {
     const lines = [];
     if (p?.name) lines.push(p.name);
-    if (p?.basePrice != null) lines.push(`Price: ${Number(p.basePrice).toLocaleString()}`);
+    if (isVariable(p)) lines.push(`Price: ${priceRangeLabel(p, activePage?.currency)}`);
+    else if (p?.basePrice != null) lines.push(`Price: ${formatPrice(p.basePrice, activePage?.currency)}`);
     if (p?.description) lines.push(p.description);
     return lines.join('\n');
   };
@@ -580,12 +823,35 @@ export default function MessagingPage() {
     setTransferBusy(true);
     try {
       await messaging.requestTransfer(transferFor.id, toUserId);
+      // Lock the composer right away; the server also pushes this over SSE (with the
+      // recipient's name) and removes the thread once they accept.
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === transferFor.id ? { ...conversation, transferPending: true } : conversation,
+        ),
+      );
       toast.success('Transfer request sent — waiting for them to accept');
       setTransferFor(null);
     } catch (e) {
       toast.error(messaging.apiError(e));
     } finally {
       setTransferBusy(false);
+    }
+  };
+
+  // The sender cancels their own pending transfer (from the composer's pending
+  // banner). Unlocks the composer immediately; the recipient's request clears via SSE.
+  const cancelTransfer = async () => {
+    if (!activeConversation) return;
+    const id = activeConversation.id;
+    try {
+      await messaging.cancelTransfer(id);
+      setConversations((cur) =>
+        cur.map((c) => (c.id === id ? { ...c, transferPending: false, transferPendingTo: '' } : c)),
+      );
+      toast.success('Transfer cancelled');
+    } catch (e) {
+      toast.error(messaging.apiError(e));
     }
   };
   const acceptRequest = async (req) => {
@@ -598,7 +864,15 @@ export default function MessagingPage() {
       setRequestsOpen(false);
       toast.success('Conversation transferred to you');
     } catch (e) {
-      toast.error(messaging.apiError(e));
+      // A stale request (the sender cancelled, it was declined, or superseded) → the
+      // server rejects it as no-longer-pending; drop it so it can't be actioned again.
+      const status = e?.response?.status;
+      if (status === 400 || status === 404) {
+        setIncomingRequests((cur) => cur.filter((t) => t.id !== req.id));
+        toast.error('This transfer is no longer available.');
+      } else {
+        toast.error(messaging.apiError(e));
+      }
     }
   };
   const declineRequest = async (req) => {
@@ -606,7 +880,10 @@ export default function MessagingPage() {
       await messaging.declineTransfer(req.id);
       setIncomingRequests((cur) => cur.filter((t) => t.id !== req.id));
     } catch (e) {
-      toast.error(messaging.apiError(e));
+      // Already resolved (cancelled or accepted elsewhere) → just clear it locally.
+      const status = e?.response?.status;
+      if (status === 400 || status === 404) setIncomingRequests((cur) => cur.filter((t) => t.id !== req.id));
+      else toast.error(messaging.apiError(e));
     }
   };
 
@@ -630,9 +907,12 @@ export default function MessagingPage() {
       <aside className="msg-mode-rail" aria-label="Messaging mode">
         <button
           type="button"
-          className={`msg-mode-card${messageMode === 'agent' ? ' is-active' : ''}`}
-          onClick={() => setMessageMode('agent')}
-          aria-pressed={messageMode === 'agent'}
+          className={`msg-mode-card${messageMode === 'agent' && !templatesView ? ' is-active' : ''}`}
+          onClick={() => {
+            setMessageMode('agent');
+            setTemplatesView(false);
+          }}
+          aria-pressed={messageMode === 'agent' && !templatesView}
           aria-label="Agent to Agent"
           title="Agent to Agent"
         >
@@ -647,9 +927,12 @@ export default function MessagingPage() {
         </button>
         <button
           type="button"
-          className={`msg-mode-card${messageMode === 'customer' ? ' is-active' : ''}`}
-          onClick={() => setMessageMode('customer')}
-          aria-pressed={messageMode === 'customer'}
+          className={`msg-mode-card${messageMode === 'customer' && !templatesView ? ' is-active' : ''}`}
+          onClick={() => {
+            setMessageMode('customer');
+            setTemplatesView(false);
+          }}
+          aria-pressed={messageMode === 'customer' && !templatesView}
           aria-label="Agent to Customer"
           title="Agent to Customer"
         >
@@ -662,9 +945,29 @@ export default function MessagingPage() {
           </span>
         </button>
         <MessagingMetricsRail accountId={selectedPageId || preferredPageId} />
+        <div className="msg-rail-divider" aria-hidden="true" />
+        <button
+          type="button"
+          className={`msg-mode-card${templatesView ? ' is-active' : ''}`}
+          onClick={() => setTemplatesView(true)}
+          aria-pressed={templatesView}
+          aria-label="Templates"
+          title="Templates"
+        >
+          <span className="msg-mode-card__avatar msg-mode-card__avatar--templates" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <line x1="7.5" y1="9" x2="16.5" y2="9" />
+              <line x1="7.5" y1="13" x2="16.5" y2="13" />
+              <line x1="7.5" y1="17" x2="12.5" y2="17" />
+            </svg>
+          </span>
+        </button>
       </aside>
       <section className="msg-workspace">
-        {isAgentToAgent ? (
+        {templatesView ? (
+          <TemplatesSection accountId={selectedPageId || preferredPageId} />
+        ) : isAgentToAgent ? (
           <AgentChat />
         ) : (
         <>
@@ -766,7 +1069,7 @@ export default function MessagingPage() {
                   role="tab"
                   aria-selected={agentView === 'ai'}
                   className={`seg__btn${agentView === 'ai' ? ' is-active' : ''}`}
-                  onClick={() => setAgentView('ai')}
+                  onClick={() => selectAgentView('ai')}
                 >
                   AI Agent
                 </button>
@@ -775,7 +1078,7 @@ export default function MessagingPage() {
                   role="tab"
                   aria-selected={agentView === 'foryou'}
                   className={`seg__btn${agentView === 'foryou' ? ' is-active' : ''}`}
-                  onClick={() => setAgentView('foryou')}
+                  onClick={() => selectAgentView('foryou')}
                 >
                   For You
                 </button>
@@ -889,6 +1192,16 @@ export default function MessagingPage() {
                   </div>
                 </div>
                 <div className="msg-thread__meta">
+                  <button
+                    type="button"
+                    className="msg-notes-btn"
+                    onClick={() => setNotesOpen(true)}
+                    title="Notes"
+                    aria-label={notes.length ? `Notes (${notes.length})` : 'Notes'}
+                  >
+                    <NotesIcon />
+                    {notes.length > 0 && <span className="msg-notes-btn__badge">{notes.length}</span>}
+                  </button>
                   {isLiveAgent && (
                     <button
                       type="button"
@@ -908,104 +1221,129 @@ export default function MessagingPage() {
               </div>
 
               <div className="msg-thread__scrollwrap">
+              <NoteSticky notes={notes} index={noteIndex} onIndex={setNoteIndex} onOpen={() => setNotesOpen(true)} />
               <div className="msg-thread__messages" ref={messagesRef} onScroll={handleMessagesScroll}>
-                {activeConversation.messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`msg-bubble-wrap${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
-                  >
-                    <div className={`msg-bubble-stack${message.side === 'outgoing' ? ' is-outgoing' : ''}`}>
-                      <div className={`msg-bubble${message.side === 'outgoing' ? ' is-outgoing' : ''}`}>
-                        <div className="msg-bubble__sender">{message.sender}</div>
-                        {message.replyTo && (
-                          <div
-                            className={`msg-bubble__replyref${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
-                          >
-                            <span className="msg-bubble__replyname">{message.replyTo.sender}</span>
-                            <span className="msg-bubble__replytext">
-                              {messagePreview(message.replyTo.text, 70)}
-                            </span>
+                {activeConversation.messages.map((message) => {
+                  const isMediaOnly = message.media?.length > 0 && !message.text && !message.replyTo;
+
+                  return (
+                    <div
+                      key={message.id}
+                      className={`msg-bubble-wrap${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
+                    >
+                      <div className={`msg-bubble-stack${message.side === 'outgoing' ? ' is-outgoing' : ''}`}>
+                        {isMediaOnly ? (
+                          <div className={`msg-media-message${message.side === 'outgoing' ? ' is-outgoing' : ''}`}>
+                            <div className="msg-media-message__sender">{message.sender}</div>
+                            <div className={`msg-bubble__media msg-media-message__media${message.media.length === 1 ? ' is-single' : ''}`}>
+                              {message.media.map((m, index) => (
+                                <button
+                                  key={index}
+                                  type="button"
+                                  className="msg-bubble__media-tile"
+                                  onClick={() => setLightbox(m)}
+                                  aria-label={`View ${m.name || 'attachment'}`}
+                                >
+                                  <VaultThumb item={{ type: 'file', mediaType: m.type, url: m.url, name: m.name }} />
+                                </button>
+                              ))}
+                            </div>
+                            <div className="msg-media-message__time">{message.time}</div>
                           </div>
-                        )}
-                        {message.media?.length > 0 && (
-                          <div className={`msg-bubble__media${message.media.length === 1 ? ' is-single' : ''}`}>
-                            {message.media.map((m, index) => (
-                              <button
-                                key={index}
-                                type="button"
-                                className="msg-bubble__media-tile"
-                                onClick={() => setLightbox(m)}
-                                aria-label={`View ${m.name || 'attachment'}`}
+                        ) : (
+                          <div className={`msg-bubble${message.side === 'outgoing' ? ' is-outgoing' : ''}`}>
+                            <div className="msg-bubble__sender">{message.sender}</div>
+                            {message.replyTo && (
+                              <div
+                                className={`msg-bubble__replyref${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
                               >
-                                <VaultThumb item={{ type: 'file', mediaType: m.type, url: m.url, name: m.name }} />
-                              </button>
-                            ))}
+                                <span className="msg-bubble__replyname">{message.replyTo.sender}</span>
+                                <span className="msg-bubble__replytext">
+                                  {messagePreview(message.replyTo.text, 70)}
+                                </span>
+                              </div>
+                            )}
+                            {message.media?.length > 0 && (
+                              <div className={`msg-bubble__media${message.media.length === 1 ? ' is-single' : ''}`}>
+                                {message.media.map((m, index) => (
+                                  <button
+                                    key={index}
+                                    type="button"
+                                    className="msg-bubble__media-tile"
+                                    onClick={() => setLightbox(m)}
+                                    aria-label={`View ${m.name || 'attachment'}`}
+                                  >
+                                    <VaultThumb item={{ type: 'file', mediaType: m.type, url: m.url, name: m.name }} />
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {message.text && <div className="msg-bubble__text">{renderMessageText(message.text)}</div>}
+                            <div className="msg-bubble__foot">
+                              {message.text && (
+                                <button
+                                  type="button"
+                                  className={`msg-bubble__copy${copiedId === message.id ? ' is-copied' : ''}`}
+                                  onClick={() => handleCopy(message)}
+                                  aria-label={copiedId === message.id ? 'Copied' : 'Copy message'}
+                                  title={copiedId === message.id ? 'Copied' : 'Copy message'}
+                                >
+                                  {copiedId === message.id ? (
+                                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  ) : (
+                                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                    </svg>
+                                  )}
+                                </button>
+                              )}
+                              {message.side === 'outgoing' && message.deliveryStatus === 'failed' && (
+                                <span className="msg-bubble__undelivered" title="Not delivered to the customer">
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                                    <path d="M12 9v4" />
+                                    <path d="M12 17h.01" />
+                                  </svg>
+                                  Not delivered
+                                </span>
+                              )}
+                              <span className="msg-bubble__time">{message.time}</span>
+                            </div>
                           </div>
                         )}
-                        {message.text && <div className="msg-bubble__text">{renderMessageText(message.text)}</div>}
-                        <div className="msg-bubble__foot">
-                          {message.text && (
-                            <button
-                              type="button"
-                              className={`msg-bubble__copy${copiedId === message.id ? ' is-copied' : ''}`}
-                              onClick={() => handleCopy(message)}
-                              aria-label={copiedId === message.id ? 'Copied' : 'Copy message'}
-                              title={copiedId === message.id ? 'Copied' : 'Copy message'}
-                            >
-                              {copiedId === message.id ? (
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                  <polyline points="20 6 9 17 4 12" />
-                                </svg>
-                              ) : (
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                                </svg>
-                              )}
-                            </button>
-                          )}
-                          {message.side === 'outgoing' && message.deliveryStatus === 'failed' && (
-                            <span className="msg-bubble__undelivered" title="Not delivered to the customer">
-                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
-                                <path d="M12 9v4" />
-                                <path d="M12 17h.01" />
-                              </svg>
-                              Not delivered
-                            </span>
-                          )}
-                          <span className="msg-bubble__time">{message.time}</span>
-                        </div>
-                      </div>
-                      {isLiveAgent && (
-                        <button
-                          type="button"
-                          className={`msg-bubble__replybtn${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
-                          aria-label={`Reply to ${message.sender}`}
-                          title={`Reply to ${message.sender}`}
-                          onClick={() =>
-                            setReplyTo({ id: message.id, sender: message.sender, text: message.text })
-                          }
-                        >
-                          <svg
-                            viewBox="0 0 24 24"
-                            width="14"
-                            height="14"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
+                        {isLiveAgent && (
+                          <button
+                            type="button"
+                            className={`msg-bubble__replybtn${message.side === 'outgoing' ? ' is-outgoing' : ''}`}
+                            aria-label={`Reply to ${message.sender}`}
+                            title={`Reply to ${message.sender}`}
+                            onClick={() =>
+                              setReplyTo({ id: message.id, sender: message.sender, text: message.text })
+                            }
                           >
-                            <polyline points="9 17 4 12 9 7" />
-                            <path d="M20 18v-1a4 4 0 0 0-4-4H4" />
-                          </svg>
-                        </button>
-                      )}
+                            <svg
+                              viewBox="0 0 24 24"
+                              width="14"
+                              height="14"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden="true"
+                            >
+                              <polyline points="9 17 4 12 9 7" />
+                              <path d="M20 18v-1a4 4 0 0 0-4-4H4" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
                 {showScrollBtn && (
                   <button
@@ -1023,7 +1361,24 @@ export default function MessagingPage() {
                 )}
               </div>
 
-              {isLiveAgent ? (
+              {isLiveAgent && transferPending ? (
+                <div className="msg-composer msg-composer--locked msg-composer--pending">
+                  <span className="msg-composer__lockicon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="17 1 21 5 17 9" />
+                      <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                      <polyline points="7 23 3 19 7 15" />
+                      <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                    </svg>
+                  </span>
+                  <p className="msg-composer__locked-text">
+                    Transfer pending — waiting for {activeConversation.transferPendingTo || 'the other agent'} to accept. You can&apos;t reply until it&apos;s accepted or declined.
+                  </p>
+                  <button type="button" className="msg-composer__takeover" onClick={cancelTransfer}>
+                    Cancel transfer
+                  </button>
+                </div>
+              ) : isLiveAgent ? (
                 <form className="msg-composer" onSubmit={handleSend}>
                 {replyTo && (
                   <div className="msg-composer__reply">
@@ -1137,11 +1492,29 @@ export default function MessagingPage() {
                     </svg>
                   </button>
                   <div className="msg-composer__inputwrap">
+                    {templateSuggestion && (
+                      <button
+                        type="button"
+                        className="msg-composer__template-suggest"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={acceptTemplateSuggestion}
+                        title="Press Tab to use this template"
+                      >
+                        <span className="msg-composer__template-copy">
+                          <span className="msg-composer__template-title">{templateSuggestion.title}</span>
+                          <span className="msg-composer__template-body">
+                            {messagePreview(templateSuggestion.body, 120)}
+                          </span>
+                        </span>
+                        <span className="msg-composer__template-key">Tab</span>
+                      </button>
+                    )}
                     <input
                       ref={composerInputRef}
                       className={`input msg-composer__input${dropActive ? ' is-drop' : ''}`}
                       value={draft}
                       onChange={(event) => setDraft(event.target.value)}
+                      onKeyDown={handleComposerKeyDown}
                       placeholder="Type a message..."
                     />
                     <button
@@ -1235,6 +1608,16 @@ export default function MessagingPage() {
         onUse={handleUseProduct}
         products={productList}
         loading={productsLoading}
+        currency={activePage?.currency}
+      />
+      <NotesDrawer
+        open={notesOpen}
+        onClose={() => setNotesOpen(false)}
+        notes={notes}
+        onCreate={addNote}
+        onDelete={deleteNote}
+        canDelete={isAdmin}
+        creating={noteBusy}
       />
       <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />
 
@@ -1292,7 +1675,7 @@ export default function MessagingPage() {
                         <Button variant="ghost" size="sm" onClick={() => declineRequest(req)}>
                           Decline
                         </Button>
-                        <Button variant="primary" size="sm" onClick={() => acceptRequest(req)}>
+                        <Button variant="primary" size="sm" className="msg-request__accept" onClick={() => acceptRequest(req)}>
                           Accept
                         </Button>
                       </div>

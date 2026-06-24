@@ -64,6 +64,16 @@ export const env = {
     // generate URL unless split out via N8N_POST_WEBHOOK_URL.
     postWebhookUrl: process.env.N8N_POST_WEBHOOK_URL || process.env.N8N_GENERATE_WEBHOOK_URL || '',
     webhookToken: process.env.N8N_WEBHOOK_TOKEN || '', // optional: sent as x-service-token
+    // Where Creatomate (via the render-complete workflow webhook) reports a finished
+    // render. We hand this to n8n → Creatomate's `webhook_url` so the render can call
+    // back asynchronously. Defaults to the same n8n instance as the generate webhook,
+    // swapping the path to /webhook/creatomate-render-complete; override only if the
+    // render-complete listener lives elsewhere.
+    renderCompleteWebhookUrl:
+      process.env.N8N_RENDER_COMPLETE_WEBHOOK_URL ||
+      (process.env.N8N_GENERATE_WEBHOOK_URL
+        ? `${process.env.N8N_GENERATE_WEBHOOK_URL.split('/webhook/')[0]}/webhook/creatomate-render-complete`
+        : ''),
     // The platform gateway forwards normalized inbound customer messages here for AI.
     aiWebhookUrl: process.env.N8N_AI_WEBHOOK_URL || '',
     aiSecret: process.env.N8N_AI_SECRET || '', // optional shared secret sent as x-gateway-secret

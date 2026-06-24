@@ -39,5 +39,6 @@ router.post('/:id/seen', ctrl.seen); // mark thread seen (clears unread)
 router.post('/:id/takeover', ctrl.takeover); // take over → bind to me as Live Agent
 router.post('/:id/return-to-ai', ctrl.returnToAi); // hand back to the AI agent (flag-gated)
 router.post('/:id/transfer', ctrl.requestTransfer); // hand this chat to another agent
+router.post('/:id/transfer/cancel', ctrl.cancelTransfer); // sender cancels their pending transfer
 
 export default router;

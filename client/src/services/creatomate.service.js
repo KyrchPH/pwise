@@ -20,11 +20,18 @@ export async function remove(id) {
   return data.data;
 }
 
-// "Generate with Template": upload input video first, then trigger the n8n
-// render. Resolves with the rendered video URL n8n (→ Creatomate) returns.
+// "Generate with Template": upload the input video first, then kick off the async
+// n8n → Creatomate render. Resolves immediately with a render-job id to poll —
+// the render itself finishes later (poll with getRender).
 export async function startRender({ template_id, video_s3_key, caption }) {
   const { data } = await api.post('/creatomate-templates/renders', { template_id, video_s3_key, caption });
-  return data.data; // { url }
+  return data.data; // { renderJobId, status: 'rendering' }
+}
+
+// Poll a render job's state until it's done.
+export async function getRender(jobId) {
+  const { data } = await api.get(`/creatomate-templates/renders/${jobId}`);
+  return data.data; // { renderJobId, status, url, snapshotUrl, errorMessage }
 }
 
 // Download the rendered video into S3 (called at post-submit, after "Upload output").

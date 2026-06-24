@@ -58,6 +58,40 @@ const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length :
 const scoreVsTarget = (avgSec, targetSec) =>
   avgSec == null ? null : avgSec <= targetSec ? 100 : Math.max(0, Math.round((100 * targetSec) / avgSec));
 
+function emptyAgentStats(name) {
+  return {
+    name,
+    answeredWithin: 0,
+    answeredTotal: 0,
+    missedOverdue: 0,
+    frtSecs: [],
+    artSecs: [],
+  };
+}
+
+function summarizeStats(stats, cfg) {
+  const crrDenom = stats.answeredTotal + stats.missedOverdue;
+  const frtAvg = avg(stats.frtSecs);
+  const artAvg = avg(stats.artSecs);
+  return {
+    name: stats.name,
+    crr: {
+      pct: crrDenom > 0 ? Math.round((stats.answeredWithin / crrDenom) * 100) : null,
+      sample: crrDenom,
+    },
+    frt: {
+      seconds: frtAvg == null ? null : Math.round(frtAvg),
+      scorePct: scoreVsTarget(frtAvg, cfg.frtTargetSeconds),
+      sample: stats.frtSecs.length,
+    },
+    art: {
+      seconds: artAvg == null ? null : Math.round(artAvg),
+      scorePct: scoreVsTarget(artAvg, cfg.artTargetSeconds),
+      sample: stats.artSecs.length,
+    },
+  };
+}
+
 // Compute the three metrics for one page over its configured window. Always returns
 // a full shape (values null when there's no data). Never trusts the LLM — the page
 // scope comes from the caller.
@@ -78,7 +112,12 @@ export async function computeAgentMetrics(accountId) {
   // tells us whether an unanswered turn is a human's responsibility (Live Agent) or the
   // AI's (then it's out of scope here).
   const rows = await query(
-    `SELECT m.conversation_id AS cid, m.side AS side, m.sender AS sender, m.created_at AS ts, c.handled_by AS handledBy
+    `SELECT m.conversation_id AS cid,
+            m.side AS side,
+            m.sender AS sender,
+            m.created_at AS ts,
+            c.handled_by AS handledBy,
+            c.assigned_user_name AS assignedUserName
        FROM messages m
        JOIN conversations c ON c.id = m.conversation_id
       WHERE c.account_id = ?
@@ -93,7 +132,7 @@ export async function computeAgentMetrics(accountId) {
   for (const r of rows) {
     let g = byConv.get(r.cid);
     if (!g) {
-      g = { handledBy: r.handledBy, msgs: [] };
+      g = { handledBy: r.handledBy, assignedUserName: r.assignedUserName, msgs: [] };
       byConv.set(r.cid, g);
     }
     g.msgs.push(r);
@@ -104,8 +143,14 @@ export async function computeAgentMetrics(accountId) {
   let missedOverdue = 0; // human owns the chat but hasn't replied, and it's past the window
   const frtSecs = []; // first human-answered turn per conversation
   const artSecs = []; // every human-answered turn
+  const agents = new Map();
+  const agentStats = (name) => {
+    const clean = String(name || '').trim() || 'Unknown agent';
+    if (!agents.has(clean)) agents.set(clean, emptyAgentStats(clean));
+    return agents.get(clean);
+  };
 
-  for (const { handledBy, msgs } of byConv.values()) {
+  for (const { handledBy, assignedUserName, msgs } of byConv.values()) {
     let i = 0;
     let firstHumanForConv = true;
     while (i < msgs.length) {
@@ -125,19 +170,27 @@ export async function computeAgentMetrics(accountId) {
         if (isHuman) {
           const dt = (new Date(out.ts).getTime() - turnStart) / 1000;
           if (dt >= 0) {
+            const stats = agentStats(out.sender);
             artSecs.push(dt);
+            stats.artSecs.push(dt);
             if (firstHumanForConv) {
               frtSecs.push(dt);
+              stats.frtSecs.push(dt);
               firstHumanForConv = false;
             }
             answeredTotal += 1;
-            if (dt * 1000 <= crrWindowMs) answeredWithin += 1;
+            stats.answeredTotal += 1;
+            if (dt * 1000 <= crrWindowMs) {
+              answeredWithin += 1;
+              stats.answeredWithin += 1;
+            }
           }
         }
         // AI-answered turn → out of scope for human metrics; skip.
       } else if (handledBy === 'Live Agent' && nowMs - turnStart > crrWindowMs) {
         // No reply at all and a human owns the chat past the window → a missed chat.
         missedOverdue += 1;
+        agentStats(assignedUserName || 'Unassigned').missedOverdue += 1;
       }
       i = j; // continue scanning after the turn
     }
@@ -162,6 +215,13 @@ export async function computeAgentMetrics(accountId) {
       scorePct: scoreVsTarget(artAvg, cfg.artTargetSeconds),
       sample: artSecs.length,
     },
+    agents: [...agents.values()]
+      .map((stats) => summarizeStats(stats, cfg))
+      .sort((a, b) => {
+        const aSample = (a.crr?.sample ?? 0) + (a.frt?.sample ?? 0) + (a.art?.sample ?? 0);
+        const bSample = (b.crr?.sample ?? 0) + (b.frt?.sample ?? 0) + (b.art?.sample ?? 0);
+        return bSample - aSample || a.name.localeCompare(b.name);
+      }),
     config: cfg,
   };
 }

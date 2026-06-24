@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as upload from '../services/upload.service.js';
 import * as postPool from '../services/post_pool.service.js';
@@ -21,6 +21,29 @@ function nextSlot() {
   if (d.getMinutes() < 30) d.setMinutes(30, 0, 0);
   else d.setHours(d.getHours() + 1, 0, 0, 0);
   return { date: dateStr(d), time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Poll a render job to completion. Resolves with the finished job on success, or
+// null if `isActive()` goes false (the form unmounted) so we stop touching state.
+// Throws on a failed render, or if it never finishes within the budget.
+async function waitForRender(jobId, isActive) {
+  const POLL_MS = 3000;
+  const deadline = Date.now() + 8 * 60 * 1000; // generous headroom over a typical render
+  while (Date.now() < deadline) {
+    if (!isActive()) return null;
+    const job = await creatomate.getRender(jobId);
+    if (job.status === 'succeeded') {
+      if (!job.url) throw new Error('The render finished but no video came back. Please try again.');
+      return job;
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.errorMessage || 'The render failed. Please try again.');
+    }
+    await sleep(POLL_MS);
+  }
+  throw new Error('The render is taking longer than expected — please check back shortly.');
 }
 
 /**
@@ -55,6 +78,15 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   const [renderModal, setRenderModal] = useState(null); // { url } — the result dialog
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState(null); // Creatomate URL accepted via "Upload output"
   const [templateVideoKey, setTemplateVideoKey] = useState(null); // tmp/ S3 key of the uploaded input clip
+
+  // Stop the render poll from touching state once the form unmounts.
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   // Templates load lazily — only once "Use template" is switched on (a null key
   // tells useCachedResource to skip fetching), then stay cached for the session.
@@ -108,13 +140,16 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       await upload.uploadToS3(pres.uploadUrl, templateVideo, setGenProgress);
       setTemplateVideoKey(pres.s3Key);
 
+      // Kick off the async render, then poll until Creatomate (via n8n) reports back.
       setGenPhase('rendering');
-      const { url } = await creatomate.startRender({
+      const { renderJobId } = await creatomate.startRender({
         template_id: Number(templateId),
         video_s3_key: pres.s3Key,
         caption,
       });
-      setRenderModal({ url });
+      const job = await waitForRender(renderJobId, () => mountedRef.current);
+      if (!job) return; // form unmounted mid-render — nothing to show
+      setRenderModal({ url: job.url });
     } catch (err) {
       setErrorDialog(apiError(err));
     } finally {

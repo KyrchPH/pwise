@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
 
 // Format seconds → "45s" / "2m 30s" / "1h 5m".
@@ -16,15 +17,23 @@ function fmtDuration(sec) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+function fmtCompactDuration(sec) {
+  return sec == null ? 'n/a' : fmtDuration(sec);
+}
+
+function fmtPct(pct) {
+  return pct == null ? 'n/a' : `${Math.round(pct)}%`;
+}
+
 // One small ring: a percentage in the center and the abbreviation below. Colour
 // shifts good/mid/low by value. Hovering (or focusing) reveals the full name + the
 // numbers via the rail's floating tooltip (onShow/onHide).
-function Gauge({ label, pct, onShow, onHide }) {
+function Gauge({ label, pct, onShow, onHide, compact = false }) {
   const value = pct == null ? null : Math.max(0, Math.min(100, pct));
   const tone = value == null ? 'na' : value >= 80 ? 'good' : value >= 50 ? 'mid' : 'low';
   return (
     <div
-      className="msg-metric"
+      className={`msg-metric${compact ? ' msg-metric--compact' : ''}`}
       tabIndex={0}
       onMouseEnter={onShow}
       onMouseLeave={onHide}
@@ -62,9 +71,11 @@ function Gauge({ label, pct, onShow, onHide }) {
  * non-abbreviated name and the underlying numbers in a floating tooltip.
  */
 export default function MessagingMetricsRail({ accountId }) {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
   const [tip, setTip] = useState(null); // { name, detail, x, y }
+  const [metricView, setMetricView] = useState('all');
 
   const load = useCallback(() => {
     if (!accountId) return;
@@ -111,6 +122,11 @@ export default function MessagingMetricsRail({ accountId }) {
   const cfg = data?.config;
   const days = cfg?.periodDays;
   const t = (s) => fmtDuration(s);
+  const agents = Array.isArray(data?.agents) ? data.agents : [];
+  const currentUserName = String(user?.name || '').trim().toLowerCase();
+  const currentAgent = currentUserName
+    ? agents.find((agent) => String(agent.name || '').trim().toLowerCase() === currentUserName)
+    : null;
 
   // label = abbreviation shown under the ring · name = the non-abbreviated title
   // revealed on hover · detail = the underlying numbers.
@@ -148,12 +164,83 @@ export default function MessagingMetricsRail({ accountId }) {
     setTip({ name: m.name, detail: m.detail, x: r.right + 10, y: r.top + r.height / 2 });
   };
   const hideTip = () => setTip(null);
+  const showingYou = metricView === 'you';
+  const toggleMetricView = () => {
+    setTip(null);
+    setMetricView((view) => (view === 'all' ? 'you' : 'all'));
+  };
+  const agentMetrics = (agent) => [
+    {
+      label: 'CRR',
+      name: 'Your Chat Response Rate',
+      pct: agent.crr?.pct,
+      detail: failed
+        ? 'Metrics unavailable.'
+        : `${fmtPct(agent.crr?.pct)} of customer chats answered within ${cfg?.crrWindowHours ?? 12}h - ${agent.crr?.sample ?? 0} chats`,
+    },
+    {
+      label: 'FRT',
+      name: 'Your First Response Time',
+      pct: agent.frt?.scorePct,
+      detail: failed
+        ? 'Metrics unavailable.'
+        : `${fmtCompactDuration(agent.frt?.seconds)} avg first reply - score ${agent.frt?.scorePct ?? 'n/a'}% - ${agent.frt?.sample ?? 0} chats`,
+    },
+    {
+      label: 'ART',
+      name: 'Your Average Response Time',
+      pct: agent.art?.scorePct,
+      detail: failed
+        ? 'Metrics unavailable.'
+        : `${fmtCompactDuration(agent.art?.seconds)} avg reply - score ${agent.art?.scorePct ?? 'n/a'}% - ${agent.art?.sample ?? 0} replies`,
+    },
+  ];
 
   return (
-    <div className="msg-metrics" role="group" aria-label="Live-agent response metrics">
-      {metrics.map((m) => (
-        <Gauge key={m.label} label={m.label} pct={m.pct} onShow={showTip(m)} onHide={hideTip} />
-      ))}
+    <div className={`msg-metrics msg-metrics--${metricView}`} role="group" aria-label="Live-agent response metrics">
+      <div className="msg-metrics__toolbar">
+        <button
+          type="button"
+          className={`msg-metrics__switch${showingYou ? ' is-active' : ''}`}
+          onClick={toggleMetricView}
+          aria-label={showingYou ? 'Show all metrics' : 'Show your metrics'}
+          aria-pressed={showingYou}
+          title={showingYou ? 'Show all metrics' : 'Show your metrics'}
+        >
+          <svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 6.5h10.5" />
+            <path d="m12 4 2.5 2.5L12 9" />
+            <path d="M16 13.5H5.5" />
+            <path d="M8 11 5.5 13.5 8 16" />
+          </svg>
+        </button>
+        <span className="msg-metrics__mode-label">{showingYou ? 'YOU' : 'ALL'}</span>
+      </div>
+      {showingYou ? (
+        <div className="msg-agent-metrics" aria-label="Agent-level response metrics">
+          {data && currentAgent ? (
+            <div className="msg-agent-metric" title="Your metrics">
+              <div className="msg-agent-metric__rings">
+                {agentMetrics(currentAgent).map((m) => (
+                  <Gauge
+                    key={m.label}
+                    label={m.label}
+                    pct={m.pct}
+                    onShow={showTip(m)}
+                    onHide={hideTip}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="msg-agent-metric msg-agent-metric--empty">{failed ? 'Unavailable' : 'No data'}</div>
+          )}
+        </div>
+      ) : (
+        metrics.map((m) => (
+          <Gauge key={m.label} label={m.label} pct={m.pct} onShow={showTip(m)} onHide={hideTip} />
+        ))
+      )}
       {tip && (
         <div className="msg-metric-tip" style={{ left: `${tip.x}px`, top: `${tip.y}px` }} role="tooltip">
           <div className="msg-metric-tip__name">{tip.name}</div>

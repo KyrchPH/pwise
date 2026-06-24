@@ -4,7 +4,7 @@ export const APP_MODULES = [
   { id: 'analytics', label: 'Analytics', route: '/analytics' },
   { id: 'post-pool', label: 'Post Pool', route: '/post-pool' },
   { id: 'upload', label: 'Upload', route: '/upload' },
-  { id: 'products', label: 'Products', route: '/products' },
+  { id: 'products', label: 'Shop', route: '/shop' },
   { id: 'messages', label: 'Messaging', route: '/messages' },
   { id: 'connections', label: 'Connections', route: '/connections' },
   { id: 'vault', label: 'Vault', route: '/vault' },

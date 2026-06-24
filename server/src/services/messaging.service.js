@@ -7,6 +7,7 @@ import { decrypt } from '../utils/crypto.util.js';
 import * as tg from './telegram.service.js';
 import * as fb from './fb.service.js';
 import { searchAiMedia } from './vault.service.js';
+import * as conversationNotes from './conversation_notes.service.js';
 
 // Conversation status set when the AI escalates a thread to a human (see
 // handoffToLiveAgent). The inbound gateway stops auto-replying while a thread
@@ -91,7 +92,7 @@ function rowToMessage(row) {
   };
 }
 
-function rowToConversation(c, messageRows) {
+function rowToConversation(c, messageRows, pending = null) {
   return {
     id: String(c.id),
     pageId: c.account_id != null ? String(c.account_id) : null,
@@ -109,6 +110,10 @@ function rowToConversation(c, messageRows) {
     unread: Number(c.unread) || 0,
     activeMessages: messageRows.length,
     lastActivity: humanizeSince(c.last_message_at || c.updated_at),
+    // A pending outgoing transfer locks the owner's composer until it's accepted
+    // (then the thread leaves their view) or declined (then it unlocks).
+    transferPending: !!pending,
+    transferPendingTo: pending?.toName || '',
     messages: messageRows.map(rowToMessage),
   };
 }
@@ -156,7 +161,16 @@ export async function listConversations(actor = {}) {
     if (!byConv.has(m.conversation_id)) byConv.set(m.conversation_id, []);
     byConv.get(m.conversation_id).push(m);
   }
-  return convs.map((c) => rowToConversation(c, byConv.get(c.id) || []));
+  // Pending outgoing transfers for these threads, so the owner's composer shows as
+  // locked on load (not only live via SSE).
+  const pendingByConv = new Map();
+  const ptRows = await query(
+    `SELECT conversation_id, to_user_name FROM conversation_transfers
+      WHERE status = 'pending' AND conversation_id IN (${ids.map(() => '?').join(',')})`,
+    ids,
+  );
+  for (const r of ptRows) pendingByConv.set(r.conversation_id, { toName: r.to_user_name || '' });
+  return convs.map((c) => rowToConversation(c, byConv.get(c.id) || [], pendingByConv.get(c.id) || null));
 }
 
 export async function getConversation(id, actor = {}) {
@@ -172,7 +186,12 @@ export async function getConversation(id, actor = {}) {
     'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC',
     [id],
   );
-  return rowToConversation(rows[0], msgs);
+  const ptRows = await query(
+    "SELECT to_user_name FROM conversation_transfers WHERE conversation_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+    [id],
+  );
+  const pending = ptRows.length ? { toName: ptRows[0].to_user_name || '' } : null;
+  return rowToConversation(rows[0], msgs, pending);
 }
 
 // Tell the open inbox(es) that some messages' delivery_status changed, so a failed
@@ -317,16 +336,34 @@ async function deliverViaTelegram(conv, items = [], replyToExternalId = null) {
     let extId = null;
     let lastErr = '';
     if (it.media && it.media.length) {
-      for (let k = 0; k < it.media.length; k += 1) {
-        const m = it.media[k];
-        // A captioned bubble (single image + text) carries its caption in `body` — ride
-        // it on the first photo so the customer gets one photo-with-caption message.
-        const r = await tg.sendMedia(token, chatId, { url: m.url, type: m.type, caption: k === 0 ? it.body : null, replyToMessageId: k === 0 ? replyId : null });
+      // 2+ photos/videos go out as ONE Telegram album (gallery) instead of a message
+      // each; the caption rides the first item. A single item, or a bubble mixing in a
+      // non-media file, uses the per-file path. If the album call fails, fall back to
+      // one-by-one so the photos still reach the customer.
+      const albumable = it.media.length >= 2 && it.media.every((m) => /^(image|video)/i.test(String(m.type || '')));
+      let albumSent = false;
+      if (albumable) {
+        const r = await tg.sendMediaGroup(token, chatId, it.media, { caption: it.body, replyToMessageId: replyId });
         if (r.ok) {
           ok = true;
-          if (extId == null) extId = r.messageId;
+          albumSent = true;
+          extId = r.messageId;
         } else {
-          lastErr = r.error;
+          lastErr = r.error; // fall through to per-file
+        }
+      }
+      if (!albumSent) {
+        for (let k = 0; k < it.media.length; k += 1) {
+          const m = it.media[k];
+          // A captioned bubble (single image + text) carries its caption in `body` —
+          // ride it on the first photo so the customer gets one photo-with-caption message.
+          const r = await tg.sendMedia(token, chatId, { url: m.url, type: m.type, caption: k === 0 ? it.body : null, replyToMessageId: k === 0 ? replyId : null });
+          if (r.ok) {
+            ok = true;
+            if (extId == null) extId = r.messageId;
+          } else {
+            lastErr = r.error;
+          }
         }
       }
     } else if (it.body) {
@@ -469,15 +506,21 @@ export async function returnToAi(id, actor = {}) {
 
 // ── Transfers (hand a conversation to another agent, who must accept) ─────────
 
-// Teammates a conversation can be transferred to: active users with Messaging
-// access, excluding the requester. Used by the transfer picker.
-export async function listAgents(actor = {}) {
+// All active users with Messaging access (id, name, email). The pool the AI hands a
+// thread off to (handoffToLiveAgent) and the basis for the transfer picker below.
+async function eligibleMessagingAgents() {
   const rows = await query(
     'SELECT id, name, email, role, module_access FROM users WHERE is_active = 1 AND deleted_at IS NULL ORDER BY name ASC, email ASC',
   );
   return rows
-    .filter((u) => Number(u.id) !== Number(actor.id) && hasMessagingAccess(u))
+    .filter((u) => hasMessagingAccess(u))
     .map((u) => ({ id: Number(u.id), name: u.name || u.email, email: u.email }));
+}
+
+// Teammates a conversation can be transferred to: the eligible pool minus the
+// requester. Used by the transfer picker.
+export async function listAgents(actor = {}) {
+  return (await eligibleMessagingAgents()).filter((u) => u.id !== Number(actor.id));
 }
 
 function transferToClient(t) {
@@ -531,6 +574,11 @@ export async function requestTransfer(conversationId, actor = {}, toUserId) {
   );
   const transfer = transferToClient(await loadTransfer(res.insertId));
   emitMessagingEvent({ type: 'transfer:new', transfer }, [target]); // only the recipient is notified
+  // Lock the sender's composer immediately — their thread now has a pending transfer.
+  emitMessagingEvent(
+    { type: 'conversation:updated', conversation: { id: String(conversationId), transferPending: true, transferPendingTo: tRows[0].name || '' } },
+    [Number(actor.id)].filter(Boolean),
+  );
   return transfer;
 }
 
@@ -571,7 +619,37 @@ export async function declineTransfer(transferId, actor = {}) {
   if (t.status !== 'pending') throw ApiError.badRequest('This transfer is no longer pending.');
   await query("UPDATE conversation_transfers SET status = 'declined', responded_at = NOW() WHERE id = ?", [transferId]);
   emitMessagingEvent({ type: 'transfer:resolved', transferId: Number(transferId) }, [Number(t.to_user_id), Number(t.from_user_id)].filter(Boolean));
+  // Unlock the sender's composer — the transfer was declined, the thread is theirs again.
+  emitMessagingEvent(
+    { type: 'conversation:updated', conversation: { id: String(t.conversation_id), transferPending: false, transferPendingTo: '' } },
+    [Number(t.from_user_id)].filter(Boolean),
+  );
   return { id: Number(transferId), declined: true };
+}
+
+// Cancel the pending transfer the current owner started on this conversation. Only the
+// agent who requested it may cancel. Clears the recipient's incoming request
+// (transfer:resolved) and unlocks the sender's composer (conversation:updated). A
+// no-op if nothing is pending, so a double-cancel or an accept/cancel race can't error.
+export async function cancelTransfer(conversationId, actor = {}) {
+  const rows = await query(
+    "SELECT id, from_user_id, to_user_id FROM conversation_transfers WHERE conversation_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+    [conversationId],
+  );
+  if (!rows.length) return { cancelled: false, conversationId: String(conversationId) };
+  const t = rows[0];
+  if (Number(t.from_user_id) !== Number(actor.id)) {
+    throw new ApiError(403, 'Only the agent who started this transfer can cancel it.');
+  }
+  await query("UPDATE conversation_transfers SET status = 'cancelled', responded_at = NOW() WHERE id = ?", [t.id]);
+  // The recipient's incoming request disappears; both sides see it resolved.
+  emitMessagingEvent({ type: 'transfer:resolved', transferId: Number(t.id) }, [Number(t.to_user_id), Number(t.from_user_id)].filter(Boolean));
+  // Unlock the sender's composer — the thread is theirs again.
+  emitMessagingEvent(
+    { type: 'conversation:updated', conversation: { id: String(conversationId), transferPending: false, transferPendingTo: '' } },
+    [Number(t.from_user_id)].filter(Boolean),
+  );
+  return { cancelled: true, conversationId: String(conversationId) };
 }
 
 // ── Inbound from n8n ─────────────────────────────────────────────────────────
@@ -616,7 +694,7 @@ async function resolveAccount({ accountId, fbPageId, telegramBotUsername, origin
 // Find the thread this inbound belongs to, or open a new one. Resolution order:
 // explicit conversationId → existing (page, customer handle) pair → create. Returns
 // { id, created }.
-async function resolveOrCreateConversation(payload, account) {
+async function resolveOrCreateConversation(payload, account, { createIfMissing = true } = {}) {
   if (payload.conversationId != null && payload.conversationId !== '') {
     const rows = await query('SELECT id FROM conversations WHERE id = ?', [payload.conversationId]);
     if (!rows.length) throw ApiError.notFound('conversation not found');
@@ -642,6 +720,14 @@ async function resolveOrCreateConversation(payload, account) {
   }
 
   // New thread — needs a display name (fall back to the handle).
+  if (!createIfMissing) {
+    throw ApiError.badRequest(
+      handle
+        ? 'outgoing AI reply target conversation was not found'
+        : 'outgoing AI replies require conversationId or customerHandle',
+    );
+  }
+
   const customerName = String(payload.customerName || '').trim() || handle || 'New customer';
   const result = await query(
     `INSERT INTO conversations
@@ -688,7 +774,7 @@ export async function receiveInbound(payload = {}) {
     telegramBotUsername: payload.telegramBotUsername ?? payload.botUsername,
     origin: payload.origin,
   });
-  const { id, created } = await resolveOrCreateConversation(payload, account);
+  const { id, created } = await resolveOrCreateConversation(payload, account, { createIfMissing: side !== 'outgoing' });
 
   const reply =
     payload.replyTo && payload.replyTo.id
@@ -790,12 +876,14 @@ export async function receiveInbound(payload = {}) {
 }
 
 // Escalate a thread to a human. Machine-authed (service token) — n8n calls this when
-// the AI decides to hand off. It does NOT change ownership: the thread stays an
-// (unbound) AI Agent chat so it remains claimable from any agent's inbox via takeOver,
-// and so the AI's own handoff reply (sent right after, via /inbound) still delivers.
-// Setting HANDOFF_STATUS is what makes the inbound gateway stop forwarding the
-// customer's future messages to n8n. Idempotent; a no-op if a human already owns it.
-export async function handoffToLiveAgent({ accountId, customerHandle, origin, reason } = {}) {
+// the AI decides to hand off. Assigns the thread to a RANDOM available agent
+// (handled_by = 'Live Agent'); that ownership change is itself what makes the inbound
+// gateway stop forwarding the customer's future messages to the AI — no "Needs human"
+// flag needed. The AI's own handoff reply (sent right after, via /inbound) still records
+// on the thread. If no agent is available it falls back to flagging HANDOFF_STATUS
+// (unbound) so the AI still pauses and the thread waits to be claimed. Idempotent; a
+// no-op if a human already owns it.
+export async function handoffToLiveAgent({ accountId, customerHandle, origin, reason, note } = {}) {
   const handle = String(customerHandle ?? '').trim();
   if (!handle) throw ApiError.badRequest('customerHandle is required');
 
@@ -819,11 +907,42 @@ export async function handoffToLiveAgent({ accountId, customerHandle, origin, re
     return { conversationId: String(conv.id), handedOff: false, alreadyLive: true };
   }
 
-  await query('UPDATE conversations SET status = ?, last_message_at = NOW() WHERE id = ?', [HANDOFF_STATUS, conv.id]);
+  // Every handoff leaves a note on the thread so whoever picks it up has context. The
+  // AI passes a short summary; fall back to a generic line if it didn't. Best-effort —
+  // a note failure must never block the handoff itself.
+  const writeHandoffNote = async () => {
+    const body = String(note ?? '').trim() || 'The AI transferred this conversation to a live agent.';
+    try {
+      await conversationNotes.create(conv.id, { id: null, name: 'AI Agent' }, { body });
+    } catch (e) {
+      console.warn(`[messaging] handoff note failed (conv ${conv.id}): ${e?.message || e}`);
+    }
+  };
+
+  // No one to hand to → flag "Needs human" (unbound) so the AI pauses and any agent can
+  // claim it later, rather than binding it to an owner who isn't there.
+  const agents = await eligibleMessagingAgents();
+  if (!agents.length) {
+    await query('UPDATE conversations SET status = ?, last_message_at = NOW() WHERE id = ?', [HANDOFF_STATUS, conv.id]);
+    await writeHandoffNote();
+    const conversation = await conversationPatch(conv.id);
+    emitMessagingEvent({ type: 'conversation:updated', conversation, handoffReason: reason || null }, null);
+    return { conversationId: String(conv.id), handedOff: true, assignedUserId: null, conversation };
+  }
+
+  // Assign to a random available agent. Clearing status + setting handled_by = 'Live
+  // Agent' is enough to stop the gateway forwarding the customer's next messages to n8n.
+  const agent = agents[Math.floor(Math.random() * agents.length)];
+  await query(
+    "UPDATE conversations SET handled_by = 'Live Agent', assigned_user_id = ?, assigned_user_name = ?, status = NULL, last_message_at = NOW() WHERE id = ?",
+    [agent.id, agent.name, conv.id],
+  );
+  await writeHandoffNote();
   const conversation = await conversationPatch(conv.id);
-  // Unbound AI thread → broadcast to everyone so any agent can pick it up.
-  emitMessagingEvent({ type: 'conversation:updated', conversation, handoffReason: reason || null }, null);
-  return { conversationId: String(conv.id), handedOff: true, conversation };
+  // Same signal as a manual take-over: every inbox refetches, so the chosen agent gains
+  // the thread and other agents drop it from their shared AI view.
+  emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(conv.id), assignedUserId: agent.id }, null);
+  return { conversationId: String(conv.id), handedOff: true, assignedUserId: agent.id, conversation };
 }
 
 // Product lookup the AI agent's `search_catalog` tool calls — MySQL FULLTEXT over
@@ -853,12 +972,15 @@ export async function searchKnowledge(rawQuery, { accountId, limit = 6 } = {}) {
   return { products: products.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price })) };
 }
 
-// The AI agent's `send_media` tool: find a media file in THIS page's Vault folder
-// matching the query and deliver it to the customer (same outgoing path as any
-// media — Telegram/Messenger sendMedia + inbox bubble + SSE). Scoped to the page's
-// folder and skips ai_hidden files; accountId/customerHandle come from the
-// conversation (the tool), never the LLM. Returns a short status the agent speaks to.
-export async function sendVaultMedia({ accountId, customerHandle, origin, query: rawQuery } = {}) {
+// The AI agent's `send_media` tool: find media in THIS page's Vault folder matching
+// the query and deliver it to the customer (same outgoing path as any media —
+// Telegram/Messenger sendMedia + inbox bubble + SSE). One call can send several
+// files — `count` (1–10, default 1) is how many distinct matches to send — so "send
+// all your packages" is a single broad-query call, not many repeated single sends.
+// Scoped to the page's folder and skips ai_hidden files; accountId/customerHandle
+// come from the conversation (the tool), never the LLM. Returns a short status the
+// agent speaks to.
+export async function sendVaultMedia({ accountId, customerHandle, origin, query: rawQuery, count } = {}) {
   const acct = parseInt(accountId, 10);
   const handle = String(customerHandle ?? '').trim();
   const q = String(rawQuery ?? '').trim();
@@ -866,32 +988,43 @@ export async function sendVaultMedia({ accountId, customerHandle, origin, query:
     return { sent: false, reason: 'accountId, customerHandle, and query are required' };
   }
 
+  // How many distinct files to send this call. Default 1 (a single best match —
+  // "show me X"); the agent raises it to send a set ("send all your packages").
+  // Hard-capped at 10 so one broad query can't flood the customer.
+  let want = parseInt(count, 10);
+  if (!Number.isFinite(want) || want < 1) want = 1;
+  want = Math.min(want, 10);
+
   const rows = await query('SELECT vault_folder_id FROM platform_accounts WHERE id = ?', [acct]);
   const folderId = rows.length ? rows[0].vault_folder_id : null;
   if (folderId == null) return { sent: false, reason: "this page has no media folder yet" };
 
-  const matches = await searchAiMedia(folderId, q, { limit: 4 });
+  // Pull a few past `want` so any leftovers can be offered back as alternatives.
+  const matches = await searchAiMedia(folderId, q, { limit: Math.min(want + 4, 10) });
   if (!matches.length) return { sent: false, reason: "no matching file found in this page's folder" };
 
-  const top = matches[0];
-  // side:'outgoing' + AI-handled → receiveInbound delivers it to the customer and
-  // records the bubble. (It won't send if a human has taken the thread over.)
+  // searchAiMedia returns distinct rows, so picking the top `want` can't repeat a
+  // file — this is what fixes the "same photo sent 3×" of repeated single sends.
+  const picked = matches.slice(0, want);
+
+  // One bubble carrying every picked file — deliverToCustomer fans it out into one
+  // message per photo on the platform. side:'outgoing' + AI-handled → receiveInbound
+  // delivers it to the customer (and won't, if a human has taken the thread over).
   await receiveInbound({
     accountId: acct,
     customerHandle: handle,
     origin,
     side: 'outgoing',
-    media: [{ type: top.mediaType, url: top.url, name: top.name }],
+    media: picked.map((m) => ({ type: m.mediaType, url: m.url, name: m.name })),
   });
 
-  // Hand the agent the sent file's description/tags (so it can tell the customer
-  // what it sent) plus the same for the runners-up (so it can offer them).
+  // Tell the agent what actually went out (so it can caption accurately) plus any
+  // matches it didn't send (so it can offer them).
   return {
     sent: true,
-    file: top.name,
-    description: top.description || '',
-    tags: top.tags || [],
-    alternatives: matches.slice(1).map((m) => ({
+    count: picked.length,
+    files: picked.map((m) => ({ name: m.name, description: m.description || '', tags: m.tags || [] })),
+    alternatives: matches.slice(picked.length).map((m) => ({
       name: m.name,
       description: m.description || '',
       tags: m.tags || [],

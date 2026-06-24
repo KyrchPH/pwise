@@ -228,3 +228,65 @@ export async function sendMedia(token, chatId, { url, type, caption, replyToMess
     return { ok: false, error: err.message };
   }
 }
+
+/**
+ * Send 2–10 photos/videos as ONE Telegram album (gallery) instead of a separate
+ * message per item. The caption rides the first item (Telegram renders it as the
+ * album caption), with the same HTML-then-plain fallback as sendMedia. Returns
+ * { ok, messageId } where messageId is the first message's id (for reply threading).
+ */
+export async function sendMediaGroup(token, chatId, items = [], { caption, replyToMessageId } = {}) {
+  const t = String(token || '').trim();
+  if (!TOKEN_RE.test(t)) return { ok: false, error: 'invalid bot token' };
+  if (chatId == null || chatId === '') return { ok: false, error: 'missing chat id' };
+  const usable = (Array.isArray(items) ? items : []).filter((it) => it && it.url).slice(0, 10);
+  if (usable.length < 2) return { ok: false, error: 'a media group needs at least 2 items' };
+
+  const rawCaption = caption ? String(caption) : '';
+  // Telegram puts the album caption on the FIRST item; HTML for the rich-text mode,
+  // plain for the no-parse fallback.
+  const buildMedia = (mode) =>
+    usable.map((it, i) => {
+      const isImage = String(it.type || '').toLowerCase().startsWith('image');
+      const m = { type: isImage ? 'photo' : 'video', media: String(it.url) };
+      if (i === 0 && rawCaption) {
+        if (mode === 'html') {
+          m.caption = toTelegramHtml(rawCaption);
+          m.parse_mode = 'HTML';
+        } else {
+          m.caption = rawCaption;
+        }
+      }
+      return m;
+    });
+
+  const base = { chat_id: chatId };
+  const rid = Number(replyToMessageId);
+  if (Number.isFinite(rid) && rid > 0) {
+    base.reply_to_message_id = rid;
+    base.allow_sending_without_reply = true;
+  }
+
+  const post = async (media) => {
+    const res = await fetch(`https://api.telegram.org/bot${t}/sendMediaGroup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...base, media }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    return { res, body: await res.json().catch(() => null) };
+  };
+
+  try {
+    let { res, body } = await post(buildMedia(rawCaption ? 'html' : 'plain'));
+    if (rawCaption && (!res.ok || !body?.ok) && looksLikeParseError(body?.description)) {
+      ({ res, body } = await post(buildMedia('plain')));
+    }
+    if (!res.ok || !body?.ok) return { ok: false, error: body?.description || `Telegram HTTP ${res.status}` };
+    const arr = Array.isArray(body.result) ? body.result : [];
+    return { ok: true, messageId: arr[0]?.message_id ?? null };
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Telegram timed out' };
+    return { ok: false, error: err.message };
+  }
+}

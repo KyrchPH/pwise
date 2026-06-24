@@ -138,8 +138,8 @@ const PRIMARY_NAV = [
     ),
   },
   {
-    to: '/products',
-    label: 'Products',
+    to: '/shop',
+    label: 'Shop',
     moduleId: 'products',
     icon: (
       <Ico>
@@ -239,6 +239,7 @@ export default function AppLayout() {
   const isMessagingPage = pathname === '/messages';
   const isConnectionsPage = pathname === '/connections';
   const isVaultPage = pathname === '/vault';
+  const isProductsPage = pathname.startsWith('/shop');
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
 
@@ -613,7 +614,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             <Outlet />

@@ -5,6 +5,7 @@ import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { CURRENCIES } from '../../config/currency.js';
 import { Card, Button, Field, Spinner, PageAvatar } from '../../components/ui.jsx';
 
 const EditIcon = () => (
@@ -82,6 +83,7 @@ const BLANK = {
   an_crrHours: 12,
   an_frtMin: 5,
   an_artMin: 5,
+  currency: 'PHP',
 };
 
 export default function FacebookPages({ embedded = false }) {
@@ -178,6 +180,7 @@ export default function FacebookPages({ embedded = false }) {
       an_crrHours: p.analytics_config?.crrWindowHours ?? 12,
       an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
       an_artMin: Math.round((p.analytics_config?.artTargetSeconds ?? 300) / 60),
+      currency: p.currency || 'PHP',
     });
     // Pull this page's per-agent AI prompts (+ defaults) for the editor (admin only).
     if (isAdmin) {
@@ -293,6 +296,7 @@ export default function FacebookPages({ embedded = false }) {
           frtTargetSeconds: Math.round((Number(editing.an_frtMin) || 5) * 60),
           artTargetSeconds: Math.round((Number(editing.an_artMin) || 5) * 60),
         };
+        payload.currency = editing.currency || 'PHP';
       }
       if (editing.id) await pagesService.update(editing.id, payload);
       else await pagesService.create(payload);
@@ -472,6 +476,25 @@ export default function FacebookPages({ embedded = false }) {
                   </Field>
                 );
               })}
+            </div>
+          )}
+
+          {/* Display currency for product prices — admin only, existing pages. */}
+          {isAdmin && editing.id && (
+            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+              <Field label="Currency" hint="used to format product prices">
+                <select
+                  className="input"
+                  value={editing.currency}
+                  onChange={(e) => setEditing((ed) => ({ ...ed, currency: e.target.value }))}
+                >
+                  {CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
           )}
 

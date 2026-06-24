@@ -245,24 +245,37 @@ export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
   );
   if (!rows.length) return [];
 
-  const tokens = q.split(/\s+/).filter(Boolean);
+  // Tokens cleaned of surrounding punctuation ("(KIT" -> "kit"); 1-char noise dropped.
+  const tokens = q
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, ''))
+    .filter((t) => t.length >= 2);
+  if (!tokens.length) return [];
+
   const ranked = rows
     .map((row) => {
       const name = String(row.name || '').toLowerCase();
       const tags = String(row.tags || '').toLowerCase();
       const description = String(row.description || '').toLowerCase();
-      // Weighting: curated tags (3) > filename (2) > free-text description (1).
-      // A token can score in several fields; the contributions add up.
-      const score = tokens.reduce((s, t) => {
-        let hit = 0;
-        if (tags.includes(t)) hit += 3;
-        if (name.includes(t)) hit += 2;
-        if (description.includes(t)) hit += 1;
-        return s + hit;
-      }, 0);
-      return { row, score };
+      // Strong signal = the curated fields (tags ×3, filename ×2) — what the photo IS.
+      // Weak signal = the free-text description (×1) — often just an incidental mention
+      // (e.g. one item inside a bundle's contents list). A token can score in several
+      // fields; the contributions add up.
+      let strong = 0;
+      let weak = 0;
+      for (const t of tokens) {
+        if (tags.includes(t)) strong += 3;
+        if (name.includes(t)) strong += 2;
+        if (description.includes(t)) weak += 1;
+      }
+      return { row, strong, score: strong + weak };
     })
-    .filter((x) => x.score > 0)
+    // Require a tag/filename hit. A description-only match is too weak to auto-send: it's
+    // why "5L Car Shampoo" used to return a bundle photo that merely lists car shampoo
+    // among its 20 items. When the real photo isn't in the Vault we now return nothing,
+    // so the agent says it has no photo instead of sending a wrong one. (Description still
+    // boosts ranking among qualified matches.)
+    .filter((x) => x.strong > 0)
     .sort((a, b) => b.score - a.score || String(a.row.name).localeCompare(String(b.row.name)))
     .slice(0, Math.min(Math.max(parseInt(limit, 10) || 5, 1), 10));
 

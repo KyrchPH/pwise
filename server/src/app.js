@@ -16,7 +16,10 @@ import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
 import platformAccountsRoutes from './routes/platform_accounts.routes.js';
 import pageProductsRoutes from './routes/page_products.routes.js';
+import pageDiscountsRoutes from './routes/page_discounts.routes.js';
 import messagingRoutes from './routes/messaging.routes.js';
+import messageTemplatesRoutes from './routes/message_templates.routes.js';
+import conversationNotesRoutes from './routes/conversation_notes.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import connectionsRoutes from './routes/connections.routes.js';
 import webhooksRoutes from './routes/webhooks.routes.js';
@@ -55,8 +58,13 @@ export function createApp() {
   app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
   app.use('/api/pages', revalidate, platformAccountsRoutes);
   app.use('/api/page-products', revalidate, pageProductsRoutes);
+  app.use('/api/page-discounts', revalidate, pageDiscountsRoutes);
   // Messaging is real-time (SSE + frequent writes), so it's left uncached.
   app.use('/api/messages', messagingRoutes);
+  // Per-page canned-reply templates (normal CRUD — cacheable like other page content).
+  app.use('/api/message-templates', revalidate, messageTemplatesRoutes);
+  // Per-conversation notes — real-time (SSE on create/delete), so left uncached.
+  app.use('/api/conversation-notes', conversationNotesRoutes);
   // Agent-to-agent (internal team) chat — also real-time, uncached.
   app.use('/api/team', teamRoutes);
   // Agent-to-agent connections ("friends") — gates A2A DM replies.

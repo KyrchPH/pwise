@@ -10,8 +10,10 @@
             { "name": "accountId", "type": "string" },
             { "name": "serviceToken", "type": "string" },
             { "name": "query", "type": "string" },
+            { "name": "count", "type": "string" },
             { "name": "customerHandle", "type": "string" },
-            { "name": "origin", "type": "string" }
+            { "name": "origin", "type": "string" },
+            { "name": "note", "type": "string" }
           ]
         }
       },
@@ -100,7 +102,8 @@
           "parameters": [
             { "name": "accountId", "value": "={{ $json.accountId }}" },
             { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
-            { "name": "origin", "value": "={{ $json.origin }}" }
+            { "name": "origin", "value": "={{ $json.origin }}" },
+            { "name": "note", "value": "={{ $json.note }}" }
           ]
         },
         "options": {}
@@ -123,7 +126,8 @@
             { "name": "accountId", "value": "={{ $json.accountId }}" },
             { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
             { "name": "origin", "value": "={{ $json.origin }}" },
-            { "name": "query", "value": "={{ $json.query }}" }
+            { "name": "query", "value": "={{ $json.query }}" },
+            { "name": "count", "value": "={{ $json.count }}" }
           ]
         },
         "options": {}

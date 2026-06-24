@@ -39,7 +39,7 @@ export async function getConfig() {
 
 // Live-agent (human) response metrics for a page: CRR / FRT / ART over the page's
 // configured window. The rail refetches on inbox SSE activity + a slow poll, so it
-// stays ~real-time. Returns { crr, frt, art, config } | null (no/invalid page).
+// stays ~real-time. Returns { crr, frt, art, agents, config } | null (no/invalid page).
 export async function getAnalytics(accountId) {
   const { data } = await api.get('/messages/analytics', { params: { accountId } });
   return data.data.metrics;
@@ -69,6 +69,12 @@ export async function incomingTransfers() {
 export async function requestTransfer(conversationId, toUserId) {
   const { data } = await api.post(`/messages/${conversationId}/transfer`, { toUserId });
   return data.data.transfer;
+}
+
+// Sender cancels their pending transfer on a conversation (before it's accepted).
+export async function cancelTransfer(conversationId) {
+  const { data } = await api.post(`/messages/${conversationId}/transfer/cancel`);
+  return data.data;
 }
 
 export async function acceptTransfer(transferId) {

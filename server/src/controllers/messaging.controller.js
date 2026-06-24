@@ -76,6 +76,10 @@ export const declineTransfer = asyncHandler(async (req, res) => {
   sendSuccess(res, await service.declineTransfer(req.params.id, req.user));
 });
 
+export const cancelTransfer = asyncHandler(async (req, res) => {
+  sendSuccess(res, await service.cancelTransfer(req.params.id, req.user));
+});
+
 // Machine-only (service token): n8n delivers an incoming customer message (or an
 // AI reply it generated). The service appends it to the thread — creating the
 // thread if needed — and broadcasts over SSE so open inboxes update in real time.
@@ -92,12 +96,13 @@ export const knowledge = asyncHandler(async (req, res) => {
   sendSuccess(res, await service.searchKnowledge(q, { accountId, limit }));
 });
 
-// Machine-only (service token): the AI agent's `send_media` tool. Finds a media file
-// in the page's Vault folder matching the query and sends it to the customer.
-// Body: { accountId, customerHandle, origin, query }.
+// Machine-only (service token): the AI agent's `send_media` tool. Finds matching
+// media in the page's Vault folder and sends it to the customer; `count` (1–10)
+// sends a whole set in one call (e.g. all packages), defaulting to 1.
+// Body: { accountId, customerHandle, origin, query, count? }.
 export const media = asyncHandler(async (req, res) => {
-  const { accountId, customerHandle, origin, query } = req.body || {};
-  sendSuccess(res, await service.sendVaultMedia({ accountId, customerHandle, origin, query }));
+  const { accountId, customerHandle, origin, query, count } = req.body || {};
+  sendSuccess(res, await service.sendVaultMedia({ accountId, customerHandle, origin, query, count }));
 });
 
 // Machine-only (service token): n8n escalates a thread to a human. Pauses AI auto-reply

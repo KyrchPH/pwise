@@ -120,7 +120,7 @@
       "parameters": {
         "promptType": "define",
         "text": "={{ $('Message').first().json.message }}",
-        "options": { "systemMessage": "={{ $('Message').first().json.systemSales }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
+        "options": { "systemMessage": "={{ $('Message').first().json.systemSales }}\n\nShowing photos and media — be proactive:\n- You have a Send Media tool (send_media) that pulls photos/videos from THIS page's media library and shows them directly to the customer. It takes a query (what to show) and a count (how many files to send, up to 10).\n- Default to SHOWING, not just telling. Any time your reply mentions, recommends, or describes a specific product, service, package, design, sample, or before/after result, send the photo — do NOT wait for the customer to ask.\n- Checking is safe: the tool only ever sends files that genuinely match your query (it keyword-matches each file's tags, name, and description). If nothing fits, nothing is sent and you simply continue — so whenever something visual comes up, check.\n- For ONE thing: query it with the item's name/keywords and count 1 (e.g. query \"sofa deep cleaning result\", count 1).\n- To send SEVERAL or ALL of something (e.g. \"send all your packages\", \"show me your designs\"): make ONE call with a broad query (e.g. \"package\") and a higher count (up to 10). The tool returns every matching file, each sent once — no duplicates.\n- Do NOT call the tool many times with the same query to send a set — that just resends the same top file. Use ONE call with a higher count instead.\n- The tool reports back the files it sent and an \"alternatives\" list of other matches it didn't send. Only say you sent a photo if it reports sent: true; if nothing matched, don't invent one — say you don't have a photo for that yet and offer to help another way.\n- A short caption beats a big block of text. Skip media only for pure greetings, thanks, small talk, or answers with nothing visual to show." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -155,7 +155,7 @@
     },
     {
       "parameters": {
-        "description": "Hand off THIS conversation to a human live agent. Use ONLY when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager.",
+        "description": "Hand off THIS conversation to a human live agent. Use ONLY when the customer explicitly asks to talk to or be transferred to a human, live agent, real person, staff, or manager. ALWAYS pass a 'note': a short handoff summary for the teammate (who the customer is, what they want, key details gathered, and what's still pending) — it is saved as a note on the conversation so the human has context.",
         "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
         "workflowInputs": {
           "mappingMode": "defineBelow",
@@ -164,7 +164,8 @@
             "accountId": "={{ $('Message').first().json.accountId }}",
             "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
             "customerHandle": "={{ $('Message').first().json.chat_id }}",
-            "origin": "={{ $('Message').first().json.platform }}"
+            "origin": "={{ $('Message').first().json.platform }}",
+            "note": "={{ $fromAI('note', 'A short handoff summary for the human agent: who the customer is and what they want, key details gathered (name, item, prices/dates discussed), and what is still pending. 1-3 sentences.', 'string') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -172,7 +173,8 @@
             { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
             { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
             { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
-            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false }
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "note", "displayName": "note", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false }
           ],
           "attemptToConvertTypes": false,
           "convertFieldsToString": true
@@ -186,7 +188,7 @@
     },
     {
       "parameters": {
-        "description": "Send a photo / sample image from the shop's media library straight to the customer. Use when the customer asks to SEE something visual — a photo, picture, sample, before/after, or a look at a product, service, or result (e.g. 'pakita mo', 'may pic/litrato ba', 'can I see', 'patingin'). Pass a short description of what to show. The image is delivered to the customer automatically; after calling this, send one short caption / text reply.",
+        "description": "Send one or more photos/videos from the shop's media library straight to the customer. Use it PROACTIVELY whenever an image would help — any time you mention, recommend, or describe a product, service, package, sample, or result — not only when the customer explicitly asks (though also when they say 'pakita mo', 'may litrato ba', 'can I see', 'patingin'). Pass 'query' (what to show — the item's name or keywords) and 'count' (how many matching files to send, 1–10). Use count 1 for a single item; use a broad query like \"package\" with a higher count to send a whole set at once (e.g. all packages). ONE call sends every matching file once, with no duplicates — do NOT call repeatedly with the same query. The result lists exactly which file(s) were sent (name + description) and any close matches it did NOT send — ALWAYS read it. The file sent is the CLOSEST match and may be a bundle/package/set that only CONTAINS or relates to the item, not a photo of that exact item — so caption honestly: say what's actually in the photo and how it relates, and never send a photo and then claim you have none. If nothing was sent, describe the item in words instead.",
         "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
         "workflowInputs": {
           "mappingMode": "defineBelow",
@@ -196,7 +198,8 @@
             "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
             "customerHandle": "={{ $('Message').first().json.chat_id }}",
             "origin": "={{ $('Message').first().json.platform }}",
-            "query": "={{ $fromAI('input', 'A short description of the photo or sample to show, e.g. \"before and after deep cleaning\", \"sofa cleaning result\"', 'string') }}"
+            "query": "={{ $fromAI('input', 'A short description of the photo or sample to show, e.g. \"before and after deep cleaning\", \"sofa cleaning result\"', 'string') }}",
+            "count": "={{ $fromAI('count', 'How many matching files to send (1-10). Use 1 for a single item; use a higher number with a broad query to send a whole set at once, e.g. all packages', 'number') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -204,6 +207,7 @@
             { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
             { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
             { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "count", "displayName": "count", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
             { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
             { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false }
           ],
@@ -221,7 +225,7 @@
       "parameters": {
         "promptType": "define",
         "text": "={{ $('Message').first().json.message }}",
-        "options": { "systemMessage": "={{ $('Message').first().json.systemSupport }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
+        "options": { "systemMessage": "={{ $('Message').first().json.systemSupport }}\n\nShowing photos and media — be proactive:\n- You have a Send Media tool (send_media) that pulls photos/videos from THIS page's media library and shows them directly to the customer. It takes a query (what to show) and a count (how many files to send, up to 10).\n- Default to SHOWING, not just telling. Any time your reply mentions, recommends, or describes a specific product, service, package, design, sample, or before/after result, send the photo — do NOT wait for the customer to ask.\n- Checking is safe: the tool only ever sends files that genuinely match your query (it keyword-matches each file's tags, name, and description). If nothing fits, nothing is sent and you simply continue — so whenever something visual comes up, check.\n- For ONE thing: query it with the item's name/keywords and count 1 (e.g. query \"sofa deep cleaning result\", count 1).\n- To send SEVERAL or ALL of something (e.g. \"send all your packages\", \"show me your designs\"): make ONE call with a broad query (e.g. \"package\") and a higher count (up to 10). The tool returns every matching file, each sent once — no duplicates.\n- Do NOT call the tool many times with the same query to send a set — that just resends the same top file. Use ONE call with a higher count instead.\n- The tool reports back the files it sent and an \"alternatives\" list of other matches it didn't send. Only say you sent a photo if it reports sent: true; if nothing matched, don't invent one — say you don't have a photo for that yet and offer to help another way.\n- A short caption beats a big block of text. Skip media only for pure greetings, thanks, small talk, or answers with nothing visual to show." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
@@ -258,7 +262,7 @@
       "parameters": {
         "promptType": "define",
         "text": "={{ $('Message').first().json.message }}",
-        "options": { "systemMessage": "={{ $('Message').first().json.systemGeneral }}\n\nShowing photos and media:\n- You have a Send Media tool (send_media) that finds a photo or video in THIS page's media library and shows it directly to the customer.\n- When an image would help, USE it — e.g. the customer asks what something looks like, asks to \"see\" a product / sample / menu / design, asks for a photo, or is choosing between options. If a relevant image is available, send it instead of describing the item in a long paragraph.\n- To use it, pass a short query of what to show (the product name or a few keywords). It matches the library by each file's tags, name, and description, so use the customer's own words.\n- A short sentence plus the photo beats a big block of text.\n- Only say you sent a photo if the tool reports it actually sent one. If nothing matches, say you don't have a photo for that yet (don't invent one) and offer to help another way.\n- Don't over-send — use it when it genuinely helps, not in every message." }
+        "options": { "systemMessage": "={{ $('Message').first().json.systemGeneral }}\n\nShowing photos and media — be proactive:\n- You have a Send Media tool (send_media) that pulls photos/videos from THIS page's media library and shows them directly to the customer. It takes a query (what to show) and a count (how many files to send, up to 10).\n- Default to SHOWING, not just telling. Any time your reply mentions, recommends, or describes a specific product, service, package, design, sample, or before/after result, send the photo — do NOT wait for the customer to ask.\n- Checking is safe: the tool only ever sends files that genuinely match your query (it keyword-matches each file's tags, name, and description). If nothing fits, nothing is sent and you simply continue — so whenever something visual comes up, check.\n- For ONE thing: query it with the item's name/keywords and count 1 (e.g. query \"sofa deep cleaning result\", count 1).\n- To send SEVERAL or ALL of something (e.g. \"send all your packages\", \"show me your designs\"): make ONE call with a broad query (e.g. \"package\") and a higher count (up to 10). The tool returns every matching file, each sent once — no duplicates.\n- Do NOT call the tool many times with the same query to send a set — that just resends the same top file. Use ONE call with a higher count instead.\n- The tool reports back the files it sent and an \"alternatives\" list of other matches it didn't send. Only say you sent a photo if it reports sent: true; if nothing matched, don't invent one — say you don't have a photo for that yet and offer to help another way.\n- A short caption beats a big block of text. Skip media only for pure greetings, thanks, small talk, or answers with nothing visual to show." }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,

@@ -30,6 +30,8 @@ function toSafe(r) {
     vault_folder_id: r.vault_folder_id != null ? Number(r.vault_folder_id) : null,
     // Messaging-analytics thresholds (resolved with defaults) for the live-agent metrics.
     analytics_config: resolveAnalyticsConfig(r.analytics_config),
+    // Display currency (ISO 4217) for product prices; defaults to Peso.
+    currency: r.currency || 'PHP',
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -334,6 +336,12 @@ export async function update(id, data = {}) {
   // Messaging-analytics thresholds — stored resolved/clamped (blanks → defaults).
   if (data.analytics_config !== undefined) {
     set('analytics_config', JSON.stringify(resolveAnalyticsConfig(data.analytics_config)));
+  }
+
+  // Display currency (ISO 4217, 3 letters). Anything else → Peso.
+  if (data.currency !== undefined) {
+    const c = String(data.currency || '').trim().toUpperCase();
+    set('currency', /^[A-Z]{3}$/.test(c) ? c : 'PHP');
   }
 
   if (fields.length) {

@@ -12,6 +12,9 @@ import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import ProductsPage from './pages/Products/ProductsPage.jsx';
+import ShopLayout from './pages/Shop/ShopLayout.jsx';
+import ComingSoon from './pages/Shop/ComingSoon.jsx';
+import DiscountsPage from './pages/Shop/DiscountsPage.jsx';
 import SettingsPage from './pages/Settings/SettingsPage.jsx';
 import ChangePasswordPage from './pages/Profile/ChangePasswordPage.jsx';
 import LogsPage from './pages/Logs/LogsPage.jsx';
@@ -42,7 +45,14 @@ export default function App() {
         <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
         <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><PostPoolPage /></ModuleRoute>} />
         <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
-        <Route path="/products" element={<ModuleRoute moduleId="products"><ProductsPage /></ModuleRoute>} />
+        <Route path="/shop" element={<ModuleRoute moduleId="products"><ShopLayout /></ModuleRoute>}>
+          <Route index element={<Navigate to="/shop/products" replace />} />
+          <Route path="products" element={<ProductsPage />} />
+          <Route path="discounts" element={<DiscountsPage />} />
+          <Route path="orders" element={<ComingSoon title="Orders" />} />
+          <Route path="receipts" element={<ComingSoon title="Receipts" />} />
+        </Route>
+        <Route path="/products" element={<Navigate to="/shop/products" replace />} />
         <Route path="/settings" element={<ModuleRoute moduleId="settings"><SettingsPage /></ModuleRoute>} />
         <Route path="/settings/change-password" element={<Navigate to="/profile/change-password" replace />} />
         <Route path="/logs" element={<ModuleRoute moduleId="logs"><LogsPage /></ModuleRoute>} />

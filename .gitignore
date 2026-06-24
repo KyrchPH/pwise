@@ -10,6 +10,9 @@ node_modules/
 .env.*.local
 *.pem
 
+# Local-only n8n exports that embed the real service token (keep out of git)
+*.local.json
+
 # Build output
 dist/
 build/

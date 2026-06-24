@@ -345,6 +345,7 @@ CREATE TABLE IF NOT EXISTS page_products (
   description TEXT NULL,
   category    VARCHAR(120) NULL,
   tags        JSON NULL,
+  options     JSON NULL,                       -- option axes for variants: [{"name","values":[...]}]
   photo_key   VARCHAR(512) NULL,
   created_by  INT NULL,
   updated_by  INT NULL,
@@ -409,4 +410,57 @@ CREATE TABLE IF NOT EXISTS conversation_transfers (
   CONSTRAINT chk_transfer_status CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled')),
   INDEX idx_transfer_to_pending (to_user_id, status),
   INDEX idx_transfer_conversation (conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- page_product_variants — option-matrix variants for page_products (migration 035).
+-- One row per generated combination, each with its own price + photo. A product with
+-- no `options` is "simple" and has no variants (uses page_products.base_price).
+CREATE TABLE IF NOT EXISTS page_product_variants (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  product_id    INT NOT NULL,
+  combo_key     VARCHAR(255) NOT NULL,        -- canonical "Size=1L|Scent=Lemon"
+  option_values JSON NOT NULL,                -- {"Size":"1L","Scent":"Lemon"}
+  price         DECIMAL(12, 2) NULL,          -- NULL = "Quote" for this combination
+  photo_key     VARCHAR(512) NULL,            -- stable S3 key (API presigns on read)
+  active        TINYINT(1) NOT NULL DEFAULT 1,
+  sort_order    INT NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ppv_product FOREIGN KEY (product_id) REFERENCES page_products(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_ppv_combo (product_id, combo_key),
+  INDEX idx_ppv_product (product_id, sort_order, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- page_discounts — per-page cart discount rules (migration 036). value_type is fixed
+-- or percent (with optional percent_cap); scope decides when the rule applies and
+-- applies_to whether it discounts the whole order or only qualifying items.
+CREATE TABLE IF NOT EXISTS page_discounts (
+  id                INT AUTO_INCREMENT PRIMARY KEY,
+  account_id        INT NOT NULL,
+  name              VARCHAR(255) NOT NULL,
+  description       TEXT NULL,
+  active            TINYINT(1) NOT NULL DEFAULT 1,
+  value_type        ENUM('fixed', 'percent') NOT NULL,
+  value             DECIMAL(12, 2) NOT NULL,
+  percent_cap       DECIMAL(12, 2) NULL,
+  scope             ENUM('all', 'category', 'product', 'cart_item_count', 'product_qty', 'min_order_amount') NOT NULL,
+  target_category   VARCHAR(120) NULL,
+  target_product_id INT NULL,
+  threshold_qty     INT NULL,
+  min_amount        DECIMAL(12, 2) NULL,
+  applies_to        ENUM('order', 'matching_items') NOT NULL DEFAULT 'order',
+  stackable         TINYINT(1) NOT NULL DEFAULT 0,
+  priority          INT NOT NULL DEFAULT 0,
+  starts_at         DATETIME NULL,
+  ends_at           DATETIME NULL,
+  code              VARCHAR(60) NULL,
+  created_by        INT NULL,
+  updated_by        INT NULL,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pd_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pd_product FOREIGN KEY (target_product_id) REFERENCES page_products(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pd_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_pd_editor  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_pd_account (account_id, active, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
