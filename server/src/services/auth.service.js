@@ -37,8 +37,9 @@ async function publicUser(row) {
   return { ...rest, avatar_url: avatarUrl, module_access: moduleAccessForUser(row) };
 }
 
-// Registration is invite-only: a valid single-use token is required and is
-// consumed atomically with the account creation.
+// Registration is invite-only: a valid single-use token is required and is consumed
+// atomically with the account creation — or with REVIVING a soft-deleted account that
+// re-registers the same email (same id, so its history comes back; see below).
 export async function register({ name, email, password, token }) {
   if (!name || !email || !password) throw ApiError.badRequest('name, email and password are required');
   if (String(password).length < 8) throw ApiError.badRequest('password must be at least 8 characters');
@@ -46,19 +47,40 @@ export async function register({ name, email, password, token }) {
   const invite = await invitesService.findUsable(token); // throws if missing/used/expired
   const inviteModules = moduleAccessForUser(invite);
 
-  const existing = await query('SELECT id FROM users WHERE email = ?', [email]);
-  if (existing.length) throw ApiError.conflict('email already registered');
+  // A soft-deleted account still owns its email (it's UNIQUE). Re-registering that
+  // email with a valid invite REVIVES the same row — same user id, so the person's
+  // past conversations / notes / assignments come back — with a fresh name, password,
+  // and access. A live (not-deleted) account still blocks the email.
+  const existing = await query('SELECT id, deleted_at FROM users WHERE email = ?', [email]);
+  if (existing.length && !existing[0].deleted_at) throw ApiError.conflict('email already registered');
+  const reviveId = existing.length ? existing[0].id : null;
 
   const hash = await bcrypt.hash(password, 10);
   const conn = await getConnection();
   try {
     await conn.beginTransaction();
-    const [result] = await conn.query(
-      'INSERT INTO users (name, email, password_hash, module_access) VALUES (?, ?, ?, ?)',
-      [name, email, hash, serializeModuleAccess(inviteModules)],
-    );
-    const userId = result.insertId;
-    await conn.query('INSERT INTO posting_settings (user_id, owner_email) VALUES (?, ?)', [userId, email]);
+    let userId;
+    if (reviveId != null) {
+      // Revive on the same id, clearing the soft-delete. role is forced to 'user' so a
+      // deleted admin can't come back as admin through a non-admin invite link.
+      userId = reviveId;
+      await conn.query(
+        "UPDATE users SET name = ?, password_hash = ?, module_access = ?, role = 'user', is_active = 1, deleted_at = NULL WHERE id = ?",
+        [name, hash, serializeModuleAccess(inviteModules), userId],
+      );
+      // The 1:1 settings row already exists from the original signup; keep/refresh it.
+      await conn.query(
+        'INSERT INTO posting_settings (user_id, owner_email) VALUES (?, ?) ON DUPLICATE KEY UPDATE owner_email = ?',
+        [userId, email, email],
+      );
+    } else {
+      const [result] = await conn.query(
+        'INSERT INTO users (name, email, password_hash, module_access) VALUES (?, ?, ?, ?)',
+        [name, email, hash, serializeModuleAccess(inviteModules)],
+      );
+      userId = result.insertId;
+      await conn.query('INSERT INTO posting_settings (user_id, owner_email) VALUES (?, ?)', [userId, email]);
+    }
 
     const claimed = await invitesService.consume(conn, token, userId);
     if (!claimed) throw new ApiError(410, 'this invite link has already been used');

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import * as pagesService from '../../services/pages.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { CURRENCIES } from '../../config/currency.js';
-import { Card, Button, Field, Spinner, PageAvatar } from '../../components/ui.jsx';
+import { Card, Button, Field, Modal, Spinner, PageAvatar } from '../../components/ui.jsx';
 
 const EditIcon = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -75,6 +75,18 @@ const BLANK = {
   telegram_remove: false,
   telegram_has: false,
   telegram_username: '',
+  // Optional Instagram channel (reuses the page access token).
+  instagram_account_id: '',
+  instagram_username: '',
+  instagram_remove: false,
+  instagram_has: false,
+  // Optional WhatsApp channel (its own Cloud-API token).
+  wa_phone_number_id: '',
+  wa_business_account_id: '',
+  wa_phone_display: '',
+  wa_access_token: '',
+  whatsapp_remove: false,
+  whatsapp_has: false,
   ai_prompt_sales: '',
   ai_prompt_support: '',
   ai_prompt_general: '',
@@ -88,13 +100,16 @@ const BLANK = {
 
 export default function FacebookPages({ embedded = false }) {
   const toast = useToast();
-  const { hash } = useLocation();
+  const { hash, search, pathname } = useLocation();
+  const navigate = useNavigate();
   const { refresh: refreshSwitcher } = usePages();
   const { isAdmin } = useAuth();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { id?, ...fields }
   const [busy, setBusy] = useState(false);
+  const [fbBusy, setFbBusy] = useState(false); // Connect-with-Facebook / import in flight
+  const [importBatch, setImportBatch] = useState(null); // { batch, pages, selected:Set } for the picker
   const [tested, setTested] = useState(false); // FB connection verified for the CURRENT field values
   const [testInfo, setTestInfo] = useState(null); // { name, followers } from the successful test
   const [menuId, setMenuId] = useState(null); // page whose options dropdown is open
@@ -122,6 +137,87 @@ export default function FacebookPages({ embedded = false }) {
     const t = setTimeout(() => el.classList.remove('flash-highlight'), 1800);
     return () => clearTimeout(t);
   }, [hash]);
+
+  // Return from the Facebook OAuth round-trip: ?fbimport=<batch> opens the page
+  // picker; ?fbimport_error=<msg> surfaces a failure. The query is stripped afterward
+  // so a refresh doesn't re-trigger it.
+  const clearImportQuery = () => navigate(`${pathname}#facebook-pages`, { replace: true });
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const err = params.get('fbimport_error');
+    const batch = params.get('fbimport');
+    if (err) {
+      toast.error(`Facebook: ${err}`);
+      clearImportQuery();
+      return;
+    }
+    if (!batch) return;
+    pagesService
+      .facebookDiscovered(batch)
+      .then((d) => {
+        if (d.expired || !d.pages?.length) {
+          toast.error('The Facebook import session expired. Please connect again.');
+          clearImportQuery();
+          return;
+        }
+        // Pre-select the pages not already connected (already-linked ones are opt-in,
+        // since re-importing them just refreshes the token).
+        const selected = new Set(d.pages.filter((p) => !p.alreadyConnected).map((p) => p.fb_page_id));
+        setImportBatch({ batch, pages: d.pages, selected });
+      })
+      .catch((e) => {
+        toast.error(apiError(e));
+        clearImportQuery();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  // Kick off the OAuth flow — a full-page redirect to Facebook.
+  const startFacebookConnect = async () => {
+    if (fbBusy) return;
+    setFbBusy(true);
+    try {
+      const url = await pagesService.facebookOAuthUrl();
+      window.location.href = url;
+    } catch (e) {
+      toast.error(apiError(e));
+      setFbBusy(false); // only reset on failure — success navigates away
+    }
+  };
+
+  const toggleImportPage = (id) =>
+    setImportBatch((b) => {
+      if (!b) return b;
+      const selected = new Set(b.selected);
+      if (selected.has(id)) selected.delete(id);
+      else selected.add(id);
+      return { ...b, selected };
+    });
+
+  const doImport = async () => {
+    if (!importBatch || fbBusy) return;
+    setFbBusy(true);
+    try {
+      const results = await pagesService.facebookImport(importBatch.batch, [...importBatch.selected]);
+      const done = results.filter((r) => r.status === 'connected' || r.status === 'reconnected');
+      const reconnected = results.filter((r) => r.status === 'reconnected').length;
+      const failed = results.filter((r) => r.status === 'failed');
+      if (done.length) {
+        toast.success(
+          `Imported ${done.length} page${done.length === 1 ? '' : 's'}${reconnected ? ` (${reconnected} reconnected)` : ''}.`,
+        );
+      }
+      if (failed.length) toast.error(`${failed.length} page${failed.length === 1 ? '' : 's'} couldn’t be imported.`);
+      setImportBatch(null);
+      clearImportQuery();
+      load();
+      refreshSwitcher();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setFbBusy(false);
+    }
+  };
 
   // Close the open page-options dropdown on outside-click / Escape.
   useEffect(() => {
@@ -176,6 +272,13 @@ export default function FacebookPages({ embedded = false }) {
       telegram_bot_name: p.telegram_bot_name || '',
       telegram_has: !!p.has_telegram_bot,
       telegram_username: p.telegram_bot_username || '',
+      instagram_account_id: p.instagram_account_id || '',
+      instagram_username: p.instagram_username || '',
+      instagram_has: !!p.instagram_account_id,
+      wa_phone_number_id: p.wa_phone_number_id || '',
+      wa_business_account_id: p.wa_business_account_id || '',
+      wa_phone_display: p.wa_phone_display || '',
+      whatsapp_has: !!p.has_whatsapp,
       an_periodDays: p.analytics_config?.periodDays ?? 7,
       an_crrHours: p.analytics_config?.crrWindowHours ?? 12,
       an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
@@ -280,6 +383,22 @@ export default function FacebookPages({ embedded = false }) {
         payload.telegram_bot_name = editing.telegram_bot_name.trim();
         if (editing.telegram_api_key.trim()) payload.telegram_api_key = editing.telegram_api_key.trim();
       }
+      // Optional Instagram channel (reuses the page access token).
+      if (editing.id && editing.instagram_remove) {
+        payload.instagram_remove = true;
+      } else {
+        payload.instagram_account_id = editing.instagram_account_id.trim();
+        payload.instagram_username = editing.instagram_username.trim();
+      }
+      // Optional WhatsApp channel (token is write-only — blank on edit keeps the current one).
+      if (editing.id && editing.whatsapp_remove) {
+        payload.whatsapp_remove = true;
+      } else {
+        payload.wa_phone_number_id = editing.wa_phone_number_id.trim();
+        payload.wa_business_account_id = editing.wa_business_account_id.trim();
+        payload.wa_phone_display = editing.wa_phone_display.trim();
+        if (editing.wa_access_token.trim()) payload.wa_access_token = editing.wa_access_token.trim();
+      }
       // Per-agent AI prompts (admin-only) — sent on both connect and edit. The server
       // trims; blanks are blocked above, so every page is saved with all three set.
       if (isAdmin) {
@@ -371,9 +490,16 @@ export default function FacebookPages({ embedded = false }) {
           </div>
         </div>
         {!editing && (
-          <Button size="sm" onClick={startAdd}>
-            + Connect page
-          </Button>
+          <div className="row gap-sm" style={{ flexWrap: 'wrap' }}>
+            {isAdmin && (
+              <Button size="sm" onClick={startFacebookConnect} disabled={fbBusy}>
+                {fbBusy ? 'Connecting…' : 'Connect with Facebook'}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={startAdd}>
+              + Add manually
+            </Button>
+          </div>
         )}
       </div>
 
@@ -431,6 +557,89 @@ export default function FacebookPages({ embedded = false }) {
                     onChange={setTgField('telegram_api_key')}
                     autoComplete="new-password"
                     placeholder={editing.telegram_has ? '••••••••' : '123456789:ABCdef…'}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
+
+          {/* Optional Instagram channel — replies reuse this page's access token. */}
+          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
+              <div style={{ fontWeight: 600 }} className="text-sm">
+                Instagram <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
+              </div>
+              {editing.instagram_has && (
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={editing.instagram_remove}
+                    onChange={(e) => setEditing((ed) => ({ ...ed, instagram_remove: e.target.checked }))}
+                  />
+                  Remove
+                </label>
+              )}
+            </div>
+            {editing.instagram_remove ? (
+              <div className="text-sm text-muted">The Instagram channel will be detached when you save.</div>
+            ) : (
+              <>
+                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                  Link this page&apos;s Instagram professional account. Replies reuse the page access token. Auto-filled when
+                  you Connect with Facebook.
+                </div>
+                <Field label="Instagram account ID">
+                  <input className="input" value={editing.instagram_account_id} onChange={setTgField('instagram_account_id')} placeholder="e.g. 17841400000000000" />
+                </Field>
+                <Field label="Username" hint="optional">
+                  <input className="input" value={editing.instagram_username} onChange={setTgField('instagram_username')} placeholder="e.g. wisecleanershop" />
+                </Field>
+              </>
+            )}
+          </div>
+
+          {/* Optional WhatsApp channel — its own Cloud-API token. */}
+          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
+              <div style={{ fontWeight: 600 }} className="text-sm">
+                WhatsApp <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
+              </div>
+              {editing.whatsapp_has && (
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={editing.whatsapp_remove}
+                    onChange={(e) => setEditing((ed) => ({ ...ed, whatsapp_remove: e.target.checked }))}
+                  />
+                  Remove
+                </label>
+              )}
+            </div>
+            {editing.whatsapp_remove ? (
+              <div className="text-sm text-muted">The WhatsApp channel will be detached when you save.</div>
+            ) : (
+              <>
+                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                  Connect a WhatsApp Cloud API number. From the Meta app&apos;s WhatsApp setup, paste the phone number ID,
+                  WhatsApp Business Account ID, and a permanent access token.
+                </div>
+                <Field label="Phone number ID">
+                  <input className="input" value={editing.wa_phone_number_id} onChange={setTgField('wa_phone_number_id')} placeholder="e.g. 123456789012345" />
+                </Field>
+                <Field label="WhatsApp Business Account ID" hint="for webhook subscription">
+                  <input className="input" value={editing.wa_business_account_id} onChange={setTgField('wa_business_account_id')} placeholder="e.g. 102030405060708" />
+                </Field>
+                <Field label="Display number" hint="optional">
+                  <input className="input" value={editing.wa_phone_display} onChange={setTgField('wa_phone_display')} placeholder="e.g. +63 917 000 0000" />
+                </Field>
+                <Field label="Access token" hint={editing.whatsapp_has ? 'leave blank to keep current' : 'permanent system-user token'}>
+                  <input
+                    className="input"
+                    type="password"
+                    value={editing.wa_access_token}
+                    onChange={setTgField('wa_access_token')}
+                    autoComplete="new-password"
+                    placeholder={editing.whatsapp_has ? '••••••••' : 'EAAG…'}
                   />
                 </Field>
               </>
@@ -623,6 +832,56 @@ export default function FacebookPages({ embedded = false }) {
           ))}
         </div>
       )}
+
+      <Modal
+        open={!!importBatch}
+        title="Import Facebook Pages"
+        onClose={() => {
+          if (fbBusy) return;
+          setImportBatch(null);
+          clearImportQuery();
+        }}
+        className="modal--fbimport"
+        footer={
+          <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setImportBatch(null);
+                clearImportQuery();
+              }}
+              disabled={fbBusy}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" onClick={doImport} disabled={fbBusy || !importBatch?.selected.size}>
+              {fbBusy
+                ? 'Importing…'
+                : `Import ${importBatch?.selected.size || 0} page${importBatch?.selected.size === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+          Choose which Pages to connect. Each gets a long-lived token and is subscribed to Messenger automatically.
+        </p>
+        <ul className="fbimport-list">
+          {importBatch?.pages.map((p) => (
+            <li key={p.fb_page_id}>
+              <label className="fbimport-row">
+                <input
+                  type="checkbox"
+                  checked={importBatch.selected.has(p.fb_page_id)}
+                  onChange={() => toggleImportPage(p.fb_page_id)}
+                />
+                <span className="fbimport-row__name">{p.name}</span>
+                {p.alreadyConnected && <span className="fb-chip">Connected · refresh token</span>}
+              </label>
+            </li>
+          ))}
+        </ul>
+      </Modal>
     </>
   );
 

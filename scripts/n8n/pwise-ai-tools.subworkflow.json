@@ -59,6 +59,17 @@
               },
               "renameOutput": true,
               "outputKey": "send_media"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000004", "leftValue": "={{ $json.action }}", "rightValue": "create_order", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "create_order"
             }
           ]
         },
@@ -137,6 +148,29 @@
       "position": [192, 336],
       "id": "11110000-0000-4000-8000-000000000005",
       "name": "Send Media API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/order",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
+            { "name": "origin", "value": "={{ $json.origin }}" },
+            { "name": "note", "value": "={{ $json.note }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 560],
+      "id": "11110000-0000-4000-8000-000000000006",
+      "name": "Create Order API"
     }
   ],
   "connections": {
@@ -145,7 +179,8 @@
       "main": [
         [ { "node": "Search Catalog API", "type": "main", "index": 0 } ],
         [ { "node": "Handoff API", "type": "main", "index": 0 } ],
-        [ { "node": "Send Media API", "type": "main", "index": 0 } ]
+        [ { "node": "Send Media API", "type": "main", "index": 0 } ],
+        [ { "node": "Create Order API", "type": "main", "index": 0 } ]
       ]
     }
   },

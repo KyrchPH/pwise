@@ -3,6 +3,7 @@ import { sendSuccess } from '../utils/response.util.js';
 import ApiError from '../utils/ApiError.js';
 import * as invites from '../services/invites.service.js';
 import * as admin from '../services/admin.service.js';
+import * as appSettings from '../services/app_settings.service.js';
 
 // Invites -------------------------------------------------------------------
 export const createInvite = asyncHandler(async (req, res) => {
@@ -44,4 +45,14 @@ export const setModuleAccess = asyncHandler(async (req, res) => {
   if (Number(req.params.id) === req.user.id) throw ApiError.badRequest("you can't change your own access");
   const result = await admin.setModuleAccess(req.params.id, req.body?.modules);
   sendSuccess(res, result);
+});
+
+// Global automation pause switches (app-wide) -------------------------------
+export const getPause = asyncHandler(async (req, res) => {
+  sendSuccess(res, await appSettings.getPauseState());
+});
+
+export const setPause = asyncHandler(async (req, res) => {
+  const { aiPaused, postingPaused } = req.body || {};
+  sendSuccess(res, await appSettings.setPause({ aiPaused, postingPaused }, req.user.id));
 });

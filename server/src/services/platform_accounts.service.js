@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import { encrypt, decrypt } from '../utils/crypto.util.js';
 import * as fb from './fb.service.js';
 import * as tg from './telegram.service.js';
+import * as wa from './whatsapp.service.js';
 import { createFolder } from './vault.service.js';
 import { env } from '../config/env.js';
 import { composeAgentSystemMessages, DEFAULT_AGENT_PROMPTS, AGENT_ROLES } from './ai_prompt.service.js';
@@ -25,6 +26,14 @@ function toSafe(r) {
     telegram_bot_name: r.telegram_bot_name || null,
     telegram_bot_username: r.telegram_bot_username || null,
     has_telegram_bot: !!r.telegram_bot_token,
+    // Optional Instagram + WhatsApp channels on this page. IG reuses the page access
+    // token; the WhatsApp token is never exposed (has_whatsapp just flags it's set).
+    instagram_account_id: r.instagram_account_id || null,
+    instagram_username: r.instagram_username || null,
+    wa_phone_number_id: r.wa_phone_number_id || null,
+    wa_business_account_id: r.wa_business_account_id || null,
+    wa_phone_display: r.wa_phone_display || null,
+    has_whatsapp: !!r.wa_access_token,
     is_active: !!r.is_active,
     // The page's dedicated Vault folder (the AI agent's media scope).
     vault_folder_id: r.vault_folder_id != null ? Number(r.vault_folder_id) : null,
@@ -67,6 +76,12 @@ export async function getDecrypted(id) {
     telegram_bot_name: r.telegram_bot_name || null,
     telegram_bot_username: r.telegram_bot_username || null,
     telegram_bot_token: decrypt(r.telegram_bot_token),
+    instagram_account_id: r.instagram_account_id || null,
+    instagram_username: r.instagram_username || null,
+    wa_phone_number_id: r.wa_phone_number_id || null,
+    wa_business_account_id: r.wa_business_account_id || null,
+    wa_phone_display: r.wa_phone_display || null,
+    wa_access_token: decrypt(r.wa_access_token),
     is_active: !!r.is_active,
   };
 }
@@ -167,6 +182,21 @@ async function ensureMessengerSubscription(accountId) {
   }
 }
 
+// Subscribe this page's WhatsApp Business Account to the app's webhooks so its inbound
+// messages reach /api/webhooks/whatsapp. Only attempted when a WhatsApp token + WABA id
+// are configured. Best-effort. (Instagram inbound rides the same page subscription as
+// Messenger, so it needs no separate call.)
+async function ensureWhatsappSubscription(accountId) {
+  try {
+    const a = await getDecrypted(accountId);
+    if (!a.wa_access_token || !a.wa_business_account_id) return;
+    const r = await wa.subscribeWaba(a.wa_access_token, a.wa_business_account_id);
+    if (!r.ok) console.warn(`[accounts] whatsapp subscribe failed (account ${accountId}): ${r.error}`);
+  } catch (e) {
+    console.warn(`[accounts] ensureWhatsappSubscription error: ${e?.message || e}`);
+  }
+}
+
 // Re-register this page's inbound webhooks with the platforms — the Settings
 // "Refresh" action. Unlike create/update it changes no stored credentials: it just
 // re-points Telegram's setWebhook (and re-subscribes Messenger) at our gateway, then
@@ -251,9 +281,10 @@ export async function create(actor = {}, data = {}) {
   const result = await query(
     `INSERT INTO platform_accounts
        (user_id, platform_name, account_name, fb_page_id, app_id, app_secret, app_client_token, access_token,
-        telegram_bot_name, telegram_bot_token, telegram_bot_username, is_active,
-        ai_prompt_sales, ai_prompt_support, ai_prompt_general)
-     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+        telegram_bot_name, telegram_bot_token, telegram_bot_username,
+        instagram_account_id, instagram_username, wa_phone_number_id, wa_business_account_id, wa_phone_display, wa_access_token,
+        is_active, ai_prompt_sales, ai_prompt_support, ai_prompt_general)
+     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       actor.id ?? null,
       account_name,
@@ -265,6 +296,12 @@ export async function create(actor = {}, data = {}) {
       tgName,
       tgToken,
       tgUsername,
+      promptVal(data.instagram_account_id),
+      promptVal(data.instagram_username),
+      promptVal(data.wa_phone_number_id),
+      promptVal(data.wa_business_account_id),
+      promptVal(data.wa_phone_display),
+      data.wa_access_token ? encrypt(String(data.wa_access_token).trim()) : null,
       promptVal(data.ai_prompt_sales),
       promptVal(data.ai_prompt_support),
       promptVal(data.ai_prompt_general),
@@ -282,6 +319,7 @@ export async function create(actor = {}, data = {}) {
   const account = await getById(result.insertId);
   if (tgToken) ensureTelegramWebhook(account.id).catch(() => {}); // wire up the bot's webhook
   ensureMessengerSubscription(account.id).catch(() => {});
+  ensureWhatsappSubscription(account.id).catch(() => {});
   return account;
 }
 
@@ -326,6 +364,27 @@ export async function update(id, data = {}) {
     }
   }
 
+  // Optional Instagram channel (reuses the page access token; just store the id/handle).
+  if (data.instagram_remove) {
+    set('instagram_account_id', null);
+    set('instagram_username', null);
+  } else {
+    if (data.instagram_account_id !== undefined) set('instagram_account_id', String(data.instagram_account_id || '').trim() || null);
+    if (data.instagram_username !== undefined) set('instagram_username', String(data.instagram_username || '').trim() || null);
+  }
+  // Optional WhatsApp channel. The token is write-only (blank on edit = keep existing).
+  if (data.whatsapp_remove) {
+    set('wa_phone_number_id', null);
+    set('wa_business_account_id', null);
+    set('wa_phone_display', null);
+    set('wa_access_token', null);
+  } else {
+    if (data.wa_phone_number_id !== undefined) set('wa_phone_number_id', String(data.wa_phone_number_id || '').trim() || null);
+    if (data.wa_business_account_id !== undefined) set('wa_business_account_id', String(data.wa_business_account_id || '').trim() || null);
+    if (data.wa_phone_display !== undefined) set('wa_phone_display', String(data.wa_phone_display || '').trim() || null);
+    if (data.wa_access_token) set('wa_access_token', encrypt(String(data.wa_access_token).trim()));
+  }
+
   // Per-agent AI system prompts (admin-configured in page settings). Empty → NULL,
   // which makes the agent fall back to the built-in default at send time.
   for (const role of AGENT_ROLES) {
@@ -363,6 +422,8 @@ export async function update(id, data = {}) {
     ensureTelegramWebhook(id).catch(() => {});
   }
   ensureMessengerSubscription(id).catch(() => {});
+  ensureWhatsappSubscription(id).catch(() => {});
+  clearConnectionHealth(id); // credentials may have changed — re-validate on next check
   return getById(id);
 }
 
@@ -376,6 +437,7 @@ export async function remove(id) {
   await query('UPDATE posting_settings SET selected_account_id = NULL WHERE selected_account_id = ?', [id]);
   await query('DELETE FROM platform_accounts WHERE id = ?', [id]);
   statsCache.delete(Number(id));
+  healthCache.delete(Number(id));
   return { id: Number(id), deleted: true };
 }
 
@@ -401,6 +463,55 @@ export async function getStats(accountId) {
   }
   statsCache.set(id, { at: Date.now(), data });
   return data;
+}
+
+// ── Connection health ───────────────────────────────────────────────────────
+// Is each page's stored token still accepted by Facebook? Cached briefly so the
+// app-start check doesn't hammer the Graph API. reason: 'ok' | 'no_token' |
+// 'invalid_token' | 'unknown'. 'unknown' = a transient network/Graph hiccup — it is
+// NOT cached and the client treats it as "not broken", so an outage never locks a
+// page. Best-effort; never throws.
+const healthCache = new Map(); // id -> { at, ok, reason }
+const HEALTH_TTL_MS = 5 * 60 * 1000;
+
+async function checkConnection(id) {
+  const key = Number(id);
+  const cached = healthCache.get(key);
+  if (cached && Date.now() - cached.at < HEALTH_TTL_MS) {
+    return { id: key, ok: cached.ok, reason: cached.reason };
+  }
+  let ok = false;
+  let reason = 'unknown';
+  try {
+    const a = await getDecrypted(id);
+    if (!a.access_token) {
+      reason = 'no_token';
+    } else {
+      const res = await fb.verifyPageToken({ token: a.access_token, fbPageId: a.fb_page_id });
+      ok = !!res.ok;
+      reason = res.ok ? 'ok' : 'invalid_token';
+    }
+  } catch {
+    reason = 'unknown'; // transient — don't cache, don't treat as broken
+  }
+  if (reason !== 'unknown') healthCache.set(key, { at: Date.now(), ok, reason });
+  return { id: key, ok, reason };
+}
+
+// Health for every connected Facebook page — drives the client's app-start check.
+export async function getConnectionHealth() {
+  const rows = await query(
+    "SELECT id FROM platform_accounts WHERE platform_name = 'facebook' ORDER BY created_at ASC",
+  );
+  const out = [];
+  for (const r of rows) out.push(await checkConnection(r.id)); // sequential — kind to Graph rate limits
+  return out;
+}
+
+// Drop a page's cached health so the next check re-validates against Facebook
+// immediately (call after a reconnect / new token).
+export function clearConnectionHealth(id) {
+  healthCache.delete(Number(id));
 }
 
 // Re-sync every connected page's display data from Facebook: pull the live
@@ -434,7 +545,56 @@ export async function refreshAll() {
       /* token rejected / network error — reported as ok:false below */
     }
     if (!ok) statsCache.set(id, { at: Date.now(), data: null }); // drop stale followers for a dead token
+    healthCache.set(Number(id), { at: Date.now(), ok, reason: ok ? 'ok' : 'invalid_token' }); // keep health in sync
     results.push({ id, ok, name, followers });
+  }
+  return results;
+}
+
+// ── Connect with Facebook (OAuth import) ─────────────────────────────────────
+// The fb_page_ids already connected — so the OAuth picker can flag which discovered
+// pages are new vs. already linked.
+export async function existingFbPageIds() {
+  const rows = await query("SELECT fb_page_id FROM platform_accounts WHERE platform_name = 'facebook'");
+  return new Set(rows.map((r) => String(r.fb_page_id)));
+}
+
+// Import pages discovered via "Connect with Facebook". Each one: create a new page,
+// or — if its fb_page_id is already connected — just refresh the stored token (a
+// reconnect). create()/update() handle the Vault folder + Messenger subscription +
+// health-cache reset. Per-page best-effort: one failure doesn't abort the rest.
+//   discovered: [{ fbPageId, name, accessToken, igAccountId?, igUsername? }]
+export async function importFromFacebook(actor, discovered) {
+  const results = [];
+  for (const p of discovered) {
+    const found = await query(
+      "SELECT id FROM platform_accounts WHERE platform_name = 'facebook' AND fb_page_id = ? LIMIT 1",
+      [String(p.fbPageId)],
+    );
+    try {
+      if (found.length) {
+        // Reconnect: refresh the token, and auto-fill the IG channel ONLY when the
+        // discovery actually returned a linked account (don't clobber a manual entry).
+        const patch = { access_token: p.accessToken };
+        if (p.igAccountId) {
+          patch.instagram_account_id = p.igAccountId;
+          patch.instagram_username = p.igUsername || null;
+        }
+        await update(found[0].id, patch);
+        results.push({ id: found[0].id, name: p.name, fb_page_id: String(p.fbPageId), status: 'reconnected' });
+      } else {
+        const created = await create(actor, {
+          account_name: p.name,
+          fb_page_id: String(p.fbPageId),
+          access_token: p.accessToken,
+          instagram_account_id: p.igAccountId || null,
+          instagram_username: p.igUsername || null,
+        });
+        results.push({ id: created.id, name: p.name, fb_page_id: String(p.fbPageId), status: 'connected' });
+      }
+    } catch (e) {
+      results.push({ name: p.name, fb_page_id: String(p.fbPageId), status: 'failed', error: e?.message || 'failed' });
+    }
   }
   return results;
 }

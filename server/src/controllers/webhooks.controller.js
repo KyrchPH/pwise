@@ -38,9 +38,11 @@ export const telegram = asyncHandler(async (req, res) => {
     .catch((e) => console.warn(`[webhooks] telegram handler error: ${e?.message || e}`));
 });
 
-// Facebook Messenger webhook verification handshake (GET): echo hub.challenge back
-// when the verify token matches the one we configured in the FB App dashboard.
-export const messengerVerify = (req, res) => {
+// Meta webhook verification handshake (GET): echo hub.challenge back when the verify
+// token matches the one configured in the Meta App dashboard. ONE handler for all three
+// Meta products (Messenger, Instagram, WhatsApp) — they're a single app and share the
+// verify token. `messengerVerify` is kept as an alias for the existing route.
+export const metaVerify = (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   if (mode === 'subscribe' && env.facebook.verifyToken && token === env.facebook.verifyToken) {
@@ -49,6 +51,7 @@ export const messengerVerify = (req, res) => {
   }
   res.sendStatus(403);
 };
+export const messengerVerify = metaVerify;
 
 // Verify FB's X-Hub-Signature-256 over the raw body (skipped if no app secret set).
 function verifyFbSignature(req) {
@@ -85,4 +88,44 @@ export const messenger = asyncHandler(async (req, res) => {
   gateway
     .handleMessengerEvent(req.body || {})
     .catch((e) => console.warn(`[webhooks] messenger handler error: ${e?.message || e}`));
+});
+
+// Instagram messaging inbound (POST). Same envelope as Messenger (object:"instagram",
+// entry[].messaging[]); the IG account is resolved by the entry id. Ack fast; process
+// in the background. Shares the Meta app secret for the signature check.
+export const instagram = asyncHandler(async (req, res) => {
+  const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+  console.log(`[webhooks:instagram] update received object=${req.body?.object ?? '?'} entries=${entries.length}`);
+  if (env.nodeEnv === 'development') {
+    console.log(`[webhooks:instagram] payload\n${JSON.stringify(req.body ?? {}, null, 2)}`);
+  }
+  if (!verifyFbSignature(req)) {
+    console.warn('[webhooks:instagram] rejected (401): X-Hub-Signature-256 missing or mismatched (check FB_APP_SECRET).');
+    res.sendStatus(401);
+    return;
+  }
+  res.status(200).send('EVENT_RECEIVED');
+  gateway
+    .handleInstagramEvent(req.body || {})
+    .catch((e) => console.warn(`[webhooks] instagram handler error: ${e?.message || e}`));
+});
+
+// WhatsApp Cloud API inbound (POST). object:"whatsapp_business_account",
+// entry[].changes[].value.{messages,statuses}; the number is resolved by
+// value.metadata.phone_number_id. Ack fast; process in the background.
+export const whatsapp = asyncHandler(async (req, res) => {
+  const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+  console.log(`[webhooks:whatsapp] update received object=${req.body?.object ?? '?'} entries=${entries.length}`);
+  if (env.nodeEnv === 'development') {
+    console.log(`[webhooks:whatsapp] payload\n${JSON.stringify(req.body ?? {}, null, 2)}`);
+  }
+  if (!verifyFbSignature(req)) {
+    console.warn('[webhooks:whatsapp] rejected (401): X-Hub-Signature-256 missing or mismatched (check FB_APP_SECRET).');
+    res.sendStatus(401);
+    return;
+  }
+  res.status(200).send('EVENT_RECEIVED');
+  gateway
+    .handleWhatsappEvent(req.body || {})
+    .catch((e) => console.warn(`[webhooks] whatsapp handler error: ${e?.message || e}`));
 });

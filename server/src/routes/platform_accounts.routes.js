@@ -2,6 +2,7 @@ import { Router } from 'express';
 import requireAuth from '../middleware/auth.middleware.js';
 import requireAdmin from '../middleware/admin.middleware.js';
 import * as ctrl from '../controllers/platform_accounts.controller.js';
+import * as fbctrl from '../controllers/fb_oauth.controller.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -9,6 +10,7 @@ router.use(requireAuth);
 // Read + switch — any signed-in user.
 router.get('/', ctrl.list);
 router.get('/active', ctrl.active);
+router.get('/health', ctrl.health); // per-page connection health (app-start check)
 router.get('/:id/stats', ctrl.stats);
 router.post('/select', ctrl.select);
 // Sync display name/followers from Facebook; only touches account_name, so it's
@@ -26,5 +28,11 @@ router.delete('/:id', requireAdmin, ctrl.remove);
 router.get('/:id/ai-config', requireAdmin, ctrl.aiConfig);
 // Re-register this page's inbound webhooks with the platforms (no credential change).
 router.post('/:id/refresh-webhook', requireAdmin, ctrl.refreshWebhook);
+
+// "Connect with Facebook" OAuth import (admin). The /facebook/callback half is PUBLIC
+// and mounted separately (fb_oauth.routes) since the browser redirect carries no JWT.
+router.post('/facebook/oauth-url', requireAdmin, fbctrl.oauthUrl); // -> dialog URL
+router.get('/facebook/discovered', requireAdmin, fbctrl.discovered); // staged pages for the picker
+router.post('/facebook/import', requireAdmin, fbctrl.importPages); // import selected pages
 
 export default router;

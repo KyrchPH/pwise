@@ -223,6 +223,39 @@
     },
     {
       "parameters": {
+        "description": "Place a CONFIRMED order for THIS customer. Use ONLY once the customer has clearly decided to buy AND you have collected their NAME and CONTACT NUMBER plus the item(s) and quantity. Pass a 'note' with everything you gathered (name, contact number, items + qty, and any specifics like address, variant, or schedule) — it is saved on the conversation for the team. The result tells you what happened: routed:'transferred' means a teammate is now handling it (tell the customer warmly that a teammate will take over and assist shortly); routed:'pooled' means no one is available right now (tell the customer warmly to keep their lines open and that the team will get back as soon as the request is processed, within the same or next business day). Call it only ONCE per confirmed order.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "create_order",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "customerHandle": "={{ $('Message').first().json.chat_id }}",
+            "origin": "={{ $('Message').first().json.platform }}",
+            "note": "={{ $fromAI('input', 'A short order summary for the team: customer name, contact number, item(s) and quantity, and any specifics (address, variant, schedule). 1-3 sentences.', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "note", "displayName": "note", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3360, 1360],
+      "id": "a1b2c3d4-0000-4000-8000-000000000007",
+      "name": "Create Order"
+    },
+    {
+      "parameters": {
         "promptType": "define",
         "text": "={{ $('Message').first().json.message }}",
         "options": { "systemMessage": "={{ $('Message').first().json.systemSupport }}\n\nShowing photos and media — be proactive:\n- You have a Send Media tool (send_media) that pulls photos/videos from THIS page's media library and shows them directly to the customer. It takes a query (what to show) and a count (how many files to send, up to 10).\n- Default to SHOWING, not just telling. Any time your reply mentions, recommends, or describes a specific product, service, package, design, sample, or before/after result, send the photo — do NOT wait for the customer to ask.\n- Checking is safe: the tool only ever sends files that genuinely match your query (it keyword-matches each file's tags, name, and description). If nothing fits, nothing is sent and you simply continue — so whenever something visual comes up, check.\n- For ONE thing: query it with the item's name/keywords and count 1 (e.g. query \"sofa deep cleaning result\", count 1).\n- To send SEVERAL or ALL of something (e.g. \"send all your packages\", \"show me your designs\"): make ONE call with a broad query (e.g. \"package\") and a higher count (up to 10). The tool returns every matching file, each sent once — no duplicates.\n- Do NOT call the tool many times with the same query to send a set — that just resends the same top file. Use ONE call with a higher count instead.\n- The tool reports back the files it sent and an \"alternatives\" list of other matches it didn't send. Only say you sent a photo if it reports sent: true; if nothing matched, don't invent one — say you don't have a photo for that yet and offer to help another way.\n- A short caption beats a big block of text. Skip media only for pure greetings, thanks, small talk, or answers with nothing visual to show." }
@@ -351,7 +384,7 @@
     },
     {
       "parameters": {
-        "description": "Look up the shop's PRODUCTS by keyword — names, categories, and prices. Pass a short query like 'dishwashing liquid 5L kit' or 'car shampoo'. Returns the closest product rows. Use it for anything about products, prices, or packages, and ground your reply in what it returns — never invent prices or items.",
+        "description": "Look up the shop's full product knowledge. It returns TWO lists: 'products' (structured: name, category, price) and 'media' (media-library items: name, an extracted price, tags, and a FULL description with the real details — inclusions, kit contents, variants, scents, quantities; some packages exist only here). READ AND COMBINE BOTH, and use the whole media description, not only the price. Pass a short keyword query like 'dishwashing liquid 5L kit' to find specific items, or an EMPTY query for the FULL catalog (products cheapest-first) plus all media — use that for 'what's your cheapest? / anong pinakamura' and 'what do you have / list all packages'. Ground every answer in what it returns — never invent, and never tell the customer you 'searched a list'.",
         "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
         "workflowInputs": {
           "mappingMode": "defineBelow",
@@ -419,6 +452,7 @@
     "Sales Agent Memory": { "ai_memory": [ [ { "node": "Sales Agent", "type": "ai_memory", "index": 0 } ] ] },
     "Transfer to Human": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Send Media": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
+    "Create Order": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Support Agent": { "main": [ [ { "node": "Normalize Reply", "type": "main", "index": 0 } ], [ { "node": "On Agent Error", "type": "main", "index": 0 } ] ] },
     "DeepSeek Chat Model3": { "ai_languageModel": [ [ { "node": "Support Agent", "type": "ai_languageModel", "index": 0 } ] ] },
     "Support Agent Memory": { "ai_memory": [ [ { "node": "Support Agent", "type": "ai_memory", "index": 0 } ] ] },

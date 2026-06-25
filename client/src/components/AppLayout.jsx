@@ -8,6 +8,8 @@ import { canAccessModule } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
 import * as connections from '../services/connections.service.js';
 import { subscribe } from '../services/messaging.service.js';
+import usePresenceHeartbeat from '../hooks/usePresenceHeartbeat.js';
+import { PresenceProvider } from '../context/PresenceContext.jsx';
 import { Modal, PageAvatar, UserAvatar } from './ui.jsx';
 
 // Feather-style outline icons (24-grid, no fill, currentColor stroke) so the
@@ -226,10 +228,64 @@ function formatCount(n) {
   return String(num);
 }
 
+// Routes whose content is scoped to the active page (their tools act AS the page —
+// posting, messaging, products, analytics). When the active page's Facebook
+// connection is broken, these are gated behind a reconnect prompt; page-independent
+// routes (Vault, Logs, Settings, Profile…) stay usable so the page can be fixed.
+const PAGE_SCOPED_PATHS = ['/dashboard', '/content-calendar', '/analytics', '/post-pool', '/upload', '/shop', '/messages'];
+
+// Full-screen block shown in place of a page-scoped view when the active page's
+// Facebook token has been revoked/expired. Admins get a Reconnect shortcut; everyone
+// can re-check (the token may have been restored elsewhere).
+function ReconnectGate({ page, isAdmin, onFix, onRecheck }) {
+  const [rechecking, setRechecking] = useState(false);
+  const recheck = async () => {
+    if (rechecking) return;
+    setRechecking(true);
+    try {
+      await onRecheck();
+    } finally {
+      setRechecking(false);
+    }
+  };
+  return (
+    <div className="reconnect-gate">
+      <div className="reconnect-gate__card">
+        <span className="reconnect-gate__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+            <line x1="12" y1="2" x2="12" y2="12" />
+          </svg>
+        </span>
+        <h2 className="reconnect-gate__title">Page disconnected</h2>
+        <p className="reconnect-gate__lead">
+          <strong>{page?.account_name}</strong>’s Facebook connection has expired or been revoked, so this page’s tools are paused.
+        </p>
+        <p className="reconnect-gate__sub">
+          This affects messaging, posting, analytics, and products for this page. Other pages aren’t affected — switch pages from the sidebar.
+        </p>
+        <div className="reconnect-gate__actions">
+          {isAdmin ? (
+            <button type="button" className="btn btn--primary" onClick={onFix}>
+              Reconnect this page
+            </button>
+          ) : (
+            <span className="text-muted">Please ask an admin to reconnect this page.</span>
+          )}
+          <button type="button" className="btn btn--ghost btn--sm" onClick={recheck} disabled={rechecking}>
+            {rechecking ? 'Checking…' : 'Re-check'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AppLayout() {
+  usePresenceHeartbeat(); // keep this user "online" while their tab is active
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
-  const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages } = usePages();
+  const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages, activePageHealthy, brokenPageIds, refreshHealth } = usePages();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
@@ -242,6 +298,11 @@ export default function AppLayout() {
   const isProductsPage = pathname.startsWith('/shop');
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
+  // Active page's Facebook connection is broken → gate its page-scoped tools and
+  // surface a reconnect prompt (a banner elsewhere, a full block on scoped routes).
+  const isPageScoped = PAGE_SCOPED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const pageBroken = pages.length > 0 && !!activePage && !activePageHealthy;
+  const gated = pageBroken && isPageScoped;
 
   // Mobile nav drawer: closes on navigation and on Escape.
   const [navOpen, setNavOpen] = useState(false);
@@ -395,6 +456,7 @@ export default function AppLayout() {
   const renderNavLinks = (items) => items.map((n) => renderNavItem(n));
 
   return (
+    <PresenceProvider>
     <div className="app-shell">
       <aside className={`sidebar${navOpen ? ' is-open' : ''}${collapsed ? ' is-collapsed' : ''}`}>
         <button className="sidebar__close" onClick={() => setNavOpen(false)} aria-label="Close menu">
@@ -610,6 +672,25 @@ export default function AppLayout() {
             </button>
           </div>
         </header>
+        {pageBroken && !isPageScoped && (
+          <div className="conn-banner" role="alert">
+            <svg className="conn-banner__icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <span className="conn-banner__text">
+              <strong>{activePage.account_name}</strong>’s Facebook connection isn’t working — reconnect it to restore this page’s messaging, posting, and products.
+            </span>
+            {isAdmin ? (
+              <button type="button" className="conn-banner__btn" onClick={goFixPage}>
+                Reconnect
+              </button>
+            ) : (
+              <span className="conn-banner__hint">Ask an admin to reconnect.</span>
+            )}
+          </div>
+        )}
         <main className={`content${isMessagingPage ? ' content--messages' : ''}`}>
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
@@ -617,7 +698,11 @@ export default function AppLayout() {
             className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
-            <Outlet />
+            {gated ? (
+              <ReconnectGate page={activePage} isAdmin={isAdmin} onFix={goFixPage} onRecheck={refreshHealth} />
+            ) : (
+              <Outlet />
+            )}
           </div>
         </main>
       </div>
@@ -651,7 +736,7 @@ export default function AppLayout() {
           {pages
             .filter((p) => p.is_active)
             .map((p) => {
-              const expired = expiredIds.has(p.id);
+              const expired = expiredIds.has(p.id) || brokenPageIds.has(p.id);
               return (
                 <li key={p.id} className="page-picker__row">
                   <button
@@ -682,5 +767,6 @@ export default function AppLayout() {
         </ul>
       </Modal>
     </div>
+    </PresenceProvider>
   );
 }

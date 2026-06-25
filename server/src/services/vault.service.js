@@ -302,3 +302,60 @@ export async function searchAiMedia(folderId, rawQuery, { limit = 5 } = {}) {
   }
   return out;
 }
+
+// Pull a peso amount out of a media caption (e.g. "Package Price ₱21,000" → 21000) so
+// Vault-only items can be price-compared like real products. Prefers an amount tagged
+// with the word "price"; else the first ₱/PHP/P amount. Returns a number or null. (The
+// full description is still returned too — price is just a convenience for comparisons.)
+function extractPrice(text) {
+  const s = String(text || '');
+  const RE = /(?:₱|php|\bp)\s*([\d][\d,]*(?:\.\d+)?)/gi;
+  let first = null;
+  let labeled = null;
+  let m;
+  while ((m = RE.exec(s)) !== null) {
+    const val = parseFloat(m[1].replace(/,/g, ''));
+    if (!Number.isFinite(val) || val <= 0) continue;
+    if (first == null) first = val;
+    if (/price/i.test(s.slice(Math.max(0, m.index - 24), m.index))) { labeled = val; break; }
+  }
+  return labeled != null ? labeled : first;
+}
+
+// Metadata-only AI media search for the agent's KNOWLEDGE lookup (no signed URLs —
+// text only, and far cheaper than searchAiMedia). The Vault is a SECOND source of
+// product info: a tagged image's name/description/tags often carry the details (and
+// the price in the caption) for items that aren't in the products table. Empty query →
+// all media under the folder; otherwise a simple keyword overlap. Skips ai_hidden and
+// non-image/video files. Returns [{ name, description, tags }].
+export async function searchAiMediaMeta(folderId, rawQuery, { limit = 50 } = {}) {
+  const fid = parseInt(folderId, 10);
+  if (!Number.isInteger(fid)) return [];
+  const ids = await collectSubtree(fid);
+  if (!ids.length) return [];
+  const rows = await query(
+    `SELECT name, tags, description FROM vault_items
+      WHERE type = 'file' AND ai_hidden = 0 AND media_type IN ('image', 'video')
+        AND parent_id IN (${ids.map(() => '?').join(',')})`,
+    ids,
+  );
+  if (!rows.length) return [];
+
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+  const toMeta = (row) => ({ name: row.name, price: extractPrice(row.description), description: row.description || '', tags: splitTags(row.tags) });
+
+  const q = String(rawQuery ?? '').trim().toLowerCase();
+  if (!q) return rows.slice(0, lim).map(toMeta); // list all
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return rows
+    .map((row) => {
+      const hay = `${row.name || ''} ${row.tags || ''} ${row.description || ''}`.toLowerCase();
+      const score = tokens.reduce((s, t) => s + (hay.includes(t) ? 1 : 0), 0);
+      return { row, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, lim)
+    .map((x) => toMeta(x.row));
+}

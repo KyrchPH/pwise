@@ -19,12 +19,16 @@ router.post('/handoff', requireServiceToken, ctrl.handoff);
 router.post('/knowledge', requireServiceToken, ctrl.knowledge);
 // Machine-only: the AI agent's media tool — send a Vault file to the customer.
 router.post('/media', requireServiceToken, ctrl.media);
+// Machine-only: the AI agent's create-order tool — save the order note + route the
+// thread (transfer to the least-busy online agent, or pool it if none are online).
+router.post('/order', requireServiceToken, ctrl.order);
 
 router.use(requireAuth);
 router.use(requireMessagingAccess); // JWT routes are messaging-only (stream/inbound gate themselves above)
 router.get('/', ctrl.list); // conversations visible to this user (AI shared + own live)
 router.get('/config', ctrl.config); // messaging feature flags (e.g. hand-back-to-AI)
 router.get('/analytics', ctrl.analytics); // live-agent response metrics for a page (?accountId)
+router.post('/enhance', ctrl.enhance); // composer: polish a draft reply via OpenAI
 
 // Transfers + agent list — declared before the /:id routes so they aren't
 // swallowed by the :id param.

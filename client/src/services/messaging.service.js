@@ -21,6 +21,12 @@ export async function sendMessage(id, { text, media, replyTo } = {}) {
   return data.data; // { messages, conversation }
 }
 
+// Polish a draft reply via the server's OpenAI "enhance" endpoint. Returns { text }.
+export async function enhance(text) {
+  const { data } = await api.post('/messages/enhance', { text });
+  return data.data; // { text }
+}
+
 export async function markSeen(id) {
   const { data } = await api.post(`/messages/${id}/seen`);
   return data.data.conversation;

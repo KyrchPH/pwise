@@ -9,12 +9,14 @@ import uploadRoutes from './routes/upload.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import logsRoutes from './routes/logs.routes.js';
 import schedulerRoutes from './routes/scheduler.routes.js';
+import presenceRoutes from './routes/presence.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import activityRoutes from './routes/activity.routes.js';
 import contentNotesRoutes from './routes/content_notes.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import creatomateRoutes from './routes/creatomate.routes.js';
 import platformAccountsRoutes from './routes/platform_accounts.routes.js';
+import fbOauthRoutes from './routes/fb_oauth.routes.js';
 import pageProductsRoutes from './routes/page_products.routes.js';
 import pageDiscountsRoutes from './routes/page_discounts.routes.js';
 import messagingRoutes from './routes/messaging.routes.js';
@@ -56,6 +58,10 @@ export function createApp() {
   app.use('/api/content-notes', revalidate, contentNotesRoutes);
   app.use('/api/analytics', revalidate, analyticsRoutes);
   app.use('/api/creatomate-templates', revalidate, creatomateRoutes);
+  // Public Facebook OAuth callback (browser redirect, no JWT) — MUST be mounted
+  // before the authed /api/pages router so it isn't gated; the rest of the OAuth flow
+  // (oauth-url / discovered / import) is admin-only inside platformAccountsRoutes.
+  app.use('/api/pages/facebook', fbOauthRoutes);
   app.use('/api/pages', revalidate, platformAccountsRoutes);
   app.use('/api/page-products', revalidate, pageProductsRoutes);
   app.use('/api/page-discounts', revalidate, pageDiscountsRoutes);
@@ -79,6 +85,8 @@ export function createApp() {
 
   // Machine-facing (service-token) routes for n8n.
   app.use('/api/scheduler', schedulerRoutes);
+  // App-wide agent presence — heartbeat from the authed client (JWT, self-gated).
+  app.use('/api/presence', presenceRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

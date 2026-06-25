@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
+import { AvatarWithPresence } from '../../components/PresenceBadge.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import ProductsDrawer from '../../components/ProductsDrawer.jsx';
 import { formatPrice } from '../../config/currency.js';
@@ -208,6 +209,8 @@ export default function MessagingPage() {
 
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [draft, setDraft] = useState('');
+  const [enhancing, setEnhancing] = useState(false); // AI "enhance" call in flight
+  const [enhanced, setEnhanced] = useState(false); // hide the enhance button until the draft changes again
   const [attachments, setAttachments] = useState([]); // vault media staged for the next message
   const [pickerOpen, setPickerOpen] = useState(false); // vault attach dialog
   const [templateOpen, setTemplateOpen] = useState(false); // template drawer
@@ -222,6 +225,7 @@ export default function MessagingPage() {
   const [dropActive, setDropActive] = useState(false); // template being dragged over the thread
   const [replyTo, setReplyTo] = useState(null);
   const [messageMode, setMessageMode] = useState('customer'); // customer = current inbox, agent = unfiltered team view
+  const [pendingAgentPeer, setPendingAgentPeer] = useState(null); // user id to DM when entering A2A (from a note)
   const [templatesView, setTemplatesView] = useState(false); // templates browse section in the content view (mode rail toggle)
   const [agentView, setAgentView] = useState(storedAgentView); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
@@ -231,6 +235,7 @@ export default function MessagingPage() {
   const [loadError, setLoadError] = useState(null);
   const [incomingRequests, setIncomingRequests] = useState([]); // pending transfers addressed to me
   const [requestsOpen, setRequestsOpen] = useState(false); // incoming-requests sidebar
+  const [requestsTab, setRequestsTab] = useState('foryou'); // incoming-requests filter: 'foryou' | 'pool'
   const [transferFor, setTransferFor] = useState(null); // conversation being transferred
   const [agents, setAgents] = useState([]); // teammates for the transfer picker
   const [transferBusy, setTransferBusy] = useState(false);
@@ -493,6 +498,14 @@ export default function MessagingPage() {
     }
   };
 
+  // Message a note's author: jump to the Agent-to-Agent view and open a DM with them.
+  const messageAuthor = (note) => {
+    if (!note?.createdBy || Number(note.createdBy) === Number(user?.id)) return;
+    setNotesOpen(false);
+    setPendingAgentPeer(Number(note.createdBy));
+    setMessageMode('agent');
+  };
+
   // The composer is enabled only on a Live Agent thread BOUND TO ME. AI-agent
   // threads are read-only until taken over; another agent's bound thread isn't
   // shown here at all (the server filters it out).
@@ -545,6 +558,11 @@ export default function MessagingPage() {
   const unreadTotal = conversations.reduce((sum, c) => sum + (c.unread > 0 ? 1 : 0), 0);
   const unreadForPage = (pageId) =>
     conversations.reduce((sum, c) => sum + (c.pageId === pageId && c.unread > 0 ? 1 : 0), 0);
+
+  // The Pool: AI-handled threads flagged for a human (e.g. order requests queued while
+  // no agent was online). Any agent can claim one from the Incoming-requests drawer.
+  const poolConversations = conversations.filter((c) => c.status === 'Needs human');
+  const attentionCount = incomingRequests.length + poolConversations.length;
 
   // Opening a conversation marks it seen: clears its unread badge and trims the
   // filter counters by one.
@@ -631,6 +649,23 @@ export default function MessagingPage() {
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     stickBottomRef.current = true;
     setShowScrollBtn(false);
+  };
+
+  // Polish the draft with AI. After it succeeds the button hides (enhanced=true) and
+  // only reappears once the draft changes again (the input's onChange clears it).
+  const enhanceDraft = async () => {
+    const text = draft.trim();
+    if (!text || enhancing) return;
+    setEnhancing(true);
+    try {
+      const { text: improved } = await messaging.enhance(text);
+      setDraft(improved);
+      setEnhanced(true);
+    } catch (err) {
+      toast.error(messaging.apiError(err));
+    } finally {
+      setEnhancing(false);
+    }
   };
 
   const handleSend = async (event) => {
@@ -772,21 +807,24 @@ export default function MessagingPage() {
     );
   };
 
-  // Take over an AI-agent thread: mark it Live Agent (enabling the composer) and
-  // surface it in the "For You" tab with the same thread kept open.
-  const handleTakeOver = () => {
-    if (!activeConversation) return;
-    const id = activeConversation.id;
+  // Take over an AI-agent thread (the open one, or one claimed from the Pool): mark it
+  // Live Agent (enabling the composer), clear any "Needs human" flag, and surface it in
+  // the "For You" tab with the thread kept open.
+  const takeOverConversation = (id) => {
+    if (!id) return;
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === id
-          ? { ...conversation, handledBy: 'Live Agent', assignedUserId: user?.id, assignedUserName: user?.name }
+          ? { ...conversation, handledBy: 'Live Agent', assignedUserId: user?.id, assignedUserName: user?.name, status: '' }
           : conversation,
       ),
     );
     setAgentView('foryou');
     setSelectedConversationId(id);
     messaging.takeOver(id).catch(() => {});
+  };
+  const handleTakeOver = () => {
+    if (activeConversation) takeOverConversation(activeConversation.id);
   };
 
   // Hand the open Live Agent thread back to the AI agent (double-click the customer
@@ -968,7 +1006,7 @@ export default function MessagingPage() {
         {templatesView ? (
           <TemplatesSection accountId={selectedPageId || preferredPageId} />
         ) : isAgentToAgent ? (
-          <AgentChat />
+          <AgentChat openWithUserId={pendingAgentPeer} onOpened={() => setPendingAgentPeer(null)} />
         ) : (
         <>
         <Card className="msg-panel msg-panel--list">
@@ -1055,8 +1093,8 @@ export default function MessagingPage() {
                 <InboxIcon />
               </span>
               <span className="msg-requests-bar__label">Incoming requests</span>
-              {incomingRequests.length > 0 && (
-                <span className="msg-requests-bar__count">{incomingRequests.length}</span>
+              {attentionCount > 0 && (
+                <span className="msg-requests-bar__count">{attentionCount}</span>
               )}
             </button>
           )}
@@ -1513,15 +1551,18 @@ export default function MessagingPage() {
                       ref={composerInputRef}
                       className={`input msg-composer__input${dropActive ? ' is-drop' : ''}`}
                       value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
+                      onChange={(event) => { setDraft(event.target.value); setEnhanced(false); }}
                       onKeyDown={handleComposerKeyDown}
                       placeholder="Type a message..."
                     />
+                    {draft.trim() && !enhanced && (
                     <button
                       type="button"
-                      className="msg-composer__enhance"
-                      aria-label="AI enhance"
-                      title="AI enhance"
+                      className={`msg-composer__enhance${enhancing ? ' is-busy' : ''}`}
+                      onClick={enhanceDraft}
+                      disabled={enhancing}
+                      aria-label="Enhance with AI"
+                      title="Enhance with AI"
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -1539,6 +1580,7 @@ export default function MessagingPage() {
                         <path d="m6 14 .9 2.5L9.4 17l-2.5.5L6 20l-.9-2.5-2.5-.5 2.5-.5z" />
                       </svg>
                     </button>
+                    )}
                   </div>
                   <button
                     type="submit"
@@ -1616,8 +1658,10 @@ export default function MessagingPage() {
         notes={notes}
         onCreate={addNote}
         onDelete={deleteNote}
+        onMessageAuthor={messageAuthor}
         canDelete={isAdmin}
         creating={noteBusy}
+        currentUserId={user?.id}
       />
       <MediaLightbox media={lightbox} onClose={() => setLightbox(null)} />
 
@@ -1629,7 +1673,11 @@ export default function MessagingPage() {
             <header className="msg-requests__head">
               <div>
                 <h3 className="msg-requests__title">Incoming requests</h3>
-                <p className="msg-requests__sub">Conversations teammates want to hand to you.</p>
+                <p className="msg-requests__sub">
+                  {requestsTab === 'pool'
+                    ? 'Unassigned conversations anyone online can take over.'
+                    : 'Conversations teammates want to hand to you.'}
+                </p>
               </div>
               <button
                 type="button"
@@ -1642,41 +1690,112 @@ export default function MessagingPage() {
                 </svg>
               </button>
             </header>
+            <div className="seg msg-requests__seg" role="tablist" aria-label="Request filter">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={requestsTab === 'foryou'}
+                className={`seg__btn${requestsTab === 'foryou' ? ' is-active' : ''}`}
+                onClick={() => setRequestsTab('foryou')}
+              >
+                For you{incomingRequests.length ? ` (${incomingRequests.length})` : ''}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={requestsTab === 'pool'}
+                className={`seg__btn${requestsTab === 'pool' ? ' is-active' : ''}`}
+                onClick={() => setRequestsTab('pool')}
+              >
+                Pool{poolConversations.length ? ` (${poolConversations.length})` : ''}
+              </button>
+            </div>
             <div className="msg-requests__body">
-              {incomingRequests.length === 0 ? (
+              {requestsTab === 'foryou' ? (
+                incomingRequests.length === 0 ? (
+                  <div className="msg-requests__empty">
+                    <span className="msg-requests__empty-icon">
+                      <InboxIcon />
+                    </span>
+                    <p className="msg-requests__empty-title">No incoming requests</p>
+                    <p className="msg-requests__empty-text">
+                      When a teammate transfers a conversation to you, it shows up here for you to accept.
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="msg-request-list">
+                    {incomingRequests.map((req) => (
+                      <li key={req.id} className="msg-request">
+                        <div className="msg-request__top">
+                          <CustomerAvatar
+                            name={req.customerName || 'Customer'}
+                            origin={req.origin}
+                            avatarUrl={req.avatarUrl}
+                          />
+                          <div className="msg-request__who">
+                            <span className="msg-request__name">{req.customerName || 'Customer'}</span>
+                            <span className="msg-request__from">
+                              from {req.fromUserName || 'a teammate'}
+                              {req.pageName ? ` · ${req.pageName}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="msg-request__actions">
+                          <Button variant="ghost" size="sm" onClick={() => declineRequest(req)}>
+                            Decline
+                          </Button>
+                          <Button variant="primary" size="sm" className="msg-request__accept" onClick={() => acceptRequest(req)}>
+                            Accept
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : poolConversations.length === 0 ? (
                 <div className="msg-requests__empty">
                   <span className="msg-requests__empty-icon">
                     <InboxIcon />
                   </span>
-                  <p className="msg-requests__empty-title">No incoming requests</p>
+                  <p className="msg-requests__empty-title">Pool is empty</p>
                   <p className="msg-requests__empty-text">
-                    When a teammate transfers a conversation to you, it shows up here for you to accept.
+                    Order requests waiting for a human land here. Anyone can take one over.
                   </p>
                 </div>
               ) : (
                 <ul className="msg-request-list">
-                  {incomingRequests.map((req) => (
-                    <li key={req.id} className="msg-request">
-                      <div className="msg-request__top">
-                        <CustomerAvatar
-                          name={req.customerName || 'Customer'}
-                          origin={req.origin}
-                          avatarUrl={req.avatarUrl}
-                        />
-                        <div className="msg-request__who">
-                          <span className="msg-request__name">{req.customerName || 'Customer'}</span>
-                          <span className="msg-request__from">
-                            from {req.fromUserName || 'a teammate'}
-                            {req.pageName ? ` · ${req.pageName}` : ''}
-                          </span>
+                  {poolConversations.map((c) => (
+                    <li key={c.id} className="msg-request">
+                      <button
+                        type="button"
+                        className="msg-request__open"
+                        onClick={() => {
+                          setAgentView('ai');
+                          setSelectedConversationId(c.id);
+                          setRequestsOpen(false);
+                        }}
+                      >
+                        <div className="msg-request__top">
+                          <CustomerAvatar name={c.customerName || 'Customer'} origin={c.origin} avatarUrl={c.avatarUrl} />
+                          <div className="msg-request__who">
+                            <span className="msg-request__name">{c.customerName || 'Customer'}</span>
+                            <span className="msg-request__from">
+                              Waiting in pool{c.pageName ? ` · ${c.pageName}` : ''}
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                      </button>
                       <div className="msg-request__actions">
-                        <Button variant="ghost" size="sm" onClick={() => declineRequest(req)}>
-                          Decline
-                        </Button>
-                        <Button variant="primary" size="sm" className="msg-request__accept" onClick={() => acceptRequest(req)}>
-                          Accept
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="msg-request__accept"
+                          onClick={() => {
+                            takeOverConversation(c.id);
+                            setRequestsOpen(false);
+                          }}
+                        >
+                          Take over
                         </Button>
                       </div>
                     </li>
@@ -1717,9 +1836,11 @@ export default function MessagingPage() {
                   onClick={() => doTransfer(agent.id)}
                   disabled={transferBusy}
                 >
-                  <span className="msg-agent__avatar" aria-hidden="true">
-                    {initialsOf(agent.name)}
-                  </span>
+                  <AvatarWithPresence userId={agent.id}>
+                    <span className="msg-agent__avatar" aria-hidden="true">
+                      {initialsOf(agent.name)}
+                    </span>
+                  </AvatarWithPresence>
                   <span className="msg-agent__meta">
                     <span className="msg-agent__name">{agent.name}</span>
                     {agent.email && <span className="msg-agent__email">{agent.email}</span>}

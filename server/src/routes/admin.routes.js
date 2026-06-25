@@ -16,4 +16,8 @@ router.patch('/users/:id', ctrl.setActive); // { is_active: boolean }
 router.patch('/users/:id/access', ctrl.setModuleAccess); // { modules: string[] }
 router.delete('/users/:id', ctrl.softDelete);
 
+// Global automation pause switches (AI Agent / auto-posting).
+router.get('/pause', ctrl.getPause);
+router.patch('/pause', ctrl.setPause); // { aiPaused?, postingPaused? }
+
 export default router;

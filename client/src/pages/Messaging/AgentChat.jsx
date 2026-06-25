@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
+import { AvatarWithPresence } from '../../components/PresenceBadge.jsx';
+import { usePresenceMap } from '../../context/PresenceContext.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
@@ -20,11 +22,54 @@ function initialsOf(name) {
     .toUpperCase();
 }
 
-function Avatar({ conversation }) {
+// Messenger-style "time since" — minute granularity and up (no seconds): 2m, 18h, 3d,
+// 1w, 4mo, 2y. Sub-minute is handled by the caller as "Active now".
+function compactAgo(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${Math.max(1, m)}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(d / 365)}y`;
+}
+
+// The other teammate's user id for a DM (groups → null).
+function peerIdOf(conv, currentUserId) {
+  if (!conv || conv.isGroup) return null;
+  const id = conv.otherUserId ?? conv.participants?.find((p) => Number(p.id) !== Number(currentUserId))?.id;
+  return id == null ? null : Number(id);
+}
+
+// DM subtitle from presence, Messenger-style: "Active now" when online OR seen within the
+// last minute (covers just-went-offline + minor clock skew), else "Active 5m/2h/3d ago".
+const RECENT_MS = 60 * 1000;
+function dmPresenceText(presence) {
+  if (!presence) return 'Direct message';
+  if (presence.online) return 'Active now';
+  if (!presence.lastSeenAt) return 'Offline';
+  const diff = Date.now() - new Date(presence.lastSeenAt).getTime();
+  if (diff < RECENT_MS) return 'Active now';
+  return `Active ${compactAgo(presence.lastSeenAt)} ago`;
+}
+
+function Avatar({ conversation, currentUserId }) {
+  // For a DM, badge the other teammate's presence; groups have no single presence.
+  const peerId = conversation.isGroup
+    ? null
+    : conversation.otherUserId ?? conversation.participants?.find((p) => p.id !== currentUserId)?.id ?? null;
   return (
-    <span className="msg-agent__avatar agentchat-avatar" aria-hidden="true">
-      {conversation.isGroup ? '#' : initialsOf(conversation.title)}
-    </span>
+    <AvatarWithPresence userId={peerId}>
+      <span className="msg-agent__avatar agentchat-avatar" aria-hidden="true">
+        {conversation.isGroup ? '#' : initialsOf(conversation.title)}
+      </span>
+    </AvatarWithPresence>
   );
 }
 
@@ -33,8 +78,9 @@ function upsert(list, conv) {
   return [conv, ...list.filter((c) => c.id !== conv.id)];
 }
 
-export default function AgentChat() {
+export default function AgentChat({ openWithUserId = null, onOpened } = {}) {
   const { user } = useAuth();
+  const presenceMap = usePresenceMap();
   const toast = useToast();
 
   const [conversations, setConversations] = useState([]);
@@ -95,6 +141,30 @@ export default function AgentChat() {
   useEffect(() => {
     team.searchAgents('').then(setSuggestedAgents).catch(() => {});
   }, []);
+
+  // Open a DM with a specific teammate on request (e.g. from a note's "message" icon
+  // in the customer inbox). Find-or-create the direct conversation and select it; the
+  // ref dedupes so an unrelated re-render can't re-fire or double-create it.
+  const requestedPeerRef = useRef(null);
+  useEffect(() => {
+    if (openWithUserId == null) {
+      requestedPeerRef.current = null;
+      return;
+    }
+    if (requestedPeerRef.current === Number(openWithUserId)) return;
+    requestedPeerRef.current = Number(openWithUserId);
+    team
+      .createConversation({ userIds: [Number(openWithUserId)] })
+      .then((conv) => {
+        setConversations((cur) => upsert(cur, conv));
+        setSelectedId(conv.id);
+        setActive(conv);
+        team.markSeen(conv.id).catch(() => {});
+      })
+      .catch((e) => toast.error(team.apiError(e)))
+      .finally(() => onOpened?.());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openWithUserId]);
 
   // Auto-scroll the open thread to the newest message.
   useEffect(() => {
@@ -472,7 +542,7 @@ export default function AgentChat() {
                   className={`msg-conversation${conversation.id === selectedId ? ' is-active' : ''}`}
                   onClick={() => openConversation(conversation.id)}
                 >
-                  <Avatar conversation={conversation} />
+                  <Avatar conversation={conversation} currentUserId={user?.id} />
                   <div className="msg-conversation__main">
                     <div className="msg-conversation__row">
                       <strong className="msg-conversation__name">{conversation.title}</strong>
@@ -480,7 +550,9 @@ export default function AgentChat() {
                     </div>
                     <div className="msg-conversation__row">
                       <span className="msg-conversation__mode">
-                        {conversation.isGroup ? `${conversation.participants.length} members` : 'Direct message'}
+                        {conversation.isGroup
+                          ? `${conversation.participants.length} members`
+                          : dmPresenceText(presenceMap.get(peerIdOf(conversation, user?.id)))}
                       </span>
                       {conversation.unread > 0 && <span className="agentchat-unread">{conversation.unread}</span>}
                     </div>
@@ -495,7 +567,7 @@ export default function AgentChat() {
                 <div className="agentchat-results__label">Start a new chat</div>
                 {agentResults.map((agent) => (
                   <button key={agent.id} type="button" className="agentchat-result" onClick={() => startDm(agent)}>
-                    <span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span>
+                    <AvatarWithPresence userId={agent.id}><span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span></AvatarWithPresence>
                     <span className="agentchat-result__meta">
                       <span className="agentchat-result__name">{agent.name}</span>
                       {agent.email && <span className="agentchat-result__email">{agent.email}</span>}
@@ -520,7 +592,7 @@ export default function AgentChat() {
                 <div className="agentchat-results__label">Suggested</div>
                 {suggestions.map((agent) => (
                   <button key={agent.id} type="button" className="agentchat-result" onClick={() => startDm(agent)}>
-                    <span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span>
+                    <AvatarWithPresence userId={agent.id}><span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span></AvatarWithPresence>
                     <span className="agentchat-result__meta">
                       <span className="agentchat-result__name">{agent.name}</span>
                       {agent.email && <span className="agentchat-result__email">{agent.email}</span>}
@@ -538,14 +610,14 @@ export default function AgentChat() {
           <>
             <div className="card__head msg-thread__head">
               <div className="msg-thread__identity">
-                <Avatar conversation={active} />
+                <Avatar conversation={active} currentUserId={user?.id} />
                 <div>
                   <div className="card__title">{active.title}</div>
                   <div className="msg-panel__sub msg-thread__sub">
                     <span>
                       {active.isGroup
                         ? active.participants.map((p) => p.name).join(', ')
-                        : 'Direct message'}
+                        : dmPresenceText(presenceMap.get(peerIdOf(active, user?.id)))}
                     </span>
                   </div>
                 </div>
@@ -728,7 +800,7 @@ export default function AgentChat() {
                   className={`agentchat-result${picked ? ' is-picked' : ''}`}
                   onClick={() => toggleGroupPick(agent)}
                 >
-                  <span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span>
+                  <AvatarWithPresence userId={agent.id}><span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span></AvatarWithPresence>
                   <span className="agentchat-result__meta">
                     <span className="agentchat-result__name">{agent.name}</span>
                     {agent.email && <span className="agentchat-result__email">{agent.email}</span>}
@@ -765,7 +837,9 @@ export default function AgentChat() {
             <ul className="agentchat-members">
               {active.participants.map((m) => (
                 <li key={m.id} className="agentchat-member">
-                  <span className="msg-agent__avatar agentchat-avatar">{initialsOf(m.name)}</span>
+                  <AvatarWithPresence userId={m.id}>
+                    <span className="msg-agent__avatar agentchat-avatar">{initialsOf(m.name)}</span>
+                  </AvatarWithPresence>
                   <span className="agentchat-member__name">
                     {m.name}
                     {m.id === user?.id ? ' (you)' : ''}
@@ -798,7 +872,7 @@ export default function AgentChat() {
                 .filter((a) => !memberIds.has(a.id))
                 .map((agent) => (
                   <button key={agent.id} type="button" className="agentchat-result" onClick={() => doAddMember(agent)} disabled={busy}>
-                    <span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span>
+                    <AvatarWithPresence userId={agent.id}><span className="msg-agent__avatar agentchat-avatar">{initialsOf(agent.name)}</span></AvatarWithPresence>
                     <span className="agentchat-result__meta">
                       <span className="agentchat-result__name">{agent.name}</span>
                       {agent.email && <span className="agentchat-result__email">{agent.email}</span>}

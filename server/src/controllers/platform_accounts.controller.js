@@ -33,6 +33,13 @@ export const refresh = asyncHandler(async (req, res) => {
   sendSuccess(res, { results: await pages.refreshAll() });
 });
 
+// Per-page Facebook connection health (is each stored token still valid?) — any
+// signed-in user. Cheap + cached server-side; drives the app-start check that
+// disables a page whose token was revoked and prompts a reconnect.
+export const health = asyncHandler(async (req, res) => {
+  sendSuccess(res, { health: await pages.getConnectionHealth() });
+});
+
 // Switch the current user's active page.
 export const select = asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};

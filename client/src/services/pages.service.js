@@ -31,6 +31,14 @@ export async function refreshAll() {
   return data.data.results;
 }
 
+// Per-page Facebook connection health — [{ id, ok, reason }]. Checked on app start
+// so a page whose token was revoked/expired can be flagged and its tools disabled
+// until reconnected. reason: 'ok' | 'no_token' | 'invalid_token' | 'unknown'.
+export async function health() {
+  const { data } = await api.get('/pages/health');
+  return data.data.health;
+}
+
 // Validate credentials against Facebook before saving (the "Connect" step).
 export async function test(payload) {
   const { data } = await api.post('/pages/test', payload);
@@ -63,6 +71,28 @@ export async function getAiDefaults() {
 export async function remove(id) {
   const { data } = await api.delete(`/pages/${id}`);
   return data.data;
+}
+
+// ── Connect with Facebook (OAuth import) ─────────────────────────────────────
+// Start the flow: returns the Facebook dialog URL to send the browser to
+// (window.location.href = url). Admin-only on the server.
+export async function facebookOAuthUrl() {
+  const { data } = await api.post('/pages/facebook/oauth-url');
+  return data.data.url;
+}
+
+// After the OAuth round-trip, the staged pages for the import picker.
+// Returns { expired, pages: [{ fb_page_id, name, alreadyConnected }] }.
+export async function facebookDiscovered(batch) {
+  const { data } = await api.get('/pages/facebook/discovered', { params: { batch } });
+  return data.data;
+}
+
+// Import the chosen pages from a discovery batch. Returns per-page results
+// [{ id, name, fb_page_id, status: 'connected'|'reconnected'|'failed' }].
+export async function facebookImport(batch, fbPageIds) {
+  const { data } = await api.post('/pages/facebook/import', { batch, fb_page_ids: fbPageIds });
+  return data.data.results;
 }
 
 // Re-register this page's Telegram webhook (and Messenger subscription) with the

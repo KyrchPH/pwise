@@ -5,6 +5,7 @@ import { createDownloadUrl } from './s3.service.js';
 import * as logsService from './logs.service.js';
 import * as fb from './fb.service.js';
 import * as accounts from './platform_accounts.service.js';
+import * as appSettings from './app_settings.service.js';
 
 async function enabledUserIds() {
   const rows = await query('SELECT user_id FROM posting_settings WHERE is_enabled = 1');
@@ -88,6 +89,11 @@ async function claimAndLockBatch(whereSql, params, orderBy, limit) {
  * Returns { claimed, count, posts }. `limit` is clamped to 1..50.
  */
 export async function claimNextBatch({ userId = null, limit = 10 } = {}) {
+  // Global admin pause — n8n polls this every few minutes; returning nothing keeps
+  // due posts queued (and un-expired) until an admin resumes posting.
+  if (await appSettings.isPostingPaused()) {
+    return { claimed: false, count: 0, posts: [], reason: 'auto-posting is paused' };
+  }
   await expireOverdue(); // overdue posts are skipped (expired), never posted late
   const enabled = await enabledUserIds();
 

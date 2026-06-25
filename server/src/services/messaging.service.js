@@ -1,4 +1,4 @@
-import { query } from '../config/db.js';
+import { query, getConnection } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { env } from '../config/env.js';
 import { emitMessagingEvent } from './messaging.events.js';
@@ -6,8 +6,10 @@ import { moduleAccessForUser } from '../config/modules.js';
 import { decrypt } from '../utils/crypto.util.js';
 import * as tg from './telegram.service.js';
 import * as fb from './fb.service.js';
-import { searchAiMedia } from './vault.service.js';
+import * as wa from './whatsapp.service.js';
+import { searchAiMedia, searchAiMediaMeta } from './vault.service.js';
 import * as conversationNotes from './conversation_notes.service.js';
+import * as presence from './messaging.presence.js';
 
 // Conversation status set when the AI escalates a thread to a human (see
 // handoffToLiveAgent). The inbound gateway stops auto-replying while a thread
@@ -210,12 +212,14 @@ function broadcastStatus(conv, updates) {
 //   first, then text). replyToExternalId threads the FIRST bubble onto a prior
 //   platform message, when we know its id.
 // Platform dispatcher: deliver an outgoing message to the customer on the
-// conversation's origin platform, using that page's stored credential. Telegram is
-// wired; Messenger/WhatsApp adapters drop in here. No-op for unknown origins.
+// conversation's origin platform, using that page's stored credential. No-op for unknown
+// origins. Instagram is the Messenger Platform (same Send API + page token), so it shares
+// deliverViaMeta; WhatsApp has its own Cloud-API adapter.
 async function deliverToCustomer(conv, items = [], replyToExternalId = null) {
   const origin = String(conv?.origin || '').toLowerCase();
   if (origin.includes('telegram')) return deliverViaTelegram(conv, items, replyToExternalId);
-  if (origin.includes('messenger') || origin.includes('facebook')) return deliverViaMessenger(conv, items);
+  if (origin.includes('instagram') || origin.includes('messenger') || origin.includes('facebook')) return deliverViaMeta(conv, items);
+  if (origin.includes('whatsapp')) return deliverViaWhatsapp(conv, items);
   return undefined;
 }
 
@@ -230,7 +234,9 @@ function stripMarkdown(text) {
     .replace(/`([^`\n]+?)`/g, '$1');
 }
 
-async function deliverViaMessenger(conv, items = []) {
+// Messenger + Instagram delivery — identical Send API (me/messages) + page access token;
+// recipient is the conversation's customer_handle (PSID for Messenger, IGSID for IG).
+async function deliverViaMeta(conv, items = []) {
   const psid = conv?.customer_handle;
   let token = '';
   try {
@@ -284,6 +290,71 @@ async function deliverViaMessenger(conv, items = []) {
       continue;
     }
     if (!ok) console.warn(`[messaging] Messenger delivery failed (conv ${conv.id}, msg ${it.id}): ${lastErr}`);
+    await mark(it.id, ok ? 'sent' : 'failed', extId);
+  }
+  broadcastStatus(conv, updates);
+}
+
+// WhatsApp Cloud API delivery — media then text, using the page's WhatsApp token +
+// phone number id; recipient is the conversation's customer_handle (the customer's
+// number). v1 sends free-form (valid inside the 24h customer-care window).
+async function deliverViaWhatsapp(conv, items = []) {
+  const to = conv?.customer_handle;
+  let token = '';
+  let phoneNumberId = '';
+  try {
+    if (conv.account_id != null) {
+      const rows = await query('SELECT wa_access_token, wa_phone_number_id FROM platform_accounts WHERE id = ?', [conv.account_id]);
+      if (rows.length) {
+        token = rows[0].wa_access_token ? decrypt(rows[0].wa_access_token) : '';
+        phoneNumberId = rows[0].wa_phone_number_id || '';
+      }
+    }
+  } catch {
+    token = '';
+  }
+
+  const updates = [];
+  const mark = async (id, status, externalId) => {
+    await query('UPDATE messages SET delivery_status = ?, external_id = COALESCE(?, external_id) WHERE id = ?', [
+      status,
+      externalId ?? null,
+      id,
+    ]).catch(() => {});
+    updates.push({ id: String(id), deliveryStatus: status });
+  };
+
+  if (!to || !token || !phoneNumberId) {
+    for (const it of items) await mark(it.id, 'failed');
+    broadcastStatus(conv, updates);
+    return;
+  }
+
+  for (const it of items) {
+    let ok = false;
+    let extId = null;
+    let lastErr = '';
+    if (it.media && it.media.length) {
+      for (const m of it.media) {
+        const r = await wa.sendMedia(token, phoneNumberId, to, { url: m.url, type: m.type });
+        if (r.ok) {
+          ok = true;
+          if (extId == null) extId = r.messageId;
+        } else {
+          lastErr = r.error;
+        }
+      }
+      // Send the caption as its own message to mirror the stored bubble order.
+      if (it.body) await wa.sendText(token, phoneNumberId, to, stripMarkdown(it.body)).catch(() => {});
+    } else if (it.body) {
+      const r = await wa.sendText(token, phoneNumberId, to, stripMarkdown(it.body));
+      ok = r.ok;
+      extId = r.messageId;
+      if (!r.ok) lastErr = r.error;
+    } else {
+      continue;
+    }
+    if (!ok) console.warn(`[messaging] WhatsApp delivery failed (conv ${conv.id}, msg ${it.id}): ${lastErr}`);
     await mark(it.id, ok ? 'sent' : 'failed', extId);
   }
   broadcastStatus(conv, updates);
@@ -479,8 +550,11 @@ export async function takeOver(id, actor = {}) {
     "UPDATE conversations SET handled_by = 'Live Agent', assigned_user_id = ?, assigned_user_name = ?, status = NULL WHERE id = ?",
     [actor.id ?? null, actor.name ?? null, id],
   );
+  // Taking over settles ownership directly — any in-flight transfer is moot, so clear it
+  // (otherwise a stale pending transfer would lock the new owner's composer).
+  await clearPendingTransfers(id);
   emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(id), assignedUserId: Number(actor.id) });
-  return conversationPatch(id);
+  return { ...(await conversationPatch(id)), transferPending: false, transferPendingTo: '' };
 }
 
 // Hand a Live Agent thread BACK to the AI agent — the inverse of takeOver. Gated by
@@ -500,8 +574,10 @@ export async function returnToAi(id, actor = {}) {
     "UPDATE conversations SET handled_by = 'AI Agent', assigned_user_id = NULL, assigned_user_name = NULL, status = NULL WHERE id = ?",
     [id],
   );
+  // Handing back to the AI voids any pending transfer on the thread.
+  await clearPendingTransfers(id);
   emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(id), assignedUserId: null });
-  return conversationPatch(id);
+  return { ...(await conversationPatch(id)), transferPending: false, transferPendingTo: '' };
 }
 
 // ── Transfers (hand a conversation to another agent, who must accept) ─────────
@@ -627,10 +703,40 @@ export async function declineTransfer(transferId, actor = {}) {
   return { id: Number(transferId), declined: true };
 }
 
-// Cancel the pending transfer the current owner started on this conversation. Only the
-// agent who requested it may cancel. Clears the recipient's incoming request
-// (transfer:resolved) and unlocks the sender's composer (conversation:updated). A
-// no-op if nothing is pending, so a double-cancel or an accept/cancel race can't error.
+// Cancel every pending transfer on a conversation — used when ownership is settled
+// another way (takeOver / returnToAi), so a stale pending transfer can't keep a thread's
+// composer locked. Notifies both parties so their incoming-request badge + composer lock
+// clear. No-op when nothing is pending.
+async function clearPendingTransfers(conversationId) {
+  const rows = await query(
+    "SELECT id, from_user_id, to_user_id FROM conversation_transfers WHERE conversation_id = ? AND status = 'pending'",
+    [conversationId],
+  );
+  if (!rows.length) return;
+  await query(
+    "UPDATE conversation_transfers SET status = 'cancelled', responded_at = NOW() WHERE conversation_id = ? AND status = 'pending'",
+    [conversationId],
+  );
+  for (const t of rows) {
+    emitMessagingEvent(
+      { type: 'transfer:resolved', transferId: Number(t.id) },
+      [Number(t.to_user_id), Number(t.from_user_id)].filter(Boolean),
+    );
+    if (t.from_user_id) {
+      emitMessagingEvent(
+        { type: 'conversation:updated', conversation: { id: String(conversationId), transferPending: false, transferPendingTo: '' } },
+        [Number(t.from_user_id)],
+      );
+    }
+  }
+}
+
+// Cancel the pending transfer on this conversation. The agent who requested it may
+// cancel — and so may the agent who currently OWNS the thread (e.g. after taking it
+// over), so a transfer started by someone else can't lock them out. Clears the
+// recipient's incoming request (transfer:resolved) and unlocks the composer
+// (conversation:updated). A no-op if nothing is pending, so a double-cancel or an
+// accept/cancel race can't error.
 export async function cancelTransfer(conversationId, actor = {}) {
   const rows = await query(
     "SELECT id, from_user_id, to_user_id FROM conversation_transfers WHERE conversation_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
@@ -638,16 +744,18 @@ export async function cancelTransfer(conversationId, actor = {}) {
   );
   if (!rows.length) return { cancelled: false, conversationId: String(conversationId) };
   const t = rows[0];
-  if (Number(t.from_user_id) !== Number(actor.id)) {
-    throw new ApiError(403, 'Only the agent who started this transfer can cancel it.');
+  const convRows = await query('SELECT handled_by, assigned_user_id FROM conversations WHERE id = ?', [conversationId]);
+  const isOwner = convRows.length && convRows[0].handled_by === 'Live Agent' && Number(convRows[0].assigned_user_id) === Number(actor.id);
+  if (Number(t.from_user_id) !== Number(actor.id) && !isOwner) {
+    throw new ApiError(403, 'Only the agent handling this conversation, or who started the transfer, can cancel it.');
   }
   await query("UPDATE conversation_transfers SET status = 'cancelled', responded_at = NOW() WHERE id = ?", [t.id]);
   // The recipient's incoming request disappears; both sides see it resolved.
   emitMessagingEvent({ type: 'transfer:resolved', transferId: Number(t.id) }, [Number(t.to_user_id), Number(t.from_user_id)].filter(Boolean));
-  // Unlock the sender's composer — the thread is theirs again.
+  // Unlock the composer — for the original sender AND whoever cancelled (the owner).
   emitMessagingEvent(
     { type: 'conversation:updated', conversation: { id: String(conversationId), transferPending: false, transferPendingTo: '' } },
-    [Number(t.from_user_id)].filter(Boolean),
+    [Number(t.from_user_id), Number(actor.id)].filter(Boolean),
   );
   return { cancelled: true, conversationId: String(conversationId) };
 }
@@ -694,9 +802,12 @@ async function resolveAccount({ accountId, fbPageId, telegramBotUsername, origin
 // Find the thread this inbound belongs to, or open a new one. Resolution order:
 // explicit conversationId → existing (page, customer handle) pair → create. Returns
 // { id, created }.
-async function resolveOrCreateConversation(payload, account, { createIfMissing = true } = {}) {
+// `runner` lets a caller pass a transaction-bound query fn (conn.query wrapper) so the
+// find/create runs inside the SAME transaction as the message insert; defaults to the
+// plain pool query for callers that don't need atomicity.
+async function resolveOrCreateConversation(payload, account, { createIfMissing = true, runner = query } = {}) {
   if (payload.conversationId != null && payload.conversationId !== '') {
-    const rows = await query('SELECT id FROM conversations WHERE id = ?', [payload.conversationId]);
+    const rows = await runner('SELECT id FROM conversations WHERE id = ?', [payload.conversationId]);
     if (!rows.length) throw ApiError.notFound('conversation not found');
     return { id: Number(rows[0].id), created: false };
   }
@@ -708,11 +819,11 @@ async function resolveOrCreateConversation(payload, account, { createIfMissing =
   if (handle) {
     const rows =
       accountId != null
-        ? await query(
+        ? await runner(
             'SELECT id FROM conversations WHERE account_id = ? AND customer_handle = ? ORDER BY id DESC LIMIT 1',
             [accountId, handle],
           )
-        : await query(
+        : await runner(
             'SELECT id FROM conversations WHERE account_id IS NULL AND customer_handle = ? ORDER BY id DESC LIMIT 1',
             [handle],
           );
@@ -729,7 +840,7 @@ async function resolveOrCreateConversation(payload, account, { createIfMissing =
   }
 
   const customerName = String(payload.customerName || '').trim() || handle || 'New customer';
-  const result = await query(
+  const result = await runner(
     `INSERT INTO conversations
        (account_id, page_name, customer_name, customer_handle, customer_avatar, origin, handled_by, status, tags, summary, unread, last_message_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())`,
@@ -774,8 +885,6 @@ export async function receiveInbound(payload = {}) {
     telegramBotUsername: payload.telegramBotUsername ?? payload.botUsername,
     origin: payload.origin,
   });
-  const { id, created } = await resolveOrCreateConversation(payload, account, { createIfMissing: side !== 'outgoing' });
-
   const reply =
     payload.replyTo && payload.replyTo.id
       ? { id: String(payload.replyTo.id), sender: payload.replyTo.sender || '', text: payload.replyTo.text || '' }
@@ -788,41 +897,69 @@ export async function receiveInbound(payload = {}) {
   if (mediaList.length) parts.push({ body: null, media: mediaList });
   if (cleanText) parts.push({ body: cleanText, media: null });
 
-  const createdIds = [];
-  for (let i = 0; i < parts.length; i += 1) {
-    const result = await query(
-      'INSERT INTO messages (conversation_id, side, sender, body, media, reply_to, external_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [
-        id,
-        side,
-        sender,
-        parts[i].body,
-        parts[i].media ? JSON.stringify(parts[i].media) : null,
-        i === 0 && reply ? JSON.stringify(reply) : null,
-        payload.externalId != null && payload.externalId !== '' ? String(payload.externalId) : null,
-      ],
-    );
-    createdIds.push(result.insertId);
-  }
-
-  // Refresh the thread's summary + activity time and bump unread. Incoming
-  // customer messages mark the thread unread; AI replies don't, unless overridden.
+  // Summary/unread for the thread row (computed up front; applied in the txn below).
   const summary = payload.summary || cleanText || `${mediaList.length} attachment${mediaList.length === 1 ? '' : 's'}`;
   let bump = side === 'incoming' ? 1 : 0;
   if (payload.incrementUnread === true) bump = 1;
   if (payload.incrementUnread === false) bump = 0;
-  const sets = ['summary = ?', 'last_message_at = NOW()', 'unread = unread + ?'];
-  const params = [summary, bump];
-  if (payload.status) {
-    sets.push('status = ?');
-    params.push(payload.status);
+
+  // Find-or-create the thread AND record its message(s) atomically. Without this, a
+  // failed message INSERT (e.g. a too-long value) would leave a brand-new thread as an
+  // empty orphan, because the conversation row is created first. One transaction →
+  // either both land or neither does.
+  const createdIds = [];
+  let id;
+  let created;
+  const conn = await getConnection();
+  try {
+    await conn.beginTransaction();
+    const runner = async (sql, params) => {
+      const [rows] = await conn.query(sql, params);
+      return rows;
+    };
+    ({ id, created } = await resolveOrCreateConversation(payload, account, {
+      createIfMissing: side !== 'outgoing',
+      runner,
+    }));
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const [result] = await conn.query(
+        'INSERT INTO messages (conversation_id, side, sender, body, media, reply_to, external_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          id,
+          side,
+          sender,
+          parts[i].body,
+          parts[i].media ? JSON.stringify(parts[i].media) : null,
+          i === 0 && reply ? JSON.stringify(reply) : null,
+          payload.externalId != null && payload.externalId !== '' ? String(payload.externalId) : null,
+        ],
+      );
+      createdIds.push(result.insertId);
+    }
+
+    // Refresh the thread's summary + activity time and bump unread. Incoming customer
+    // messages mark the thread unread; AI replies don't, unless overridden.
+    const sets = ['summary = ?', 'last_message_at = NOW()', 'unread = unread + ?'];
+    const params = [summary, bump];
+    if (payload.status) {
+      sets.push('status = ?');
+      params.push(payload.status);
+    }
+    if (payload.handledBy === 'AI Agent' || payload.handledBy === 'Live Agent') {
+      sets.push('handled_by = ?');
+      params.push(payload.handledBy);
+    }
+    params.push(id);
+    await conn.query(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`, params);
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
   }
-  if (payload.handledBy === 'AI Agent' || payload.handledBy === 'Live Agent') {
-    sets.push('handled_by = ?');
-    params.push(payload.handledBy);
-  }
-  params.push(id);
-  await query(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`, params);
 
   // Deliver an outgoing message (e.g. an AI reply posted here by n8n) to the customer
   // on their platform — but only while the thread is still AI-handled, so the AI
@@ -945,31 +1082,152 @@ export async function handoffToLiveAgent({ accountId, customerHandle, origin, re
   return { conversationId: String(conv.id), handedOff: true, assignedUserId: agent.id, conversation };
 }
 
+// The AI agent's `create_order` tool (machine-authed; n8n calls it once an order is
+// confirmed). Records the order details the AI gathered as a note, then routes:
+//   • ≥1 ELIGIBLE AGENT ONLINE  → bind the thread to the online agent with the FEWEST
+//     active (Live Agent) conversations, random tie-break — a teammate takes over right
+//     away (binding pauses the AI, like any take-over). routed: 'transferred'.
+//   • NO AGENT ONLINE           → drop it in the Pool (status 'Needs human', unassigned,
+//     AI paused) so whoever comes online can claim it. routed: 'pooled'.
+// "Online" is live inbox presence (messaging.presence). If a human already owns the
+// thread we keep their ownership and just add the order note (routed: 'already_live').
+// The returned `online`/`routed` tells the agent which closing message to send.
+export async function createOrder({ accountId, customerHandle, origin, note } = {}) {
+  const handle = String(customerHandle ?? '').trim();
+  if (!handle) throw ApiError.badRequest('customerHandle is required');
+
+  const account = await resolveAccount({ accountId, origin });
+  const acctId = account?.id ?? null;
+  const rows =
+    acctId != null
+      ? await query(
+          'SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id = ? AND customer_handle = ? ORDER BY id DESC LIMIT 1',
+          [acctId, handle],
+        )
+      : await query(
+          'SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id IS NULL AND customer_handle = ? ORDER BY id DESC LIMIT 1',
+          [handle],
+        );
+  if (!rows.length) throw ApiError.notFound('no conversation found for this customer');
+  const conv = rows[0];
+
+  // Always record what the AI gathered, so whoever processes the order has it.
+  const body = String(note ?? '').trim() || 'Order request (the AI did not capture details).';
+  try {
+    await conversationNotes.create(conv.id, { id: null, name: 'AI Agent' }, { body });
+  } catch (e) {
+    console.warn(`[messaging] order note failed (conv ${conv.id}): ${e?.message || e}`);
+  }
+
+  // A human already owns it — leave their ownership, the note is enough.
+  if (conv.handled_by === 'Live Agent') {
+    const conversation = await conversationPatch(conv.id);
+    return { conversationId: String(conv.id), routed: 'already_live', online: true, conversation };
+  }
+
+  // Eligible agents who are ONLINE right now (logged in + active tab; presence).
+  const eligible = await eligibleMessagingAgents();
+  const onlineIds = new Set(await presence.filterOnline(eligible.map((a) => a.id)));
+  const agents = eligible.filter((a) => onlineIds.has(Number(a.id)));
+
+  // No one online → Pool it (claimable, AI paused), tell the customer we'll follow up.
+  if (!agents.length) {
+    await query('UPDATE conversations SET status = ?, last_message_at = NOW() WHERE id = ?', [HANDOFF_STATUS, conv.id]);
+    const conversation = await conversationPatch(conv.id);
+    emitMessagingEvent({ type: 'conversation:updated', conversation }, null);
+    return { conversationId: String(conv.id), routed: 'pooled', online: false, conversation };
+  }
+
+  // Pick the online agent carrying the fewest active conversations; tie → random.
+  const ids = agents.map((a) => Number(a.id));
+  const loadRows = await query(
+    `SELECT assigned_user_id AS uid, COUNT(*) AS c
+       FROM conversations
+      WHERE handled_by = 'Live Agent' AND assigned_user_id IN (${ids.map(() => '?').join(',')})
+      GROUP BY assigned_user_id`,
+    ids,
+  );
+  const loadByUser = new Map(loadRows.map((r) => [Number(r.uid), Number(r.c)]));
+  const loadOf = (a) => loadByUser.get(Number(a.id)) || 0;
+  const minLoad = Math.min(...agents.map(loadOf));
+  const leastBusy = agents.filter((a) => loadOf(a) === minLoad);
+  const agent = leastBusy[Math.floor(Math.random() * leastBusy.length)];
+
+  await query(
+    "UPDATE conversations SET handled_by = 'Live Agent', assigned_user_id = ?, assigned_user_name = ?, status = NULL, last_message_at = NOW() WHERE id = ?",
+    [agent.id, agent.name, conv.id],
+  );
+  const conversation = await conversationPatch(conv.id);
+  emitMessagingEvent({ type: 'conversation:reassigned', conversationId: String(conv.id), assignedUserId: agent.id }, null);
+  return {
+    conversationId: String(conv.id),
+    routed: 'transferred',
+    online: true,
+    assignedUserId: agent.id,
+    assignedUserName: agent.name,
+    conversation,
+  };
+}
+
 // Product lookup the AI agent's `search_catalog` tool calls — MySQL FULLTEXT over
 // the page's catalog (products only; FAQs are answered from the Supabase vector
 // store instead). SCOPED to one page via account_id (the conversation's page,
 // passed by the tool — never the LLM), so a page's agent only ever sees its own
 // products. `LIMIT` is inlined from a sanitized integer (mysql2 won't bind LIMIT as
 // a param). Guarded so a missing index (pre-migration) degrades to [] not an error.
-export async function searchKnowledge(rawQuery, { accountId, limit = 6 } = {}) {
+export async function searchKnowledge(rawQuery, { accountId, limit = 50 } = {}) {
   const q = String(rawQuery ?? '').trim();
   const acct = parseInt(accountId, 10);
   // No page → no results (never fall back to a cross-page / global search).
-  if (!q || !Number.isInteger(acct)) return { products: [] };
-  const lim = Math.min(Math.max(parseInt(limit, 10) || 6, 1), 20);
+  if (!Number.isInteger(acct)) return { products: [], media: [] };
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+  const cleanName = (n) => String(n || '').replace(/\.[a-z0-9]+$/i, '').trim();
 
-  const products = await query(
-    `SELECT id, name, category, price,
-            MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
-       FROM products
-      WHERE account_id = ?
-        AND MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE)
-      ORDER BY score DESC, id ASC
-      LIMIT ${lim}`,
-    [q, acct, q],
-  ).catch(() => []);
+  // SOURCE 1 — the products table (structured: name / category / price). Empty query →
+  // the FULL catalog cheapest-first (for "what's your cheapest?" / "list everything");
+  // otherwise a FULLTEXT keyword match. The higher limit keeps broad queries complete.
+  let productRows;
+  if (!q) {
+    productRows = await query(
+      `SELECT id, name, category, price FROM products
+        WHERE account_id = ?
+        ORDER BY (price IS NULL), price ASC, name ASC
+        LIMIT ${lim}`,
+      [acct],
+    ).catch(() => []);
+  } else {
+    productRows = await query(
+      `SELECT id, name, category, price,
+              MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
+         FROM products
+        WHERE account_id = ?
+          AND MATCH(name, category, description) AGAINST (? IN NATURAL LANGUAGE MODE)
+        ORDER BY score DESC, (price IS NULL), price ASC, id ASC
+        LIMIT ${lim}`,
+      [q, acct, q],
+    ).catch(() => []);
+  }
+  const products = productRows.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price }));
 
-  return { products: products.map((p) => ({ id: p.id, name: p.name, category: p.category, price: p.price })) };
+  // SOURCE 2 — the page's Vault media descriptions/tags. A second source so items that
+  // only live as a tagged image (details + price in the caption) are still found.
+  // De-duped against products by name so shared items aren't listed twice.
+  let media = [];
+  try {
+    const rows = await query('SELECT vault_folder_id FROM platform_accounts WHERE id = ?', [acct]);
+    const folderId = rows.length ? rows[0].vault_folder_id : null;
+    if (folderId != null) {
+      const seen = new Set(products.map((p) => cleanName(p.name).toLowerCase()));
+      const metas = await searchAiMediaMeta(folderId, q, { limit: lim });
+      media = metas
+        .filter((m) => !seen.has(cleanName(m.name).toLowerCase()))
+        .map((m) => ({ name: cleanName(m.name), price: m.price ?? null, description: m.description, tags: m.tags }));
+    }
+  } catch {
+    media = [];
+  }
+
+  return { products, media };
 }
 
 // The AI agent's `send_media` tool: find media in THIS page's Vault folder matching

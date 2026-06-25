@@ -20,6 +20,10 @@ export const env = {
   // Machine auth for n8n -> /api/scheduler/* (was SCHEDULER_SECRET in the plan).
   serviceToken: process.env.SERVICE_TOKEN || process.env.SCHEDULER_SECRET || '',
 
+  // Optional Redis — shared store for agent presence ("online now") across server
+  // instances. Unset → presence falls back to in-memory (fine for a single process).
+  redis: { url: process.env.REDIS_URL || '' },
+
   // Public base URL of THIS API (used to register inbound webhooks with platforms,
   // e.g. https://pwise-api.sixpent.com — Telegram/Facebook POST customer messages there).
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
@@ -29,6 +33,14 @@ export const env = {
   // the AI agent from the inbox (double-click the customer's avatar in a Live Agent
   // thread). Off by default — meant for controlled testing in production.
   allowTransferToAi: bool(process.env.ALLOW_TRANSFER_TO_AI, false),
+
+  // OpenAI — direct server-side calls for in-app AI that does NOT route through n8n
+  // (currently the messaging composer's "Enhance" button). Reuses the same
+  // OPENAI_API_KEY as the vector sync; unset → the Enhance endpoint returns 503.
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY || '',
+    enhanceModel: process.env.OPENAI_ENHANCE_MODEL || 'gpt-5.4-mini',
+  },
 
   aws: {
     region: process.env.AWS_REGION || '',
@@ -45,8 +57,12 @@ export const env = {
     pageAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || '',
     graphVersion: process.env.FB_GRAPH_VERSION || 'v21.0',
     pageId: process.env.FACEBOOK_PAGE_ID || '',
+    // App credentials for "Connect with Facebook" OAuth (and the inbound signature
+    // check). Accept either spelling — the code historically read FB_*, the env.example
+    // documented FACEBOOK_* — so neither file can silently break the other.
+    appId: process.env.FACEBOOK_APP_ID || process.env.FB_APP_ID || '',
     verifyToken: process.env.FB_WEBHOOK_VERIFY_TOKEN || '', // GET handshake for the Messenger webhook
-    appSecret: process.env.FB_APP_SECRET || '', // verifies X-Hub-Signature-256 on inbound Messenger POSTs
+    appSecret: process.env.FB_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '', // OAuth + X-Hub-Signature-256
   },
 
   // "Generate with Template" delegates rendering to n8n (the "Post to n8n"

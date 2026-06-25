@@ -96,7 +96,7 @@ export function NoteSticky({ notes = [], index = 0, onIndex, onOpen }) {
  * user can add one via the composer; notes can't be edited, and only admins see a
  * delete control (the server enforces it regardless).
  */
-export default function NotesDrawer({ open, onClose, notes = [], onCreate, onDelete, canDelete = false, creating = false }) {
+export default function NotesDrawer({ open, onClose, notes = [], onCreate, onDelete, onMessageAuthor, canDelete = false, creating = false, currentUserId = null }) {
   const [draft, setDraft] = useState('');
   const [expanded, setExpanded] = useState(() => new Set());
   const [deletingId, setDeletingId] = useState(null);
@@ -195,18 +195,33 @@ export default function NotesDrawer({ open, onClose, notes = [], onCreate, onDel
                     <span className="note-card__author">{note.createdByName || 'Unknown'}</span>
                     <span className="note-card__time">{formatNoteTime(note.createdAt)}</span>
                   </div>
-                  {canDelete && (
-                    <button
-                      type="button"
-                      className="note-card__del"
-                      onClick={() => handleDelete(note.id)}
-                      disabled={deletingId === note.id}
-                      title="Delete note"
-                      aria-label="Delete note"
-                    >
-                      <TrashIcon />
-                    </button>
-                  )}
+                  <div className="note-card__actions">
+                    {note.createdBy != null && Number(note.createdBy) !== Number(currentUserId) && (
+                      <button
+                        type="button"
+                        className="note-card__msg"
+                        onClick={() => onMessageAuthor?.(note)}
+                        title={`Message ${note.createdByName || 'this agent'}`}
+                        aria-label={`Message ${note.createdByName || 'this agent'}`}
+                      >
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+                        </svg>
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
+                        type="button"
+                        className="note-card__del"
+                        onClick={() => handleDelete(note.id)}
+                        disabled={deletingId === note.id}
+                        title="Delete note"
+                        aria-label="Delete note"
+                      >
+                        <TrashIcon />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className={`note-card__body${long && !isOpen ? ' is-clamped' : ''}`}>
                   {renderNoteText(note.body)}

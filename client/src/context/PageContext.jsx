@@ -5,6 +5,10 @@ import { useAuth } from './AuthContext.jsx';
 
 const PageContext = createContext(null);
 
+// A page is "broken" only on a definitive token failure — NOT on 'unknown' (a
+// transient Graph/network hiccup), so an outage never locks pages.
+const isPageBroken = (h) => !!h && (h.reason === 'invalid_token' || h.reason === 'no_token');
+
 /**
  * Holds the connected Facebook pages + the current user's active page, and the
  * `switchPage` action. The active page scopes the data views (Pool, Calendar,
@@ -18,6 +22,26 @@ export function PageProvider({ children }) {
   const [activeFollowers, setActiveFollowers] = useState(null);
   const [loading, setLoading] = useState(false);
   const [switching, setSwitching] = useState(false); // a page switch is in flight
+  const [healthById, setHealthById] = useState({}); // id -> { id, ok, reason }
+
+  // Per-page Facebook connection health — fetched on app start (and on tab focus)
+  // so a page whose token was revoked can be flagged and its tools disabled until
+  // it's reconnected. Cheap + cached server-side. Best-effort: keep prior health on
+  // a transient failure rather than wrongly clearing flags.
+  const loadHealth = useCallback(async () => {
+    if (!isAuthenticated) {
+      setHealthById({});
+      return;
+    }
+    try {
+      const list = await pagesService.health();
+      const map = {};
+      for (const h of list) map[h.id] = h;
+      setHealthById(map);
+    } catch {
+      /* transient — keep prior health, treat unknown as not-broken */
+    }
+  }, [isAuthenticated]);
 
   const refresh = useCallback(async () => {
     if (!isAuthenticated) {
@@ -29,6 +53,7 @@ export function PageProvider({ children }) {
     try {
       const [list, act] = await Promise.all([pagesService.list(), pagesService.active()]);
       setPages(list);
+      loadHealth(); // check each page's connection in the background
       // Default to the first page when nothing is selected yet, so views always
       // have a page to scope to (persist the choice).
       let sel = act.selected_account_id ?? null;
@@ -53,11 +78,19 @@ export function PageProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, loadHealth]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Re-check connection health when the tab regains focus (cheap — cached
+  // server-side), so a token that dies mid-session surfaces without a full reload.
+  useEffect(() => {
+    const onFocus = () => loadHealth();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [loadHealth]);
 
   // Followers count for the active page (server-side — needs the page token).
   // Refetched whenever the active page changes; hidden (null) on any failure.
@@ -91,7 +124,23 @@ export function PageProvider({ children }) {
   }, []);
 
   const activePage = pages.find((p) => p.id === activeId) || null;
-  const value = { pages, activePage, activeId, activeFollowers, loading, switching, refresh, switchPage };
+  const activeHealth = activeId != null ? healthById[activeId] : null;
+  const activePageHealthy = !isPageBroken(activeHealth);
+  const brokenPageIds = new Set(Object.values(healthById).filter(isPageBroken).map((h) => h.id));
+  const value = {
+    pages,
+    activePage,
+    activeId,
+    activeFollowers,
+    loading,
+    switching,
+    refresh,
+    switchPage,
+    healthById,
+    activePageHealthy,
+    brokenPageIds,
+    refreshHealth: loadHealth,
+  };
   return <PageContext.Provider value={value}>{children}</PageContext.Provider>;
 }
 

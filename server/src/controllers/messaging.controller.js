@@ -3,6 +3,7 @@ import { sendSuccess } from '../utils/response.util.js';
 import { env } from '../config/env.js';
 import * as service from '../services/messaging.service.js';
 import * as analyticsService from '../services/messaging_analytics.service.js';
+import * as ai from '../services/ai.service.js';
 import { onMessagingEvent } from '../services/messaging.events.js';
 import { verifyToken, findActiveById } from '../services/auth.service.js';
 import { hasMessagingAccess } from '../config/modules.js';
@@ -46,6 +47,11 @@ export const config = asyncHandler(async (req, res) => {
 export const analytics = asyncHandler(async (req, res) => {
   const metrics = await analyticsService.computeAgentMetrics(req.query.accountId);
   sendSuccess(res, { metrics });
+});
+
+// Composer "Enhance" — polish a draft reply via OpenAI (server-side, not n8n).
+export const enhance = asyncHandler(async (req, res) => {
+  sendSuccess(res, await ai.enhanceText((req.body || {}).text));
 });
 
 // Hand a Live Agent thread back to the AI agent (flag-gated; see service.returnToAi).
@@ -103,6 +109,15 @@ export const knowledge = asyncHandler(async (req, res) => {
 export const media = asyncHandler(async (req, res) => {
   const { accountId, customerHandle, origin, query, count } = req.body || {};
   sendSuccess(res, await service.sendVaultMedia({ accountId, customerHandle, origin, query, count }));
+});
+
+// Machine-only (service token): the AI agent's `create_order` tool. Saves the order
+// details the AI gathered as a note, then routes the thread — straight to the least-
+// busy ONLINE agent if anyone is online, otherwise into the Pool to be claimed later.
+// Body: { accountId, customerHandle, origin, note }.
+export const order = asyncHandler(async (req, res) => {
+  const { accountId, customerHandle, origin, note } = req.body || {};
+  sendSuccess(res, await service.createOrder({ accountId, customerHandle, origin, note }));
 });
 
 // Machine-only (service token): n8n escalates a thread to a human. Pauses AI auto-reply

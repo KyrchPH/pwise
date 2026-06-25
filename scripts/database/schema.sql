@@ -150,13 +150,23 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   telegram_bot_name     VARCHAR(255),           -- optional Telegram bot attached to this page
   telegram_bot_token    TEXT,                   -- ENCRYPTED Telegram bot API key
   telegram_bot_username VARCHAR(255),           -- Telegram bot @username (from getMe)
+  -- Optional Instagram + WhatsApp channels on this page (migration 040). IG reuses the
+  -- page access_token; WhatsApp has its own encrypted token + phone number id.
+  instagram_account_id   VARCHAR(64)  NULL,      -- IG professional account id
+  instagram_username     VARCHAR(255) NULL,
+  wa_phone_number_id     VARCHAR(64)  NULL,      -- WhatsApp Cloud API phone number id
+  wa_business_account_id VARCHAR(64)  NULL,      -- WABA id
+  wa_phone_display       VARCHAR(40)  NULL,      -- human number for display
+  wa_access_token        TEXT         NULL,      -- ENCRYPTED WhatsApp system-user token
   refresh_token    TEXT,                        -- ENCRYPTED (reserved)
   token_expires_at DATETIME NULL,
   is_active        BOOLEAN NOT NULL DEFAULT TRUE,
   created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_platform_accounts_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  INDEX idx_platform_accounts_user (user_id, platform_name)
+  INDEX idx_platform_accounts_user (user_id, platform_name),
+  INDEX idx_pa_instagram (instagram_account_id),
+  INDEX idx_pa_whatsapp (wa_phone_number_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- post_activity_log — audit trail of who created/edited/deleted each post -----
@@ -279,7 +289,7 @@ CREATE TABLE IF NOT EXISTS messages (
   body            TEXT NULL,
   media           JSON NULL,                                -- [{ type, url, name }]
   reply_to        JSON NULL,                                -- { id, sender, text }
-  external_id     VARCHAR(64) NULL,                          -- platform message id (e.g. Telegram message_id), for reply threading
+  external_id     VARCHAR(255) NULL,                         -- platform message id (Telegram message_id, Messenger/IG mid, WhatsApp wamid), for reply threading + delivery status
   delivery_status VARCHAR(16) NULL,                          -- NULL = n/a · 'sent' · 'failed' (outgoing platform delivery)
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
