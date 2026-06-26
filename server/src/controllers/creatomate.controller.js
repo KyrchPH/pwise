@@ -27,10 +27,12 @@ export const remove = asyncHandler(async (req, res) => {
 // uploaded input video. Returns immediately with a render-job id to poll — the
 // render finishes asynchronously and reports back via renderCallback.
 export const startRender = asyncHandler(async (req, res) => {
-  const { template_id, video_s3_key, caption } = req.body || {};
+  const { template_id, video_s3_key, image_s3_key, text, caption } = req.body || {};
   if (!template_id) throw ApiError.badRequest('template_id is required');
   const result = await service.startRender(req.user, template_id, {
     videoS3Key: video_s3_key || null,
+    imageS3Key: image_s3_key || null,
+    text: text || null,
     caption: caption || null,
   });
   sendSuccess(res, result, 202); // { renderJobId, status: 'rendering' }

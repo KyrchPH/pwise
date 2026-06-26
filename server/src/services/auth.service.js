@@ -15,8 +15,10 @@ if (!jwtSecret) {
   console.warn('[auth] JWT_SECRET missing — using an ephemeral secret (tokens invalid after restart).');
 }
 
-export function signToken(user) {
-  return jwt.sign({ sub: user.id, email: user.email }, jwtSecret, { expiresIn: env.jwtExpiresIn });
+export function signToken(user, sessionId) {
+  const payload = { sub: user.id, email: user.email };
+  if (sessionId != null) payload.sid = Number(sessionId); // ties the token to a revocable session row
+  return jwt.sign(payload, jwtSecret, { expiresIn: env.jwtExpiresIn });
 }
 
 export function verifyToken(token) {
@@ -40,7 +42,7 @@ async function publicUser(row) {
 // Registration is invite-only: a valid single-use token is required and is consumed
 // atomically with the account creation — or with REVIVING a soft-deleted account that
 // re-registers the same email (same id, so its history comes back; see below).
-export async function register({ name, email, password, token }) {
+export async function register({ name, email, password, token } = {}, ctx = {}) {
   if (!name || !email || !password) throw ApiError.badRequest('name, email and password are required');
   if (String(password).length < 8) throw ApiError.badRequest('password must be at least 8 characters');
 
@@ -88,7 +90,8 @@ export async function register({ name, email, password, token }) {
     await conn.commit();
     const [rows] = await conn.query('SELECT * FROM users WHERE id = ?', [userId]);
     const user = await publicUser(rows[0]);
-    return { user, token: signToken(user) };
+    const sessionId = await createSession(user.id, ctx);
+    return { user, token: signToken(user, sessionId) };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -97,7 +100,7 @@ export async function register({ name, email, password, token }) {
   }
 }
 
-export async function login({ email, password }) {
+export async function login({ email, password } = {}, ctx = {}) {
   if (!email || !password) throw ApiError.badRequest('email and password are required');
   const rows = await query('SELECT * FROM users WHERE email = ?', [email]);
   const row = rows[0];
@@ -108,7 +111,8 @@ export async function login({ email, password }) {
   if (row.deleted_at || !row.is_active) throw ApiError.forbidden('this account has been deactivated');
 
   const user = await publicUser(row);
-  return { user, token: signToken(user) };
+  const sessionId = await createSession(user.id, ctx);
+  return { user, token: signToken(user, sessionId) };
 }
 
 export async function getById(id) {
@@ -165,6 +169,75 @@ export async function findActiveById(id) {
     is_active: !!row.is_active,
     module_access: moduleAccessForUser(row),
   };
+}
+
+// Record a login as a revocable SESSION row; the JWT carries its id (sid). Returns the
+// new id so the token can embed it. Each login = one session = one row in the history.
+export async function createSession(userId, { ip, userAgent } = {}) {
+  const res = await query(
+    'INSERT INTO login_history (user_id, ip, user_agent, last_seen_at) VALUES (?, ?, ?, NOW())',
+    [userId, String(ip || '').slice(0, 64) || null, String(userAgent || '').slice(0, 512) || null],
+  );
+  return res.insertId;
+}
+
+// Verify a bearer token AND its session: the token's session (sid) must still exist and
+// not be revoked — this is what makes "log out of this / other devices" take effect.
+// Throws on a malformed/expired token (verifyToken); returns null otherwise (no user or
+// session, or revoked). On success returns { user, sessionId }. Bumps last_seen_at at
+// most once a minute so it's not a write per request. Shared by requireAuth + SSE.
+export async function resolveSession(token) {
+  const payload = verifyToken(token);
+  const user = await findActiveById(payload.sub);
+  if (!user) return null;
+  const sid = payload.sid != null ? Number(payload.sid) : null;
+  if (!sid) return null; // legacy tokens without a session id are no longer accepted
+  const rows = await query(
+    'SELECT id, revoked_at, last_seen_at FROM login_history WHERE id = ? AND user_id = ?',
+    [sid, user.id],
+  );
+  const s = rows[0];
+  if (!s || s.revoked_at) return null;
+  if (!s.last_seen_at || Date.now() - new Date(s.last_seen_at).getTime() > 60_000) {
+    await query('UPDATE login_history SET last_seen_at = NOW() WHERE id = ?', [sid]).catch(() => {});
+  }
+  return { user, sessionId: sid };
+}
+
+// Revoke ONE session (log out a specific device). Scoped to the owner.
+export async function revokeSession(userId, sessionId) {
+  const res = await query(
+    'UPDATE login_history SET revoked_at = NOW() WHERE id = ? AND user_id = ? AND revoked_at IS NULL',
+    [Number(sessionId), userId],
+  );
+  return { revoked: res.affectedRows > 0 };
+}
+
+// Revoke every session EXCEPT the current one (log out of all other devices).
+export async function logoutOtherSessions(userId, currentSessionId) {
+  await query(
+    'UPDATE login_history SET revoked_at = NOW() WHERE user_id = ? AND id <> ? AND revoked_at IS NULL',
+    [userId, Number(currentSessionId) || 0],
+  );
+  return { ok: true };
+}
+
+// The user's sessions (active + revoked), newest first — powers the Security list.
+export async function listSessions(userId, limit = 100) {
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
+  const rows = await query(
+    `SELECT id, ip, user_agent, created_at, last_seen_at, revoked_at FROM login_history
+      WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ${lim}`,
+    [userId],
+  ).catch(() => []);
+  return rows.map((r) => ({
+    id: r.id,
+    ip: r.ip || '',
+    userAgent: r.user_agent || '',
+    createdAt: r.created_at,
+    lastSeenAt: r.last_seen_at,
+    revokedAt: r.revoked_at,
+  }));
 }
 
 // ── Email-verified password change ───────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as upload from '../services/upload.service.js';
 import * as postPool from '../services/post_pool.service.js';
@@ -9,6 +9,7 @@ import { invalidateCache, useCachedResource } from '../hooks/useCachedResource.j
 import { useToast } from '../context/ToastContext.jsx';
 import { Card, Button, Field, Modal, Toggle, TimeSelect, ProgressBar, Dropdown, Spinner } from './ui.jsx';
 import MediaDropzone from './MediaDropzone.jsx';
+import { useActiveRender } from '../context/ActiveRenderContext.jsx';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const dateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -23,29 +24,6 @@ function nextSlot() {
   return { date: dateStr(d), time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}` };
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Poll a render job to completion. Resolves with the finished job on success, or
-// null if `isActive()` goes false (the form unmounted) so we stop touching state.
-// Throws on a failed render, or if it never finishes within the budget.
-async function waitForRender(jobId, isActive) {
-  const POLL_MS = 3000;
-  const deadline = Date.now() + 8 * 60 * 1000; // generous headroom over a typical render
-  while (Date.now() < deadline) {
-    if (!isActive()) return null;
-    const job = await creatomate.getRender(jobId);
-    if (job.status === 'succeeded') {
-      if (!job.url) throw new Error('The render finished but no video came back. Please try again.');
-      return job;
-    }
-    if (job.status === 'failed') {
-      throw new Error(job.errorMessage || 'The render failed. Please try again.');
-    }
-    await sleep(POLL_MS);
-  }
-  throw new Error('The render is taking longer than expected — please check back shortly.');
-}
-
 /**
  * The Upload-post form, shared by the Upload page and the calendar's
  * "Create Post" dialog.
@@ -57,6 +35,7 @@ async function waitForRender(jobId, isActive) {
  */
 export default function UploadPostForm({ defaultDate = null, showPreview = false, embedded = false, onCreated }) {
   const toast = useToast();
+  const activeRender = useActiveRender();
 
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -72,6 +51,8 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   const [useTemplate, setUseTemplate] = useState(false);
   const [templateId, setTemplateId] = useState('');
   const [templateVideo, setTemplateVideo] = useState(null); // input video, uploaded only on Generate
+  const [templateImage, setTemplateImage] = useState(null); // optional in-video image, uploaded on Generate
+  const [templateText, setTemplateText] = useState(''); // optional in-video text overlay
   const [generating, setGenerating] = useState(false);
   const [genPhase, setGenPhase] = useState(null); // 'uploading' | 'rendering'
   const [genProgress, setGenProgress] = useState(0); // 0..100 for the input-video upload
@@ -79,14 +60,20 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState(null); // Creatomate URL accepted via "Upload output"
   const [templateVideoKey, setTemplateVideoKey] = useState(null); // tmp/ S3 key of the uploaded input clip
 
-  // Stop the render poll from touching state once the form unmounts.
-  const mountedRef = useRef(true);
-  useEffect(
-    () => () => {
-      mountedRef.current = false;
-    },
-    [],
-  );
+  // Reflect the app-wide render state into this form: restore the template selection on
+  // mount, and open the accept/drop dialog when a render finishes — even if it finished
+  // while the user was on another page (the global poller keeps it moving). Progress for
+  // the uploading/rendering phases shows in the floating RenderIndicator, not here.
+  const activeStatus = activeRender.render?.status;
+  const activeUrl = activeRender.render?.url;
+  const activeTemplateId = activeRender.render?.templateId;
+  useEffect(() => {
+    if (!activeStatus) return;
+    setUseTemplate(true);
+    if (activeTemplateId) setTemplateId(String(activeTemplateId));
+    if (activeStatus === 'accepted' && activeUrl) setGeneratedVideoUrl(activeUrl);
+    else if (activeStatus === 'ready' && activeUrl) setRenderModal({ url: activeUrl });
+  }, [activeStatus, activeUrl, activeTemplateId]);
 
   // Templates load lazily — only once "Use template" is switched on (a null key
   // tells useCachedResource to skip fetching), then stay cached for the session.
@@ -106,6 +93,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   const onSelectTemplate = (v) => {
     setTemplateId(v);
     setGeneratedVideoUrl(null);
+    activeRender.clear(); // different template → any persisted render is stale
   };
 
   const handleTemplateVideo = (f) => {
@@ -116,6 +104,18 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     }
     setTemplateVideo(f);
     setGeneratedVideoUrl(null); // a new input video → previous render is stale
+    activeRender.clear();
+  };
+
+  const handleTemplateImage = (f) => {
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      toast.error('Please choose an image file');
+      return;
+    }
+    setTemplateImage(f);
+    setGeneratedVideoUrl(null); // a new in-video image → previous render is stale
+    activeRender.clear();
   };
 
   // "Generate with Template": upload the input video now, then trigger the n8n
@@ -132,25 +132,41 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     }
     setGenerating(true);
     setGenProgress(0);
+    activeRender.clearError();
+    activeRender.beginUpload();
     try {
       // Input clip goes to tmp/ — kept only until the user drops/accepts the
       // result (and an S3 lifecycle rule expires any that slip through).
       setGenPhase('uploading');
       const pres = await upload.getPresignedUrl(templateVideo.name, templateVideo.type, { temporary: true });
-      await upload.uploadToS3(pres.uploadUrl, templateVideo, setGenProgress);
+      await upload.uploadToS3(pres.uploadUrl, templateVideo, (p) => {
+        setGenProgress(p);
+        activeRender.setUploadProgress(p);
+      });
       setTemplateVideoKey(pres.s3Key);
 
-      // Kick off the async render, then poll until Creatomate (via n8n) reports back.
+      // Optional in-video image → tmp/ as well (the video upload drives the progress bar).
+      let imageS3Key = null;
+      if (templateImage) {
+        const imgPres = await upload.getPresignedUrl(templateImage.name, templateImage.type, { temporary: true });
+        await upload.uploadToS3(imgPres.uploadUrl, templateImage);
+        imageS3Key = imgPres.s3Key;
+      }
+
+      // Kick off the async render and hand it to the app-wide tracker, which polls it to
+      // completion and shows progress in the floating indicator — so the user can keep
+      // working or move to another section while Creatomate renders.
       setGenPhase('rendering');
       const { renderJobId } = await creatomate.startRender({
         template_id: Number(templateId),
         video_s3_key: pres.s3Key,
+        image_s3_key: imageS3Key,
+        text: templateText.trim() || null,
         caption,
       });
-      const job = await waitForRender(renderJobId, () => mountedRef.current);
-      if (!job) return; // form unmounted mid-render — nothing to show
-      setRenderModal({ url: job.url });
+      activeRender.begin({ renderJobId, templateId });
     } catch (err) {
+      activeRender.clear();
       setErrorDialog(apiError(err));
     } finally {
       setGenerating(false);
@@ -166,6 +182,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     if (!renderModal) return;
     setGeneratedVideoUrl(renderModal.url);
     setTemplateVideoKey(null);
+    activeRender.markAccepted({ templateId, url: renderModal.url });
     setRenderModal(null);
     toast.success('Generated video selected — add it to the pool');
   };
@@ -176,6 +193,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       upload.discard(templateVideoKey).catch(() => {}); // best-effort
       setTemplateVideoKey(null);
     }
+    activeRender.clear();
     setRenderModal(null);
   };
 
@@ -291,6 +309,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       invalidateCache('dashboard');
 
       toast.success(scheduled ? 'Post added to the pool' : 'Posting now — sending it to Facebook');
+      activeRender.clear(); // render consumed by a created post
       onCreated?.(post);
     } catch (err) {
       setErrorDialog(apiError(err)); // e.g. "A post is already scheduled for that date and time"
@@ -302,6 +321,8 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   };
 
   const isVideo = file?.type?.startsWith('video');
+  // A render is in flight anywhere in the app (uploading the input clip or rendering).
+  const renderBusy = activeStatus === 'uploading' || activeStatus === 'rendering';
 
   const fieldsEl = (
     <>
@@ -357,26 +378,51 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
                 </span>
               </div>
 
+              <div className="field">
+                <span className="field__label">In-video text</span>
+                <input
+                  className="input"
+                  value={templateText}
+                  onChange={(e) => {
+                    setTemplateText(e.target.value);
+                    setGeneratedVideoUrl(null); // changing inputs makes a prior render stale
+                    activeRender.clear();
+                  }}
+                  placeholder="Text to show in the video (optional)"
+                />
+                <span className="field__hint">Injected into the template’s text element.</span>
+              </div>
+
+              <div className="field">
+                <span className="field__label">In-video image</span>
+                <MediaDropzone accept="image/*" file={templateImage} onFile={handleTemplateImage} />
+                <span className="field__hint">Optional — injected into the template’s image element.</span>
+              </div>
+
               {generatedVideoUrl ? (
                 <div className="field">
                   <div className="row row--between" style={{ gap: 12 }}>
                     <span className="text-sm" style={{ color: '#1f8f43', fontWeight: 600 }}>
                       ✓ Generated video selected
                     </span>
-                    <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={generating}>
+                    <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={generating || renderBusy}>
                       Regenerate
                     </Button>
                   </div>
                 </div>
               ) : (
-                <div className="field" style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Button type="button" variant="accent" onClick={generate} disabled={generating || !templateVideo}>
-                    {generating
-                      ? genPhase === 'uploading'
+                <div className="field">
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button type="button" variant="accent" onClick={generate} disabled={generating || renderBusy || !templateVideo}>
+                      {generating && genPhase === 'uploading'
                         ? `Uploading… ${genProgress}%`
-                        : 'Generating…'
-                      : 'Generate with Template'}
-                  </Button>
+                        : generating || renderBusy
+                          ? 'Generating…'
+                          : 'Generate with Template'}
+                    </Button>
+                  </div>
+                  {/* Progress shows in the floating top-right indicator (RenderIndicator),
+                      so it stays visible while you keep working or switch sections. */}
                 </div>
               )}
             </>
@@ -564,24 +610,8 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
         <p className="text-sm text-muted">Please keep this tab open until it finishes.</p>
       </Modal>
 
-      {/* Generation progress — barrier while the input video uploads and the
-          template renders on Creatomate. */}
-      <Modal
-        open={generating}
-        dismissable={false}
-        title={genPhase === 'uploading' ? 'Uploading video…' : 'Generating with template…'}
-      >
-        <ProgressBar
-          value={genProgress}
-          indeterminate={genPhase !== 'uploading'}
-          label={
-            genPhase === 'uploading'
-              ? `Uploading your video… ${genProgress}%`
-              : 'Rendering with Creatomate — this can take a minute…'
-          }
-        />
-        <p className="text-sm text-muted">Please keep this tab open until it finishes.</p>
-      </Modal>
+      {/* Generation progress is now shown inline under the Generate button (above) —
+          no blocking overlay. */}
 
       {/* Result dialog — barrier showing the rendered video; Upload it or drop it. */}
       <Modal

@@ -58,6 +58,19 @@ export async function returnToAi(id) {
   return data.data.conversation;
 }
 
+// Block the customer on this thread — stops their inbound + the AI (n8n). Both a Live
+// Agent and the AI can block.
+export async function block(id) {
+  const { data } = await api.post(`/messages/${id}/block`);
+  return data.data.conversation;
+}
+
+// Unblock — a human (Live Agent) only; works even on AI-handled threads.
+export async function unblock(id) {
+  const { data } = await api.post(`/messages/${id}/unblock`);
+  return data.data.conversation;
+}
+
 // ── Transfers ────────────────────────────────────────────────────────────────
 // Teammates a chat can be transferred to (active users with Messaging access).
 export async function agents() {

@@ -3,13 +3,19 @@ import { sendSuccess } from '../utils/response.util.js';
 import * as authService from '../services/auth.service.js';
 import * as invitesService from '../services/invites.service.js';
 
+// Best-effort client IP behind nginx (X-Forwarded-For first hop), else the socket.
+function clientIp(req) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return fwd || req.ip || req.socket?.remoteAddress || '';
+}
+
 export const register = asyncHandler(async (req, res) => {
-  const result = await authService.register(req.body || {});
+  const result = await authService.register(req.body || {}, { ip: clientIp(req), userAgent: req.headers['user-agent'] });
   sendSuccess(res, result, 201);
 });
 
 export const login = asyncHandler(async (req, res) => {
-  const result = await authService.login(req.body || {});
+  const result = await authService.login(req.body || {}, { ip: clientIp(req), userAgent: req.headers['user-agent'] });
   sendSuccess(res, result);
 });
 
@@ -29,8 +35,28 @@ export const updateAvatar = asyncHandler(async (req, res) => {
 });
 
 export const logout = asyncHandler(async (req, res) => {
-  // JWT is stateless — the client discards the token.
+  // Revoke THIS session server-side, then the client discards its token.
+  await authService.revokeSession(req.user.id, req.sessionId);
   sendSuccess(res, { message: 'logged out' });
+});
+
+// Log out of all OTHER devices: revoke every session except the current one (its token
+// stays valid, so this device is unaffected).
+export const logoutAll = asyncHandler(async (req, res) => {
+  await authService.logoutOtherSessions(req.user.id, req.sessionId);
+  sendSuccess(res, { ok: true });
+});
+
+// Revoke ONE session (log out a specific device) by its id.
+export const revokeSession = asyncHandler(async (req, res) => {
+  sendSuccess(res, await authService.revokeSession(req.user.id, req.params.id));
+});
+
+// The signed-in user's sessions (active + revoked), newest first, with the current one
+// flagged — powers the Profile → Security list.
+export const sessions = asyncHandler(async (req, res) => {
+  const items = await authService.listSessions(req.user.id);
+  sendSuccess(res, { sessions: items.map((s) => ({ ...s, current: s.id === req.sessionId })) });
 });
 
 // Public: checks whether an invite link is still usable, so the signup page

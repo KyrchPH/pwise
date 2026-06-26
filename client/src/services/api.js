@@ -34,4 +34,12 @@ export function apiError(err) {
   return err?.response?.data?.message || err?.message || 'Something went wrong';
 }
 
+// True for transient server/network failures worth a retry: the request never got a
+// response (server unreachable, timeout, CORS) or the server answered with a 5xx.
+// A 4xx (401 expired token, 400 bad credentials, …) is NOT a server error.
+export function isServerError(err) {
+  const status = err?.response?.status;
+  return !err?.response || status >= 500;
+}
+
 export default api;

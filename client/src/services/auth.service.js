@@ -34,6 +34,25 @@ export async function logout() {
   await api.post('/auth/logout');
 }
 
+// Log out of all OTHER devices (revoke every other session). This device's session
+// stays valid, so its token keeps working.
+export async function logoutAll() {
+  const { data } = await api.post('/auth/logout-all');
+  return data.data; // { ok }
+}
+
+// This user's sessions (active + revoked), newest first, the current one flagged.
+export async function sessions() {
+  const { data } = await api.get('/auth/sessions');
+  return data.data.sessions; // [{ id, ip, userAgent, createdAt, lastSeenAt, revokedAt, current }]
+}
+
+// Revoke ONE session — log out a specific device.
+export async function revokeSession(id) {
+  const { data } = await api.delete(`/auth/sessions/${id}`);
+  return data.data; // { revoked }
+}
+
 // Email-verified password change, 3 steps.
 export async function startPasswordChange(currentPassword) {
   const { data } = await api.post('/auth/password/start', { currentPassword });

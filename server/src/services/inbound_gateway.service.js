@@ -151,6 +151,8 @@ export async function handleTelegramUpdate(accountId, update = {}) {
   const customerName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || from.username || 'Customer';
   const chatId = String(msg.chat?.id ?? from.id ?? '');
   if (!chatId) return;
+  // Blocked customer → drop silently (no record, no n8n forward).
+  if (await messaging.isCustomerBlocked({ accountId: acct, customerHandle: chatId })) return;
 
   const result = await messaging.receiveInbound({
     accountId: acct,
@@ -237,12 +239,17 @@ async function handleMetaMessaging(body, { object, origin, platform, resolveColu
       let media = [];
       if (rawMedia.length && acct != null) media = await ingestRemoteMedia(rawMedia, acct, platform);
       if (!text && !media.length) continue;
+      // Blocked customer → drop silently (no record, no n8n forward).
+      if (await messaging.isCustomerBlocked({ accountId: acct, customerHandle: senderId })) continue;
 
-      let customerName = defaultName;
+      let resolvedName = null;
+      let customerAvatar = null;
       if (pageToken) {
         const prof = await fb.getUserProfile(pageToken, senderId).catch(() => null);
-        if (prof?.name) customerName = prof.name;
+        if (prof?.name) resolvedName = prof.name;
+        if (prof?.avatar) customerAvatar = prof.avatar;
       }
+      const customerName = resolvedName || defaultName;
 
       const result = await messaging.receiveInbound({
         accountId: acct,
@@ -252,6 +259,10 @@ async function handleMetaMessaging(body, { object, origin, platform, resolveColu
         media,
         customerHandle: senderId,
         customerName,
+        // Only refresh the stored name when we actually resolved a REAL one — never
+        // overwrite an existing good name with the generic "<platform> user" default.
+        customerNameResolved: resolvedName,
+        customerAvatar,
         externalId,
       });
 
@@ -364,6 +375,8 @@ export async function handleWhatsappEvent(body = {}) {
         let media = [];
         if (rawMedia.length && acct != null) media = await ingestRemoteMedia(rawMedia, acct, 'whatsapp');
         if (!text && !media.length) continue;
+        // Blocked customer → drop silently (no record, no n8n forward).
+        if (await messaging.isCustomerBlocked({ accountId: acct, customerHandle: from })) continue;
 
         const result = await messaging.receiveInbound({
           accountId: acct,

@@ -281,7 +281,16 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .card--pad { padding: 22px; }
 /* Settings: two parent containers — a nav rail + the active section's content. */
 .settings-layout { display: flex; gap: 16px; align-items: flex-start; }
-.settings-nav { flex: 0 0 220px; padding: 10px; }
+/* The nav rail sticks while the (long) section content scrolls past it. align-self
+   keeps it its own height; max-height + overflow let a long rail scroll internally. */
+.settings-nav {
+  flex: 0 0 220px; padding: 10px;
+  position: sticky; top: 16px; align-self: flex-start;
+  /* Tall sidebar card: fills most of the viewport so it reads as a full-height rail,
+     capped so it never exceeds the screen (then scrolls internally). */
+  min-height: calc(100vh - 160px);
+  max-height: calc(100vh - 32px); overflow-y: auto;
+}
 .settings-content { flex: 1; min-width: 0; }
 .settings-nav__list { display: flex; flex-direction: column; gap: 2px; }
 .settings-nav__item {
@@ -295,9 +304,30 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .settings-nav__item.is-active .settings-nav__icon { color: var(--blue); }
 @media (max-width: 760px) {
   .settings-layout { flex-direction: column; }
-  .settings-nav { flex: none; width: 100%; }
+  /* Stacked layout: the rail becomes a normal horizontal bar (not sticky). */
+  .settings-nav { flex: none; width: 100%; position: static; min-height: 0; max-height: none; overflow: visible; }
   .settings-nav__list { flex-direction: row; flex-wrap: wrap; }
 }
+
+/* Settings: collapsible section accordion — declutters the long page-connect form. */
+.set-acc { border: 1px solid var(--border); border-radius: var(--r-sm); margin-top: 10px; background: var(--surface-2); }
+.set-acc > summary {
+  list-style: none; cursor: pointer; user-select: none; border-radius: var(--r-sm);
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px; font-weight: 600; font-size: 0.9rem;
+}
+.set-acc > summary::-webkit-details-marker { display: none; }
+.set-acc > summary:hover { background: var(--surface-3); }
+.set-acc__title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.set-acc__opt { font-weight: 400; font-size: 0.78rem; color: var(--muted); }
+.set-acc__status { font-weight: 500; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+.set-acc > summary::after {
+  content: ''; width: 7px; height: 7px; flex: none; margin-top: -3px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); transition: transform 0.15s ease;
+}
+.set-acc[open] > summary::after { transform: rotate(-135deg); margin-top: 2px; }
+.set-acc[open] > summary { border-bottom: 1px solid var(--border); }
+.set-acc__body { padding: 14px; }
 
 /* Shop: a sub-rail (Products/Orders/Receipts/Discounts) + the active section. */
 .shop-layout { display: flex; gap: 16px; align-items: flex-start; }
@@ -420,7 +450,10 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .sidebar__scroll {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
   display: flex; flex-direction: column; gap: 26px;
-  scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  /* Scrollbar hidden on purpose: the edge-fade below is this region's scroll
+     affordance. Showing a scrollbar here too would put a 2nd visible scrollbar
+     next to the main content's whenever the nav outgrows a short viewport. */
+  scrollbar-width: none;
   /* Soft fade at whichever edge still has nav to scroll to. The fade sizes are
      driven from JS (AppLayout) and shrink to 0 at each end, so a fully-scrolled
      or non-scrolling list shows a crisp edge instead of a hard cut-off. */
@@ -429,9 +462,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
 }
-.sidebar__scroll::-webkit-scrollbar { width: 8px; }
-.sidebar__scroll::-webkit-scrollbar-track { background: transparent; }
-.sidebar__scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.26); border-radius: 999px; }
+.sidebar__scroll::-webkit-scrollbar { width: 0; height: 0; }
 
 /* Top row holding the collapse/expand toggle (where the logo used to sit). */
 .sidebar__top { height: 50px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; }
@@ -590,6 +621,38 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 .content::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: padding-box; }
 
+/* Floating, app-wide render indicator (Generate-with-Template / Creatomate). Pinned to
+   the screen's top-right so it stays visible while you keep working or move between
+   sections. The toast stack + robot assistant dock bottom-right, so they don't clash. */
+.render-toast {
+  position: fixed; top: 16px; right: 16px; z-index: 55;
+  width: min(330px, calc(100vw - 32px));
+  background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r);
+  box-shadow: 0 16px 38px rgba(15, 60, 95, 0.18);
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  animation: renderToastIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes renderToastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+.render-toast--ready { border-color: rgba(43, 179, 94, 0.45); }
+.render-toast--error { border-color: rgba(226, 85, 73, 0.45); }
+.render-toast__head { display: flex; align-items: center; gap: 8px; }
+.render-toast__title { font-weight: 600; font-size: 0.92rem; color: var(--text); }
+.render-toast__hint { margin: 0; font-size: 0.78rem; color: var(--muted); }
+.render-toast__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.render-toast__close {
+  margin-left: auto; background: transparent; border: none; cursor: pointer; color: var(--muted);
+  font-size: 1.15rem; line-height: 1; padding: 2px 5px; border-radius: 6px;
+}
+.render-toast__close:hover { background: var(--surface-2); color: var(--text); }
+.render-toast__spinner {
+  width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--blue); animation: spin 0.7s linear infinite;
+}
+.render-toast__check {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; background: #1f8f43; color: #fff;
+  display: grid; place-items: center; font-size: 0.7rem; font-weight: 700;
+}
+
 /* --- Mobile nav controls (hamburger + off-canvas drawer + backdrop) ---
    Hidden on desktop; the responsive block at the bottom switches them on. */
 .topbar__left { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -648,22 +711,22 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .sidebar__acct--page .sidebar__acct-name,
 .sidebar__acct--page .sidebar__acct-sub { text-align: center; }
 
-/* "Switch Page" action — chunky yellow button (matches .btn--accent); collapses
-   to a round icon button on the icons-only rail. */
+/* "Switch Page" action — flat, full-width button on the page card; collapses to a
+   round icon button on the icons-only rail. */
 .sidebar__switch-btn {
-  margin-top: 3px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px 18px; border-radius: 999px; border: none;
-  background: linear-gradient(180deg, #ffdb5e, var(--yellow) 60%, var(--yellow-600));
-  color: #5a3d00; font: inherit; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.01em;
+  margin-top: 4px;
+  width: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 14px; border-radius: 12px; border: none;
+  background: #fff;
+  color: #123a57; font: inherit; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.01em;
   white-space: nowrap; cursor: pointer;
-  box-shadow: 0 4px 0 var(--yellow-700), 0 8px 16px rgba(243, 173, 0, 0.34);
-  transition: transform 0.1s ease, box-shadow 0.1s ease, filter 0.12s ease;
+  transition: background 0.14s ease, opacity 0.14s ease;
 }
-.sidebar__switch-btn:hover { filter: brightness(1.04); }
-.sidebar__switch-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--yellow-700), 0 4px 10px rgba(243, 173, 0, 0.3); }
-.sidebar__switch-btn:focus-visible { outline: none; box-shadow: 0 4px 0 var(--yellow-700), var(--ring); }
-.sidebar__switch-btn:disabled { opacity: 0.7; cursor: default; box-shadow: 0 4px 0 var(--yellow-700); }
+.sidebar__switch-btn:hover { background: rgba(255, 255, 255, 0.88); }
+.sidebar__switch-btn:active { background: rgba(255, 255, 255, 0.78); }
+.sidebar__switch-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.sidebar__switch-btn:disabled { opacity: 0.7; cursor: default; }
 .sidebar__switch-btn__icon { display: none; }
 
 /* A connected page's photo (Facebook page picture) with a letter fallback */
@@ -835,6 +898,14 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .analytics-chart__body { height: 220px; }
 
 /* --- Creatomate templates (Settings) --- */
+/* Flat "Add template" button — drops the raised gradient/shadow of .btn--primary. */
+.ct-addbtn.btn--primary {
+  background: var(--blue); border-color: var(--blue-600); color: #fff;
+  box-shadow: none; transform: none;
+}
+.ct-addbtn.btn--primary:hover { background: var(--blue-600); filter: none; transform: none; }
+.ct-addbtn.btn--primary:active { background: var(--blue-700); box-shadow: none; transform: none; }
+
 .ct-form { display: flex; flex-direction: column; gap: 12px; }
 .ct-form__json { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; min-height: 200px; line-height: 1.45; }
 .ct-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -1195,6 +1266,13 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
    float so it doesn't fight the live position. */
 .dev-agent.is-dragging { animation: none; }
 .dev-agent.is-ready { opacity: 1; }
+/* One-time entrance: slide up-in from off the bottom-right corner when the widget
+   first appears (after login). `:not(.is-dragging)` so a drag never fights it, and the
+   component drops the class after it plays so it never replays. Ends at translate(0)
+   = devAgentFloat's 0% keyframe, so the perpetual float resumes seamlessly. */
+.dev-agent.is-entering:not(.is-dragging) {
+  animation: devAgentSlideIn 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 /* Soft spotlight around the agent — clear right around the robot, fading to a color
    that contrasts the theme (white in dark, black in light) just outside it. Sits
    behind the robot and floats with it. */
@@ -1533,12 +1611,17 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
 }
+@keyframes devAgentSlideIn {
+  from { opacity: 0; transform: translate(120px, 120px) scale(0.8); }
+  to { opacity: 1; transform: translate(0, 0) scale(1); }
+}
 @keyframes devAgentBubbleIn {
   from { opacity: 0; transform: translateY(8px) scale(0.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
   .dev-agent { animation: none; }
+  .dev-agent.is-entering:not(.is-dragging) { animation: none; }
   .dev-agent__bubble { animation: none; }
   .dev-agent__chat { animation: none; }
   .dev-agent__drawer { animation: none; }
@@ -1584,6 +1667,19 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .auth__head { text-align: center; margin-bottom: 24px; }
 .auth__head .brand { justify-content: center; font-size: 1.8rem; margin-bottom: 8px; }
 .auth__sub { color: var(--muted); font-size: 0.92rem; }
+
+/* Login / auth screen: flat buttons — no gloss, 3D edge, or glow (the app's default
+   chunky button is kept elsewhere). Solid fill + rounded-rect, darken on hover/press. */
+.auth .btn { border-radius: 10px; box-shadow: none; }
+.auth .btn:hover { filter: none; }
+.auth .btn:active { transform: none; }
+.auth .btn--primary {
+  background: var(--blue);
+  border-color: var(--blue);
+  box-shadow: none;
+}
+.auth .btn--primary:hover { background: var(--blue-600); border-color: var(--blue-600); }
+.auth .btn--primary:active { background: var(--blue-700); border-color: var(--blue-700); box-shadow: none; }
 .tabs { display: flex; gap: 4px; background: var(--surface-3); padding: 5px; border-radius: 999px; margin-bottom: 24px; }
 .tabs__btn { flex: 1; border: none; background: transparent; color: var(--muted); font: inherit; font-weight: 700; font-size: 0.9rem; padding: 10px; border-radius: 999px; cursor: pointer; transition: 0.15s; }
 .tabs__btn.active { background: var(--surface); color: var(--blue-700); box-shadow: 0 3px 8px rgba(15, 60, 95, 0.12); }
@@ -1782,6 +1878,7 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .dropzone:hover, .dropzone:focus-visible { border-color: var(--blue); background: #eaf5fe; }
 .dropzone:focus-visible { box-shadow: var(--ring); }
 .dropzone__icon { color: var(--blue); display: grid; place-items: center; margin-bottom: 4px; }
+.dropzone__thumb { max-width: 200px; max-height: 120px; border-radius: var(--r-sm); object-fit: cover; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22); }
 .dropzone__label { font-family: var(--font-display); font-weight: 700; font-size: 1rem; color: var(--text); word-break: break-word; }
 .dropzone__hint { font-size: 0.8rem; color: var(--muted); }
 
@@ -2528,6 +2625,15 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 }
 [data-theme='dark'] .msg-transfer-btn:hover { color: #7cc6f3; }
 
+/* Block / unblock customer — reuses the transfer button's layout, recolored red. */
+.msg-block-btn:hover { color: #d4504e; border-color: rgba(212, 80, 78, 0.5); }
+.msg-block-btn.is-blocked { color: #d4504e; border-color: rgba(212, 80, 78, 0.5); background: #fdeceb; }
+[data-theme='dark'] .msg-block-btn.is-blocked { background: rgba(212, 80, 78, 0.16); }
+.msg-composer--blocked .msg-composer__lockicon,
+.msg-composer--blocked .msg-composer__locked-text { color: #c52f24; }
+.msg-conversation__status--blocked { color: #c52f24; background: rgba(212, 80, 78, 0.1); }
+[data-theme='dark'] .msg-conversation__status--blocked { color: #f1a7a1; }
+
 /* ── Conversation notes ─────────────────────────────────────────────────────── */
 /* Notes button in the thread header (mirrors the transfer button) + a count badge. */
 .msg-notes-btn {
@@ -2621,6 +2727,29 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   margin-top: 4px; padding: 0; font-size: 12px; font-weight: 600;
   color: var(--blue-700, #1f9be6); background: none; border: none; cursor: pointer;
 }
+
+/* Profile → Security: active-sessions / login-history list. */
+.login-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.login-history__row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.login-history__row:last-child { border-bottom: none; }
+.login-history__row.is-revoked { opacity: 0.55; }
+.login-history__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.login-history__device { font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.login-history__badge {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--blue-700, #1f9be6); background: rgba(31, 155, 230, 0.12);
+  padding: 1px 7px; border-radius: 999px;
+}
+.login-history__meta { font-size: 12px; color: var(--muted); }
+.login-history__revoke {
+  flex: none; font-size: 12px; font-weight: 600; color: #d6455d;
+  background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.login-history__revoke:hover { background: rgba(214, 69, 93, 0.1); }
+.login-history__revoke:disabled { opacity: 0.5; cursor: default; }
 
 /* Incoming-requests drawer (right-side sidebar). */
 .msg-requests { position: fixed; inset: 0; z-index: 70; display: flex; justify-content: flex-end; animation: fade 0.15s ease; }
@@ -3891,13 +4020,16 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.68rem; font-weight: 700;
 }
 
-/* Variant matrix editor (ProductForm) */
-.chip {
+/* Variant matrix editor (ProductForm) — removable value tag. Self-contained
+   (own class) so it no longer collides with the toolbar filter `.chip` above,
+   which this rule used to override and leave looking cramped. */
+.tag-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
-  border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border); font-size: 0.82rem;
+  border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border);
+  font-size: 0.82rem; font-weight: 700; color: var(--muted); text-transform: capitalize;
 }
-.chip button { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; border-radius: 999px; }
-.chip button:hover { color: #d4504e; }
+.tag-chip button { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; border-radius: 999px; }
+.tag-chip button:hover { color: #d4504e; }
 .variant-editor { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--border); padding-top: 14px; }
 .variant-editor__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .variant-axis { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }

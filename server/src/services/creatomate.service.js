@@ -132,14 +132,21 @@ function assertFetchableUrl(raw) {
  * /renders/callback (see recordRenderResult). The job id rides `render_job_id` →
  * Creatomate `metadata` → the callback, so the result correlates back to this job.
  */
-export async function startRender(actor, templateDbId, { videoS3Key = null, caption = null } = {}) {
+export async function startRender(actor, templateDbId, { videoS3Key = null, imageS3Key = null, text = null, caption = null } = {}) {
   ensureWebhook();
   const tpl = await getById(templateDbId); // 404s if the template is gone
   const cfg = parseStoredConfig(tpl.config);
 
+  // Inject the input video, the in-video image, and the in-video text into the
+  // template's elements (keys configured in env.creatomate). Each is optional — only
+  // set the modification when a value was provided.
   const videoUrl = videoS3Key ? await createDownloadUrl(videoS3Key) : null;
+  const imageUrl = imageS3Key ? await createDownloadUrl(imageS3Key) : null;
+  const cleanText = typeof text === 'string' ? text.trim() : '';
   const modifications = { ...(cfg.modifications || {}) };
   if (videoUrl) modifications[env.creatomate.videoKey] = videoUrl;
+  if (imageUrl) modifications[env.creatomate.imageKey] = imageUrl;
+  if (cleanText) modifications[env.creatomate.textKey] = cleanText;
 
   const renderJobId = crypto.randomUUID();
   await query('INSERT INTO creatomate_renders (id, user_id, template_id, status) VALUES (?, ?, ?, ?)', [
@@ -163,6 +170,7 @@ export async function startRender(actor, templateDbId, { videoS3Key = null, capt
         for_automation: true, // routes n8n's "Is For Automated Editing?" IF to the render branch
         template_id: cfg.template_id,
         video_url: videoUrl,
+        image_url: imageUrl, // informational — the value is also in `modifications`
         caption,
         page_id: env.facebook.pageId || null,
         modifications,

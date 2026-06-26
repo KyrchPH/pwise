@@ -10,7 +10,10 @@ router.get('/invite/:token', ctrl.validateInvite); // public: check an invite li
 router.get('/me', requireAuth, ctrl.me);
 router.patch('/me', requireAuth, ctrl.updateMe);
 router.patch('/me/avatar', requireAuth, ctrl.updateAvatar);
-router.post('/logout', requireAuth, ctrl.logout);
+router.post('/logout', requireAuth, ctrl.logout); // revoke THIS session
+router.post('/logout-all', requireAuth, ctrl.logoutAll); // revoke all OTHER sessions
+router.get('/sessions', requireAuth, ctrl.sessions); // list this user's sessions
+router.delete('/sessions/:id', requireAuth, ctrl.revokeSession); // log out a specific device
 
 // Email-verified password change (signed-in user). 3 steps: confirm current
 // password → verify emailed code → set new password.

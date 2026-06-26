@@ -516,6 +516,7 @@ export default function MessagingPage() {
   // thread then leaves this view) or declines (it unlocks). Server-backed, so it
   // survives a reload and arrives live over SSE.
   const transferPending = !!activeConversation?.transferPending;
+  const blocked = !!activeConversation?.blocked;
 
   useEffect(() => {
     if (!composerPageId) {
@@ -827,6 +828,32 @@ export default function MessagingPage() {
     if (activeConversation) takeOverConversation(activeConversation.id);
   };
 
+  // Block / unblock the customer on the open thread. Optimistic — the server confirms
+  // via a conversation:updated SSE event; revert on error. Both AI + Live threads can be
+  // blocked from here; unblock is a human action (this UI), allowed on AI threads too.
+  const setConversationBlocked = (id, value, byName) =>
+    setConversations((cur) => cur.map((c) => (c.id === id ? { ...c, blocked: value, blockedBy: byName } : c)));
+  const handleBlock = () => {
+    if (!activeConversation) return;
+    const id = activeConversation.id;
+    const prev = activeConversation.blockedBy || '';
+    setConversationBlocked(id, true, user?.name || 'Live Agent');
+    messaging.block(id).catch((e) => {
+      setConversationBlocked(id, false, prev);
+      toast.error(messaging.apiError(e));
+    });
+  };
+  const handleUnblock = () => {
+    if (!activeConversation) return;
+    const id = activeConversation.id;
+    const prev = activeConversation.blockedBy || '';
+    setConversationBlocked(id, false, '');
+    messaging.unblock(id).catch((e) => {
+      setConversationBlocked(id, true, prev);
+      toast.error(messaging.apiError(e));
+    });
+  };
+
   // Hand the open Live Agent thread back to the AI agent (double-click the customer
   // avatar). Gated by the ALLOW_TRANSFER_TO_AI flag; only meaningful on a thread I own.
   const handleReturnToAi = () => {
@@ -851,8 +878,16 @@ export default function MessagingPage() {
   };
 
   // Open the transfer picker for the active (owned) conversation, loading teammates.
+  // Gate: this agent's note must be the MOST RECENT one — they have to leave a handoff
+  // summary before passing the chat on (the server enforces this too). If not, nudge
+  // them and open the notes drawer instead of the picker.
   const openTransfer = () => {
     if (!activeConversation) return;
+    if (!notes.length || Number(notes[0].createdBy) !== currentUserId) {
+      toast.error('Add a note before transferring — leave a quick handoff summary so the next agent has context.');
+      setNotesOpen(true);
+      return;
+    }
     setTransferFor(activeConversation);
     if (!agents.length) messaging.agents().then(setAgents).catch(() => {});
   };
@@ -1175,6 +1210,9 @@ export default function MessagingPage() {
                       <div className="msg-conversation__row">
                         <span className="msg-conversation__tags">
                           <span className="msg-conversation__mode">{conversation.handledBy}</span>
+                          {conversation.blocked && (
+                            <span className="msg-conversation__status msg-conversation__status--blocked">Blocked</span>
+                          )}
                           {conversation.status && (
                             <span className="msg-conversation__status">{conversation.status}</span>
                           )}
@@ -1251,6 +1289,18 @@ export default function MessagingPage() {
                       <TransferIcon />
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className={`msg-transfer-btn msg-block-btn${blocked ? ' is-blocked' : ''}`}
+                    onClick={blocked ? handleUnblock : handleBlock}
+                    title={blocked ? 'Unblock customer' : 'Block customer'}
+                    aria-label={blocked ? 'Unblock customer' : 'Block customer'}
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" />
+                      <line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
+                    </svg>
+                  </button>
                   <span className={`msg-status-badge msg-status-badge--${isLiveAgent ? 'live' : 'ai'}`}>
                     <span className="msg-status-badge__dot" aria-hidden="true" />
                     {activeConversation.handledBy}
@@ -1399,7 +1449,22 @@ export default function MessagingPage() {
                 )}
               </div>
 
-              {isLiveAgent && transferPending ? (
+              {blocked ? (
+                <div className="msg-composer msg-composer--locked msg-composer--blocked">
+                  <span className="msg-composer__lockicon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
+                    </svg>
+                  </span>
+                  <p className="msg-composer__locked-text">
+                    Customer blocked{activeConversation.blockedBy ? ` by ${activeConversation.blockedBy}` : ''} — their messages are dropped and the AI won&apos;t reply.
+                  </p>
+                  <button type="button" className="msg-composer__takeover" onClick={handleUnblock}>
+                    Unblock
+                  </button>
+                </div>
+              ) : isLiveAgent && transferPending ? (
                 <div className="msg-composer msg-composer--locked msg-composer--pending">
                   <span className="msg-composer__lockicon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

@@ -218,7 +218,7 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
               </div>
               <div className="variant-axis__values">
                 {axis.values.map((val) => (
-                  <span className="chip" key={val}>
+                  <span className="tag-chip" key={val}>
                     {val}
                     <button type="button" onClick={() => removeValue(i, val)} aria-label={`Remove ${val}`}>×</button>
                   </span>

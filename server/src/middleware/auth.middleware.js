@@ -1,28 +1,28 @@
-import { verifyToken, findActiveById } from '../services/auth.service.js';
+import { resolveSession } from '../services/auth.service.js';
 import ApiError from '../utils/ApiError.js';
 
-// Verifies the Bearer JWT, then loads the user from the DB so deactivated /
-// deleted accounts are rejected immediately (their existing token stops working).
-// Sets req.user = { id, name, email, role, is_active, module_access }.
+// Verifies the Bearer JWT, loads the user (so deactivated/deleted accounts are rejected
+// immediately), AND checks the token's session is still active — so "log out of this /
+// other devices" takes effect. Sets req.user and req.sessionId.
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const [scheme, token] = header.split(' ');
   if (scheme !== 'Bearer' || !token) return next(ApiError.unauthorized('missing bearer token'));
 
-  let payload;
-  try {
-    payload = verifyToken(token);
-  } catch {
-    return next(ApiError.unauthorized('invalid or expired token'));
-  }
-
-  findActiveById(payload.sub)
-    .then((user) => {
-      if (!user) return next(ApiError.unauthorized('account not found or inactive'));
-      req.user = user;
+  resolveSession(token)
+    .then((result) => {
+      if (!result) return next(ApiError.unauthorized('your session is no longer valid — please log in again'));
+      req.user = result.user;
+      req.sessionId = result.sessionId;
       next();
     })
-    .catch(next); // forward real errors (e.g. DB) instead of masking as 401
+    .catch((err) => {
+      // A JWT verify error (malformed/expired) → 401; a real error (e.g. DB) → forward.
+      if (err && /^(JsonWebTokenError|TokenExpiredError|NotBeforeError)$/.test(err.name || '')) {
+        return next(ApiError.unauthorized('invalid or expired token'));
+      }
+      next(err);
+    });
 }
 
 export default requireAuth;

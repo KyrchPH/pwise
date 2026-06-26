@@ -267,6 +267,7 @@ export default function DevScreenAgent() {
   const [drag, setDrag] = useState(null); // { x, y } px while dragging, else null
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false); // swallow the click that trails a drag
+  const [entered, setEntered] = useState(false); // one-shot: drives the slide-in entrance
 
   useEffect(() => {
     if (!hostRef.current) return undefined;
@@ -301,6 +302,14 @@ export default function DevScreenAgent() {
       animation?.destroy();
     };
   }, []);
+
+  // Play the slide-in-from-bottom-right entrance once, when the widget first becomes
+  // visible (ready), then drop the class so dragging/re-renders never replay it.
+  useEffect(() => {
+    if (!ready || entered) return undefined;
+    const t = setTimeout(() => setEntered(true), 700);
+    return () => clearTimeout(t);
+  }, [ready, entered]);
 
   useEffect(() => {
     if (!ready || open) return undefined;
@@ -608,7 +617,7 @@ export default function DevScreenAgent() {
     <div className="dev-agent-overlay">
       <div
         ref={rootRef}
-        className={`dev-agent is-${cornerV} is-${cornerH}${ready ? ' is-ready' : ''}${open ? ' is-open' : ''}${expanded ? ' is-expanded' : ''}${drag ? ' is-dragging' : ''}`}
+        className={`dev-agent is-${cornerV} is-${cornerH}${ready ? ' is-ready' : ''}${ready && !entered ? ' is-entering' : ''}${open ? ' is-open' : ''}${expanded ? ' is-expanded' : ''}${drag ? ' is-dragging' : ''}`}
         style={dragStyle}
       >
         {!open && greeting && <div className="dev-agent__bubble">{greeting}</div>}

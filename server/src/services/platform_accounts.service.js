@@ -8,6 +8,7 @@ import { createFolder } from './vault.service.js';
 import { env } from '../config/env.js';
 import { composeAgentSystemMessages, DEFAULT_AGENT_PROMPTS, AGENT_ROLES } from './ai_prompt.service.js';
 import { resolveConfig as resolveAnalyticsConfig } from './messaging_analytics.service.js';
+import { normalizeBusinessProfile, parseBusinessProfile } from '../utils/business_profile.util.js';
 
 // Connected Facebook pages. The list is shared/global (like the post pool); user_id
 // is the admin creator (audit). Secrets (app_secret, app_client_token, access_token)
@@ -41,6 +42,9 @@ function toSafe(r) {
     analytics_config: resolveAnalyticsConfig(r.analytics_config),
     // Display currency (ISO 4217) for product prices; defaults to Peso.
     currency: r.currency || 'PHP',
+    // Admin-filled business profile (contact / location / hours) the AI agent reads
+    // via get_page_info. Always an object ({} when none set yet).
+    business_profile: parseBusinessProfile(r.business_profile),
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -278,13 +282,14 @@ export async function create(actor = {}, data = {}) {
   }
 
   const promptVal = (v) => String(v ?? '').trim() || null;
+  const profile = normalizeBusinessProfile(data.business_profile);
   const result = await query(
     `INSERT INTO platform_accounts
        (user_id, platform_name, account_name, fb_page_id, app_id, app_secret, app_client_token, access_token,
         telegram_bot_name, telegram_bot_token, telegram_bot_username,
         instagram_account_id, instagram_username, wa_phone_number_id, wa_business_account_id, wa_phone_display, wa_access_token,
-        is_active, ai_prompt_sales, ai_prompt_support, ai_prompt_general)
-     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+        is_active, ai_prompt_sales, ai_prompt_support, ai_prompt_general, business_profile)
+     VALUES (?, 'facebook', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
     [
       actor.id ?? null,
       account_name,
@@ -305,6 +310,7 @@ export async function create(actor = {}, data = {}) {
       promptVal(data.ai_prompt_sales),
       promptVal(data.ai_prompt_support),
       promptVal(data.ai_prompt_general),
+      profile ? JSON.stringify(profile) : null,
     ],
   );
   // Give the page its own Vault folder — the AI agent's media scope. Best-effort:
@@ -401,6 +407,13 @@ export async function update(id, data = {}) {
   if (data.currency !== undefined) {
     const c = String(data.currency || '').trim().toUpperCase();
     set('currency', /^[A-Z]{3}$/.test(c) ? c : 'PHP');
+  }
+
+  // Business profile (contact / location / hours the AI reads via get_page_info).
+  // Normalized to known keys; all-blank → NULL.
+  if (data.business_profile !== undefined) {
+    const profile = normalizeBusinessProfile(data.business_profile);
+    set('business_profile', profile ? JSON.stringify(profile) : null);
   }
 
   if (fields.length) {

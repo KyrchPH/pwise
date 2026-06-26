@@ -268,14 +268,24 @@ export async function sendMedia(token, recipientId, { url, type } = {}) {
   }
 }
 
-// Resolve a customer's display name from their PSID (Messenger User Profile API).
-// Best-effort — returns { name } or null.
+// Resolve a customer's display name + profile photo from their PSID (Messenger User
+// Profile API). Best-effort — returns { name, avatar } or null. NOTE: the photo field
+// for a page-scoped PSID is `profile_pic` (a plain URL string), NOT the Graph
+// user-object `picture` field — requesting an invalid field errors the WHOLE call
+// (graph() flags any data.error as !ok), which would silently drop the name too. So
+// we ask for name+profile_pic, but fall back to a name-only call if that ever fails,
+// so an avatar hiccup can never cost us the display name. The profile_pic URL is a
+// short-lived Meta CDN link, so callers should refresh it on each inbound message.
 export async function getUserProfile(token, psid) {
   if (!token || !psid) return null;
+  const fetchFields = async (fieldStr) => {
+    const { ok, data } = await graph(String(psid), { fields: { fields: fieldStr }, token });
+    return ok ? data : null;
+  };
   try {
-    const { ok, data } = await graph(String(psid), { fields: { fields: 'name' }, token });
-    if (!ok) return null;
-    return { name: data.name || null };
+    const data = (await fetchFields('name,profile_pic')) || (await fetchFields('name'));
+    if (!data) return null;
+    return { name: data.name || null, avatar: data.profile_pic ? String(data.profile_pic) : null };
   } catch {
     return null;
   }

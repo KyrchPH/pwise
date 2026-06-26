@@ -188,6 +188,37 @@
     },
     {
       "parameters": {
+        "description": "Block this customer so their messages stop reaching the shop and the AI. Use ONLY as a last resort for CLEAR abuse: spam, scams, repeated harassment, threats, hate speech, or sexually explicit messages — NOT for a customer who is merely upset, complaining, demanding, indecisive, or hard to help. A blocked customer is fully cut off until a HUMAN unblocks them (you cannot unblock), so when in doubt do NOT block — use Transfer to Human instead. Takes no arguments.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "block_customer",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "customerHandle": "={{ $('Message').first().json.chat_id }}",
+            "origin": "={{ $('Message').first().json.platform }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "customerHandle", "displayName": "customerHandle", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false },
+            { "id": "origin", "displayName": "origin", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false, "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3360, 1450],
+      "id": "b10c0000-0000-4000-8000-000000000010",
+      "name": "Block Customer"
+    },
+    {
+      "parameters": {
         "description": "Send one or more photos/videos from the shop's media library straight to the customer. Use it PROACTIVELY whenever an image would help — any time you mention, recommend, or describe a product, service, package, sample, or result — not only when the customer explicitly asks (though also when they say 'pakita mo', 'may litrato ba', 'can I see', 'patingin'). Pass 'query' (what to show — the item's name or keywords) and 'count' (how many matching files to send, 1–10). Use count 1 for a single item; use a broad query like \"package\" with a higher count to send a whole set at once (e.g. all packages). ONE call sends every matching file once, with no duplicates — do NOT call repeatedly with the same query. The result lists exactly which file(s) were sent (name + description) and any close matches it did NOT send — ALWAYS read it. The file sent is the CLOSEST match and may be a bundle/package/set that only CONTAINS or relates to the item, not a photo of that exact item — so caption honestly: say what's actually in the photo and how it relates, and never send a photo and then claim you have none. If nothing was sent, describe the item in words instead.",
         "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
         "workflowInputs": {
@@ -414,6 +445,62 @@
       "name": "Search Catalog"
     },
     {
+      "parameters": {
+        "description": "Look up THIS business's own contact card — address / location, phone, Viber/WhatsApp, email, operating hours, website, AND its channel / store links (Facebook/Messenger, Telegram, Instagram, Shopee, TikTok, Lazada). Call it whenever the customer asks where you are, your address or location, your operating hours / whether you're open, how to contact or call you, your email/Viber/WhatsApp, or for your Shopee/TikTok/Lazada/page link. Takes no input. State/share only what it returns; if it returns found:false or that detail/link isn't present, do NOT invent one — say you'll get it for them.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "get_page_info",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3024, 1152],
+      "id": "7a0e1b2c-3d4e-4f50-8a6b-0c1d2e3f4a5b",
+      "name": "Get Page Info"
+    },
+    {
+      "parameters": {
+        "description": "Check how far the customer's delivery address is from THIS shop. Pass the customer's full delivery address as `address`; returns the driving distance in km and time in minutes from the shop (available:true), or available:false when it can't be computed. Use it for delivery orders to decide whether local delivery makes sense or the customer should order online instead. If available:false, judge near/far yourself from the address. Never invent a distance.",
+        "workflowId": { "__rl": true, "value": "OGnynfOrmrAPtK54", "mode": "list", "cachedResultName": "Pwise AI Tools" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "check_delivery_distance",
+            "accountId": "={{ $('Message').first().json.accountId }}",
+            "serviceToken": "={{ $('Message').first().json.SERVICE_TOKEN }}",
+            "address": "={{ $fromAI('address', 'the customer\\'s full delivery address', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "accountId", "displayName": "accountId", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "serviceToken", "displayName": "serviceToken", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false },
+            { "id": "address", "displayName": "address", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string", "removed": false }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [3024, 1296],
+      "id": "7a0e1b2c-3d4e-4f50-8a6b-0c1d2e3f4a5c",
+      "name": "Check Delivery Distance"
+    },
+    {
       "parameters": { "options": {} },
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
@@ -451,6 +538,7 @@
     "DeepSeek Chat Model2": { "ai_languageModel": [ [ { "node": "Sales Agent", "type": "ai_languageModel", "index": 0 } ] ] },
     "Sales Agent Memory": { "ai_memory": [ [ { "node": "Sales Agent", "type": "ai_memory", "index": 0 } ] ] },
     "Transfer to Human": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
+    "Block Customer": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Send Media": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Create Order": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Support Agent": { "main": [ [ { "node": "Normalize Reply", "type": "main", "index": 0 } ], [ { "node": "On Agent Error", "type": "main", "index": 0 } ] ] },
@@ -461,6 +549,8 @@
     "General Inquiry Agent Memory": { "ai_memory": [ [ { "node": "General Inquiry Agent", "type": "ai_memory", "index": 0 } ] ] },
     "Normalize Reply": { "main": [ [ { "node": "Post Reply", "type": "main", "index": 0 } ] ] },
     "Search Catalog": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
+    "Get Page Info": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
+    "Check Delivery Distance": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] },
     "Embeddings OpenAI": { "ai_embedding": [ [ { "node": "Knowledge Base", "type": "ai_embedding", "index": 0 } ] ] },
     "Knowledge Base": { "ai_tool": [ [ { "node": "Sales Agent", "type": "ai_tool", "index": 0 }, { "node": "Support Agent", "type": "ai_tool", "index": 0 }, { "node": "General Inquiry Agent", "type": "ai_tool", "index": 0 } ] ] }
   },

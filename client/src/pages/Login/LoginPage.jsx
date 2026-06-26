@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { apiError } from '../../services/api.js';
-import { Card, Button, Field, Logo, PasswordInput } from '../../components/ui.jsx';
+import { apiError, isServerError } from '../../services/api.js';
+import { Card, Button, Field, Logo, PasswordInput, AuthErrorScreen } from '../../components/ui.jsx';
 
 export default function LoginPage() {
   const { login, isAuthenticated } = useAuth();
@@ -12,6 +12,7 @@ export default function LoginPage() {
 
   const [form, setForm] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
+  const [serverError, setServerError] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) navigate('/dashboard', { replace: true });
@@ -27,17 +28,22 @@ export default function LoginPage() {
       toast.success('Welcome back!');
       navigate('/dashboard', { replace: true });
     } catch (err) {
-      toast.error(apiError(err));
+      // A server error means the backend is down, not bad credentials — block the
+      // login behind a retry screen instead of a misleading "wrong password" toast.
+      if (isServerError(err)) setServerError(true);
+      else toast.error(apiError(err));
       setBusy(false);
     }
   };
+
+  if (serverError) return <AuthErrorScreen onRetry={() => setServerError(false)} />;
 
   return (
     <div className="auth">
       <Card className="auth__card card--pad">
         <div className="auth__head">
           <Logo height={120} className="auth__logo" />
-          <div className="auth__sub">Automated social-media post scheduler</div>
+          <div className="auth__sub">One place to run your social store</div>
         </div>
 
         <form onSubmit={submit}>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { generateThumbnail } from '../services/thumbnail.service.js';
 
 // Simple image/media glyph.
 const PicIcon = ({ size = 44 }) => (
@@ -27,6 +28,29 @@ export default function MediaDropzone({ file, onFile, accept = 'image/*,video/*'
   const inputRef = useRef(null);
   const dragCount = useRef(0);
   const [dragging, setDragging] = useState(false);
+  // First-frame (video) / downscaled (image) preview of the picked file, generated
+  // in the browser. Null while it's being made or when generation isn't possible,
+  // so the box falls back to the glyph.
+  const [thumbUrl, setThumbUrl] = useState(null);
+
+  useEffect(() => {
+    if (!file) {
+      setThumbUrl(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let url = null;
+    setThumbUrl(null); // drop the previous file's preview while the new one renders
+    generateThumbnail(file).then((blob) => {
+      if (cancelled || !blob) return;
+      url = URL.createObjectURL(blob);
+      setThumbUrl(url);
+    });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [file]);
 
   useEffect(() => {
     const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
@@ -94,7 +118,11 @@ export default function MediaDropzone({ file, onFile, accept = 'image/*,video/*'
           }}
         />
         <span className="dropzone__icon">
-          <PicIcon size={44} />
+          {thumbUrl ? (
+            <img className="dropzone__thumb" src={thumbUrl} alt={`Preview of ${file?.name || 'selected file'}`} />
+          ) : (
+            <PicIcon size={44} />
+          )}
         </span>
         {file ? (
           <>

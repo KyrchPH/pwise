@@ -5,9 +5,13 @@ import * as presence from '../services/presence.service.js';
 const HEARTBEAT_MS = 20000; // server TTL is 45s, so a missed beat still keeps us online
 
 // Marks the signed-in user "online" while their tab is ACTIVE (visible), via a
-// periodic heartbeat. Tab hidden → stop + go offline; tab visible again → resume.
-// Logout/unmount → go offline. A hard close just stops the heartbeat and the
-// server-side TTL expires presence on its own. Mounted once in the authed shell.
+// periodic heartbeat. Tab hidden → just STOP beating; we deliberately do NOT go
+// offline immediately, so the server-side TTL (45s) lapses on its own. That gives
+// a grace window where a quick switch to another tab keeps the agent online (and
+// still eligible for order routing) instead of dropping them the instant they look
+// away. Tab visible again → resume. Logout/unmount → go offline right away. A hard
+// close just stops the heartbeat and the TTL expires presence. Mounted once in the
+// authed shell.
 export default function usePresenceHeartbeat() {
   const { isAuthenticated } = useAuth();
 
@@ -33,8 +37,8 @@ export default function usePresenceHeartbeat() {
       if (document.visibilityState === 'visible') {
         start();
       } else {
+        // Stop beating but stay "online" until the server TTL lapses (grace window).
         stop();
-        presence.offline().catch(() => {});
       }
     };
 

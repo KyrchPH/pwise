@@ -9,6 +9,7 @@ import * as pagesService from '../services/pages.service.js';
 import * as connections from '../services/connections.service.js';
 import { subscribe } from '../services/messaging.service.js';
 import usePresenceHeartbeat from '../hooks/usePresenceHeartbeat.js';
+import useTabTitleNotifier from '../hooks/useTabTitleNotifier.js';
 import { PresenceProvider } from '../context/PresenceContext.jsx';
 import { Modal, PageAvatar, UserAvatar } from './ui.jsx';
 
@@ -283,6 +284,7 @@ function ReconnectGate({ page, isAdmin, onFix, onRecheck }) {
 
 export default function AppLayout() {
   usePresenceHeartbeat(); // keep this user "online" while their tab is active
+  useTabTitleNotifier(); // badge the tab title with new inbox activity when on another tab
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages, activePageHealthy, brokenPageIds, refreshHealth } = usePages();
@@ -651,7 +653,7 @@ export default function AppLayout() {
                   </span>
                   Logout
                 </button>
-                <div className="usermenu__meta">Auto-post scheduler · v0.1.0</div>
+                <div className="usermenu__meta">SocialDesk · one place to run your social store</div>
               </div>
             )}
           </div>

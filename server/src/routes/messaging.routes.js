@@ -17,11 +17,18 @@ router.post('/inbound', requireServiceToken, ctrl.inbound);
 router.post('/handoff', requireServiceToken, ctrl.handoff);
 // Machine-only: the AI agent's keyword lookup over products + reference (FULLTEXT).
 router.post('/knowledge', requireServiceToken, ctrl.knowledge);
+// Machine-only: the AI agent's page-info tool — the page's Business profile (contact/location/hours).
+router.post('/page-info', requireServiceToken, ctrl.pageInfo);
+// Machine-only: the AI agent's delivery-distance tool — driving km/time shop → customer (Geoapify).
+router.post('/delivery-distance', requireServiceToken, ctrl.deliveryDistance);
 // Machine-only: the AI agent's media tool — send a Vault file to the customer.
 router.post('/media', requireServiceToken, ctrl.media);
 // Machine-only: the AI agent's create-order tool — save the order note + route the
 // thread (transfer to the least-busy online agent, or pool it if none are online).
 router.post('/order', requireServiceToken, ctrl.order);
+// Machine-only: the AI agent's block-customer tool — block by handle (only a human
+// Live Agent can unblock). Declared here so the AI's service token can reach it.
+router.post('/block', requireServiceToken, ctrl.blockCustomer);
 
 router.use(requireAuth);
 router.use(requireMessagingAccess); // JWT routes are messaging-only (stream/inbound gate themselves above)
@@ -41,6 +48,8 @@ router.get('/:id', ctrl.get); // one thread with its messages
 router.post('/:id/messages', ctrl.send); // send a reply (media + text split into bubbles)
 router.post('/:id/seen', ctrl.seen); // mark thread seen (clears unread)
 router.post('/:id/takeover', ctrl.takeover); // take over → bind to me as Live Agent
+router.post('/:id/block', ctrl.block); // Live Agent: block the customer (drops their inbound + n8n)
+router.post('/:id/unblock', ctrl.unblock); // Live Agent only: unblock (incl. AI-handled threads)
 router.post('/:id/return-to-ai', ctrl.returnToAi); // hand back to the AI agent (flag-gated)
 router.post('/:id/transfer', ctrl.requestTransfer); // hand this chat to another agent
 router.post('/:id/transfer/cancel', ctrl.cancelTransfer); // sender cancels their pending transfer

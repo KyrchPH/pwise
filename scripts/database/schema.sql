@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS password_change_codes (
   CONSTRAINT fk_pcc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- login_history — login sessions: one row per successful login = a revocable
+-- "session". The JWT carries this row's id (sid); requireAuth rejects a token whose
+-- session row is missing or has revoked_at set (this is what powers "log out of this
+-- device" / "all other devices"). last_seen_at is bumped (throttled) on activity, and
+-- the same rows back the Profile → Security list. Deleting a user drops their sessions.
+CREATE TABLE IF NOT EXISTS login_history (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT NOT NULL,
+  ip           VARCHAR(64) NULL,
+  user_agent   VARCHAR(512) NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NULL,
+  revoked_at   DATETIME NULL,
+  CONSTRAINT fk_login_history_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_login_history_user (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- post_pool — uploaded post content (the pool the agent draws from) ------
 CREATE TABLE IF NOT EXISTS post_pool (
   id              INT AUTO_INCREMENT PRIMARY KEY,
@@ -158,6 +175,10 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
   wa_business_account_id VARCHAR(64)  NULL,      -- WABA id
   wa_phone_display       VARCHAR(40)  NULL,      -- human number for display
   wa_access_token        TEXT         NULL,      -- ENCRYPTED WhatsApp system-user token
+  -- Per-page "Business profile" (migration 042) — admin-filled contact / location /
+  -- hours, surfaced to the AI agent via its get_page_info tool. One JSON object; every
+  -- field optional. NULL = no profile yet.
+  business_profile JSON NULL,
   refresh_token    TEXT,                        -- ENCRYPTED (reserved)
   token_expires_at DATETIME NULL,
   is_active        BOOLEAN NOT NULL DEFAULT TRUE,
@@ -268,6 +289,10 @@ CREATE TABLE IF NOT EXISTS conversations (
   tags            JSON NULL,
   summary         TEXT,
   unread          INT NOT NULL DEFAULT 0,
+  blocked         TINYINT(1) NOT NULL DEFAULT 0,            -- block the customer (drops inbound + n8n)
+  blocked_at      DATETIME NULL,
+  blocked_by      INT NULL,                                 -- Live Agent user id (NULL when the AI blocked)
+  blocked_by_name VARCHAR(255) NULL,                        -- snapshot: agent name, or 'AI Agent'
   last_message_at DATETIME NULL,
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

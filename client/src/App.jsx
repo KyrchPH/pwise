@@ -1,4 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './context/AuthContext.jsx';
+import { AuthErrorScreen } from './components/ui.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import AdminRoute from './components/AdminRoute.jsx';
 import ModuleRoute from './components/ModuleRoute.jsx';
@@ -26,6 +28,12 @@ import VaultPage from './pages/Vault/VaultPage.jsx';
 import ProfilePage from './pages/Profile/ProfilePage.jsx';
 
 export default function App() {
+  const { bootstrapError, retryBootstrap, retrying } = useAuth();
+
+  // A server error while restoring the session blocks the whole app — including the
+  // login page — behind a retry screen, so nobody tries to sign in against a down API.
+  if (bootstrapError) return <AuthErrorScreen onRetry={retryBootstrap} busy={retrying} />;
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

@@ -13,7 +13,8 @@
             { "name": "count", "type": "string" },
             { "name": "customerHandle", "type": "string" },
             { "name": "origin", "type": "string" },
-            { "name": "note", "type": "string" }
+            { "name": "note", "type": "string" },
+            { "name": "address", "type": "string" }
           ]
         }
       },
@@ -70,6 +71,39 @@
               },
               "renameOutput": true,
               "outputKey": "create_order"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000005", "leftValue": "={{ $json.action }}", "rightValue": "get_page_info", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "get_page_info"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000006", "leftValue": "={{ $json.action }}", "rightValue": "check_delivery_distance", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "check_delivery_distance"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 3 },
+                "conditions": [
+                  { "id": "c0000000-0000-4000-8000-000000000007", "leftValue": "={{ $json.action }}", "rightValue": "block_customer", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "block_customer"
             }
           ]
         },
@@ -171,6 +205,69 @@
       "position": [192, 560],
       "id": "11110000-0000-4000-8000-000000000006",
       "name": "Create Order API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/page-info",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 784],
+      "id": "11110000-0000-4000-8000-000000000007",
+      "name": "Get Page Info API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/delivery-distance",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "address", "value": "={{ $json.address }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 1008],
+      "id": "11110000-0000-4000-8000-000000000008",
+      "name": "Delivery Distance API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pwise-api.sixpent.com/api/messages/block",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "x-service-token", "value": "={{ $json.serviceToken }}" } ] },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "accountId", "value": "={{ $json.accountId }}" },
+            { "name": "customerHandle", "value": "={{ $json.customerHandle }}" },
+            { "name": "origin", "value": "={{ $json.origin }}" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [192, 1232],
+      "id": "11110000-0000-4000-8000-000000000009",
+      "name": "Block Customer API"
     }
   ],
   "connections": {
@@ -180,7 +277,10 @@
         [ { "node": "Search Catalog API", "type": "main", "index": 0 } ],
         [ { "node": "Handoff API", "type": "main", "index": 0 } ],
         [ { "node": "Send Media API", "type": "main", "index": 0 } ],
-        [ { "node": "Create Order API", "type": "main", "index": 0 } ]
+        [ { "node": "Create Order API", "type": "main", "index": 0 } ],
+        [ { "node": "Get Page Info API", "type": "main", "index": 0 } ],
+        [ { "node": "Delivery Distance API", "type": "main", "index": 0 } ],
+        [ { "node": "Block Customer API", "type": "main", "index": 0 } ]
       ]
     }
   },

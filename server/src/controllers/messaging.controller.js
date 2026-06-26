@@ -5,7 +5,7 @@ import * as service from '../services/messaging.service.js';
 import * as analyticsService from '../services/messaging_analytics.service.js';
 import * as ai from '../services/ai.service.js';
 import { onMessagingEvent } from '../services/messaging.events.js';
-import { verifyToken, findActiveById } from '../services/auth.service.js';
+import { resolveSession } from '../services/auth.service.js';
 import { hasMessagingAccess } from '../config/modules.js';
 
 // AI Agent threads are shared; Live Agent threads are scoped to their assigned
@@ -33,6 +33,16 @@ export const seen = asyncHandler(async (req, res) => {
 export const takeover = asyncHandler(async (req, res) => {
   const conversation = await service.takeOver(req.params.id, req.user);
   sendSuccess(res, { conversation });
+});
+
+// Live Agent blocks the customer on this thread (drops their inbound + n8n).
+export const block = asyncHandler(async (req, res) => {
+  sendSuccess(res, { conversation: await service.blockConversation(req.params.id, req.user) });
+});
+
+// Unblock — Live Agent (human) only; works on AI-handled threads too.
+export const unblock = asyncHandler(async (req, res) => {
+  sendSuccess(res, { conversation: await service.unblockConversation(req.params.id, req.user) });
 });
 
 // Messaging feature flags the client needs (currently just the hand-back-to-AI
@@ -102,6 +112,22 @@ export const knowledge = asyncHandler(async (req, res) => {
   sendSuccess(res, await service.searchKnowledge(q, { accountId, limit }));
 });
 
+// Machine-only (service token): the AI agent's `get_page_info` tool. Returns the page's
+// admin-filled Business profile (contact / location / hours) as a readable block.
+// Body: { accountId } — scopes to the page (required).
+export const pageInfo = asyncHandler(async (req, res) => {
+  const { accountId } = req.body || {};
+  sendSuccess(res, await service.getPageInfo({ accountId }));
+});
+
+// Machine-only (service token): the AI agent's `check_delivery_distance` tool. Driving
+// distance/time from the page's shop to the customer's delivery address (via Geoapify).
+// Body: { accountId, address } — accountId scopes to the page; address is the customer's.
+export const deliveryDistance = asyncHandler(async (req, res) => {
+  const { accountId, address } = req.body || {};
+  sendSuccess(res, await service.getDeliveryDistance({ accountId, address }));
+});
+
 // Machine-only (service token): the AI agent's `send_media` tool. Finds matching
 // media in the page's Vault folder and sends it to the customer; `count` (1–10)
 // sends a whole set in one call (e.g. all packages), defaulting to 1.
@@ -120,6 +146,14 @@ export const order = asyncHandler(async (req, res) => {
   sendSuccess(res, await service.createOrder({ accountId, customerHandle, origin, note }));
 });
 
+// Machine-only (service token): the AI agent's `block_customer` tool — block a customer
+// by handle so their inbound stops reaching the inbox + n8n. Only a human can unblock.
+// Body: { accountId, customerHandle, origin }.
+export const blockCustomer = asyncHandler(async (req, res) => {
+  const { accountId, customerHandle, origin } = req.body || {};
+  sendSuccess(res, await service.blockByCustomer({ accountId, customerHandle, origin }));
+});
+
 // Machine-only (service token): n8n escalates a thread to a human. Pauses AI auto-reply
 // for the thread and flags it for an agent to take over. Body: { accountId,
 // customerHandle, origin, reason? }.
@@ -135,7 +169,7 @@ export async function stream(req, res) {
   let user = null;
   try {
     const token = req.query.token;
-    if (token) user = await findActiveById(verifyToken(token).sub);
+    if (token) { const r = await resolveSession(token); user = r ? r.user : null; }
   } catch {
     user = null;
   }

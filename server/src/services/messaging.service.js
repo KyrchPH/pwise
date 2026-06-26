@@ -10,6 +10,8 @@ import * as wa from './whatsapp.service.js';
 import { searchAiMedia, searchAiMediaMeta } from './vault.service.js';
 import * as conversationNotes from './conversation_notes.service.js';
 import * as presence from './messaging.presence.js';
+import { formatBusinessProfile, parseBusinessProfile } from '../utils/business_profile.util.js';
+import * as geoapify from './geoapify.service.js';
 
 // Conversation status set when the AI escalates a thread to a human (see
 // handoffToLiveAgent). The inbound gateway stops auto-replying while a thread
@@ -116,6 +118,10 @@ function rowToConversation(c, messageRows, pending = null) {
     // (then the thread leaves their view) or declined (then it unlocks).
     transferPending: !!pending,
     transferPendingTo: pending?.toName || '',
+    // Blocked customer — inbound is dropped (gateway) and n8n isn't forwarded.
+    blocked: !!c.blocked,
+    blockedBy: c.blocked_by_name || '',
+    blockedAt: c.blocked_at || null,
     messages: messageRows.map(rowToMessage),
   };
 }
@@ -123,7 +129,7 @@ function rowToConversation(c, messageRows, pending = null) {
 // Lightweight mutable fields the client merges after an action / SSE event.
 async function conversationPatch(id) {
   const rows = await query(
-    'SELECT id, summary, unread, handled_by, assigned_user_id, assigned_user_name, status, last_message_at FROM conversations WHERE id = ?',
+    'SELECT id, summary, unread, customer_name, customer_avatar, handled_by, assigned_user_id, assigned_user_name, status, last_message_at, blocked, blocked_by_name, blocked_at FROM conversations WHERE id = ?',
     [id],
   );
   if (!rows.length) return null;
@@ -132,11 +138,16 @@ async function conversationPatch(id) {
     id: String(c.id),
     summary: c.summary || '',
     unread: Number(c.unread) || 0,
+    customerName: c.customer_name || '',
+    avatarUrl: c.customer_avatar || '',
     handledBy: c.handled_by,
     assignedUserId: c.assigned_user_id != null ? Number(c.assigned_user_id) : null,
     assignedUserName: c.assigned_user_name || '',
     status: c.status || '',
     lastActivity: humanizeSince(c.last_message_at),
+    blocked: !!c.blocked,
+    blockedBy: c.blocked_by_name || '',
+    blockedAt: c.blocked_at || null,
   };
 }
 
@@ -580,6 +591,77 @@ export async function returnToAi(id, actor = {}) {
   return { ...(await conversationPatch(id)), transferPending: false, transferPendingTo: '' };
 }
 
+// ── Block / unblock a customer ───────────────────────────────────────────────
+// A blocked thread drops the customer's inbound — the gateway never records it or
+// forwards it to n8n (see isCustomerBlocked). Both a Live Agent and the AI can block;
+// only a Live Agent (a human; there is NO service-token unblock route) can unblock,
+// including threads still assigned to the AI Agent.
+
+async function setBlocked(id, blocked, byId, byName) {
+  await query(
+    'UPDATE conversations SET blocked = ?, blocked_at = ?, blocked_by = ?, blocked_by_name = ? WHERE id = ?',
+    [blocked ? 1 : 0, blocked ? new Date() : null, blocked ? byId : null, blocked ? byName : null, id],
+  );
+}
+
+// Is this (account, customer) currently blocked? The inbound gateway calls this before
+// recording / forwarding a message. Fails OPEN (returns false) so a lookup hiccup can't
+// silently drop real messages.
+export async function isCustomerBlocked({ accountId, customerHandle } = {}) {
+  const handle = String(customerHandle ?? '').trim();
+  if (!handle) return false;
+  try {
+    const acct = accountId != null && accountId !== '' ? Number(accountId) : null;
+    const rows =
+      acct != null
+        ? await query('SELECT blocked FROM conversations WHERE account_id = ? AND customer_handle = ? ORDER BY id DESC LIMIT 1', [acct, handle])
+        : await query('SELECT blocked FROM conversations WHERE account_id IS NULL AND customer_handle = ? ORDER BY id DESC LIMIT 1', [handle]);
+    return rows.length ? !!rows[0].blocked : false;
+  } catch {
+    return false;
+  }
+}
+
+// Live Agent blocks the customer from the inbox (thread must be one they can access).
+export async function blockConversation(id, actor = {}) {
+  const rows = await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE id = ?', [id]);
+  if (!rows.length) throw ApiError.notFound('conversation not found');
+  assertCanAccess(rows[0], actor);
+  await setBlocked(id, true, actor.id ?? null, actor.name || 'Live Agent');
+  const conversation = await conversationPatch(id);
+  emitMessagingEvent({ type: 'conversation:updated', conversation }, audienceFor(rows[0]));
+  return conversation;
+}
+
+// Unblock — a human Live Agent only (no service-token route), allowed even when the
+// thread is still assigned to the AI Agent.
+export async function unblockConversation(id, actor = {}) {
+  const rows = await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE id = ?', [id]);
+  if (!rows.length) throw ApiError.notFound('conversation not found');
+  assertCanAccess(rows[0], actor);
+  await setBlocked(id, false, null, null);
+  const conversation = await conversationPatch(id);
+  emitMessagingEvent({ type: 'conversation:updated', conversation }, audienceFor(rows[0]));
+  return conversation;
+}
+
+// AI Agent (service token) blocks a customer by handle — its `block_customer` tool.
+export async function blockByCustomer({ accountId, customerHandle, origin } = {}) {
+  const handle = String(customerHandle ?? '').trim();
+  if (!handle) throw ApiError.badRequest('customerHandle is required');
+  const account = await resolveAccount({ accountId, origin });
+  const acct = account?.id ?? null;
+  const rows =
+    acct != null
+      ? await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id = ? AND customer_handle = ? ORDER BY id DESC LIMIT 1', [acct, handle])
+      : await query('SELECT id, handled_by, assigned_user_id FROM conversations WHERE account_id IS NULL AND customer_handle = ? ORDER BY id DESC LIMIT 1', [handle]);
+  if (!rows.length) throw ApiError.notFound('no conversation found for this customer');
+  await setBlocked(rows[0].id, true, null, 'AI Agent');
+  const conversation = await conversationPatch(rows[0].id);
+  emitMessagingEvent({ type: 'conversation:updated', conversation }, audienceFor(rows[0]));
+  return { conversationId: String(rows[0].id), blocked: true };
+}
+
 // ── Transfers (hand a conversation to another agent, who must accept) ─────────
 
 // All active users with Messaging access (id, name, email). The pool the AI hands a
@@ -641,6 +723,16 @@ export async function requestTransfer(conversationId, actor = {}, toUserId) {
   if (!target || target === Number(actor.id)) throw ApiError.badRequest('Pick a teammate to transfer to.');
   const tRows = await query('SELECT id, name, role, module_access FROM users WHERE id = ? AND is_active = 1 AND deleted_at IS NULL', [target]);
   if (!tRows.length || !hasMessagingAccess(tRows[0])) throw ApiError.badRequest('That teammate is not available for messaging.');
+
+  // Require a handoff note from THIS agent as the conversation's MOST RECENT note —
+  // forces them to summarize before passing the chat on, so the recipient has context.
+  const lastNote = await query(
+    'SELECT created_by FROM conversation_notes WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+    [conversationId],
+  );
+  if (!lastNote.length || Number(lastNote[0].created_by) !== Number(actor.id)) {
+    throw ApiError.badRequest('Add a note before transferring — your note must be the most recent one on this conversation.');
+  }
 
   // One pending transfer per conversation — supersede any earlier pending one.
   await query("UPDATE conversation_transfers SET status = 'cancelled', responded_at = NOW() WHERE conversation_id = ? AND status = 'pending'", [conversationId]);
@@ -942,6 +1034,20 @@ export async function receiveInbound(payload = {}) {
     // messages mark the thread unread; AI replies don't, unless overridden.
     const sets = ['summary = ?', 'last_message_at = NOW()', 'unread = unread + ?'];
     const params = [summary, bump];
+    // Refresh the customer's profile photo when the adapter supplies one — Meta CDN
+    // URLs expire, so each inbound message carries a fresh link. Only overwrite on a
+    // real value; a null/absent avatar leaves the existing one untouched.
+    if (payload.customerAvatar) {
+      sets.push('customer_avatar = ?');
+      params.push(String(payload.customerAvatar));
+    }
+    // Heal the display name when the adapter resolved a REAL one (e.g. a thread first
+    // created as "Messenger user" before the profile lookup worked). Guarded by
+    // customerNameResolved so a failed lookup never clobbers a good name.
+    if (payload.customerNameResolved) {
+      sets.push('customer_name = ?');
+      params.push(String(payload.customerNameResolved));
+    }
     if (payload.status) {
       sets.push('status = ?');
       params.push(payload.status);
@@ -1228,6 +1334,63 @@ export async function searchKnowledge(rawQuery, { accountId, limit = 50 } = {}) 
   }
 
   return { products, media };
+}
+
+// The AI agent's `get_page_info` tool: the page's admin-filled Business profile —
+// address / location, phone, Viber/WhatsApp, email, operating hours, website. SCOPED
+// to one page via account_id (the conversation's page, passed by the tool — never the
+// LLM). Returns a ready-to-read labelled block so the agent states these as its own
+// knowledge. `found` is false when the page has no profile yet, so the agent knows not
+// to invent. Never throws — a lookup hiccup must not break the reply.
+export async function getPageInfo({ accountId } = {}) {
+  const acct = parseInt(accountId, 10);
+  if (!Number.isInteger(acct)) return { found: false, info: '' };
+  try {
+    const rows = await query('SELECT account_name, business_profile FROM platform_accounts WHERE id = ?', [acct]);
+    if (!rows.length) return { found: false, info: '' };
+    const info = formatBusinessProfile(rows[0].business_profile);
+    return { found: !!info, name: rows[0].account_name || null, info };
+  } catch {
+    return { found: false, info: '' };
+  }
+}
+
+// The AI agent's `check_delivery_distance` tool: how far is the customer's delivery
+// address from THIS page's shop (the business_profile address)? Geocodes both via
+// Geoapify and returns the DRIVING distance + time, so the Sales Agent can decide
+// whether to push the online-store links for far addresses. SCOPED to one page via
+// account_id. Returns { available:false, reason } whenever it can't compute one
+// (no Geoapify key, no business address set, an address that won't geocode, etc.) —
+// the agent then falls back to judging from the address text. Never throws.
+export async function getDeliveryDistance({ accountId, address } = {}) {
+  const acct = parseInt(accountId, 10);
+  const dest = String(address ?? '').trim();
+  if (!Number.isInteger(acct) || !dest) return { available: false, reason: 'missing_input' };
+  if (!env.geoapify.apiKey) return { available: false, reason: 'not_configured' };
+  try {
+    const rows = await query('SELECT business_profile FROM platform_accounts WHERE id = ?', [acct]);
+    if (!rows.length) return { available: false, reason: 'no_page' };
+    const origin = String(parseBusinessProfile(rows[0].business_profile).address || '').trim();
+    if (!origin) return { available: false, reason: 'no_business_address' };
+
+    // Geocode shop + customer in parallel (the shop result is cached after the first call).
+    const [from, to] = await Promise.all([geoapify.geocode(origin), geoapify.geocode(dest)]);
+    if (!from) return { available: false, reason: 'business_address_not_found' };
+    if (!to) return { available: false, reason: 'address_not_found' };
+
+    const route = await geoapify.driveDistance(from, to);
+    if (!route) return { available: false, reason: 'route_failed' };
+
+    return {
+      available: true,
+      distanceKm: Math.round((route.meters / 1000) * 10) / 10,
+      durationMin: route.seconds != null ? Math.round(route.seconds / 60) : null,
+      origin: from.formatted,
+      destination: to.formatted,
+    };
+  } catch {
+    return { available: false, reason: 'error' };
+  }
 }
 
 // The AI agent's `send_media` tool: find media in THIS page's Vault folder matching

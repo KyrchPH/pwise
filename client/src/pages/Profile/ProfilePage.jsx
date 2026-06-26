@@ -5,6 +5,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { apiError } from '../../services/api.js';
 import * as uploadService from '../../services/upload.service.js';
 import { Button, Card, Field, Modal, UserAvatar } from '../../components/ui.jsx';
+import SecurityCard from './SecurityCard.jsx';
 
 const CROP_FRAME = 280;
 const AVATAR_OUTPUT = 512;
@@ -371,6 +372,8 @@ export default function ProfilePage() {
             </div>
           </dl>
         </Card>
+
+        <SecurityCard />
       </div>
 
       <AvatarCropDialog

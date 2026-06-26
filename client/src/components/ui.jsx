@@ -371,6 +371,29 @@ export function FullScreenSpinner() {
   );
 }
 
+// Full-screen "can't reach the server" gate with a retry button. Shown in place of the
+// app (and the login form) when a server error blocks us from establishing the session,
+// so the user never lands on a sign-in form that can't possibly work against a down API.
+export function AuthErrorScreen({ onRetry, busy = false }) {
+  return (
+    <div className="auth">
+      <Card className="auth__card card--pad">
+        <div className="auth__head">
+          <Logo height={120} className="auth__logo" />
+        </div>
+        <div className="empty__icon text-center" aria-hidden="true">⚠️</div>
+        <div className="empty__title text-center">Can't reach the server</div>
+        <p className="text-center text-muted text-sm mt-lg">
+          Something went wrong on our end, so signing in isn't available right now. Please try again in a moment.
+        </p>
+        <Button size="lg" className="btn--block mt-lg" onClick={onRetry} disabled={busy}>
+          {busy ? 'Retrying…' : 'Retry'}
+        </Button>
+      </Card>
+    </div>
+  );
+}
+
 // Upload/progress bar. Pass a 0..100 `value` for a determinate bar, or
 // `indeterminate` for a sliding bar when the percentage isn't known yet.
 export function ProgressBar({ value = 0, label, indeterminate = false }) {

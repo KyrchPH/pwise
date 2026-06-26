@@ -91,6 +91,17 @@ const BLANK = {
   ai_prompt_support: '',
   ai_prompt_general: '',
   ai_defaults: null,
+  // Business profile (contact / location / hours + per-channel links) the AI reads via get_page_info.
+  business_profile: {
+    address: '',
+    phone: '',
+    viber: '',
+    email: '',
+    hours: '',
+    website: '',
+    notes: '',
+    links: { facebook: '', telegram: '', instagram: '', shopee: '', tiktok: '', lazada: '' },
+  },
   an_periodDays: 7,
   an_crrHours: 12,
   an_frtMin: 5,
@@ -284,6 +295,13 @@ export default function FacebookPages({ embedded = false }) {
       an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
       an_artMin: Math.round((p.analytics_config?.artTargetSeconds ?? 300) / 60),
       currency: p.currency || 'PHP',
+      // Merge stored profile over the blank shape so every field is a controlled input
+      // (links are merged separately so missing channels stay '' rather than undefined).
+      business_profile: {
+        ...BLANK.business_profile,
+        ...(p.business_profile || {}),
+        links: { ...BLANK.business_profile.links, ...((p.business_profile || {}).links || {}) },
+      },
     });
     // Pull this page's per-agent AI prompts (+ defaults) for the editor (admin only).
     if (isAdmin) {
@@ -325,6 +343,19 @@ export default function FacebookPages({ embedded = false }) {
   const setAiField = (k) => (e) => {
     const v = e.target.value;
     setEditing((ed) => ({ ...ed, [k]: v }));
+  };
+  // Business-profile fields (nested object) — also independent of the FB test.
+  const setBpField = (k) => (e) => {
+    const v = e.target.value;
+    setEditing((ed) => ({ ...ed, business_profile: { ...ed.business_profile, [k]: v } }));
+  };
+  // Per-channel link fields (nested under business_profile.links).
+  const setLinkField = (ch) => (e) => {
+    const v = e.target.value;
+    setEditing((ed) => ({
+      ...ed,
+      business_profile: { ...ed.business_profile, links: { ...ed.business_profile.links, [ch]: v } },
+    }));
   };
 
   // Step 1 — verify the PAGE credentials against Facebook. On success the primary
@@ -405,6 +436,8 @@ export default function FacebookPages({ embedded = false }) {
         payload.ai_prompt_sales = editing.ai_prompt_sales ?? '';
         payload.ai_prompt_support = editing.ai_prompt_support ?? '';
         payload.ai_prompt_general = editing.ai_prompt_general ?? '';
+        // Business profile the AI reads via get_page_info (the server trims + drops blanks).
+        payload.business_profile = editing.business_profile || {};
       }
       // Messaging-analytics thresholds (admin-only; existing pages). Minutes → seconds;
       // the server clamps to sane ranges.
@@ -522,13 +555,16 @@ export default function FacebookPages({ embedded = false }) {
           )}
 
           {/* Optional Telegram bot attached to this page. */}
-          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
-            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
-              <div style={{ fontWeight: 600 }} className="text-sm">
-                Telegram bot <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
-              </div>
+          <details className="set-acc">
+            <summary className="set-acc__head">
+              <span className="set-acc__title">Telegram bot <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__status">
+                {editing.telegram_remove ? 'Will be removed' : editing.telegram_has ? `@${editing.telegram_username || 'connected'}` : 'Not set'}
+              </span>
+            </summary>
+            <div className="set-acc__body">
               {editing.telegram_has && (
-                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer', marginBottom: 8 }}>
                   <input
                     type="checkbox"
                     checked={editing.telegram_remove}
@@ -537,40 +573,43 @@ export default function FacebookPages({ embedded = false }) {
                   Remove bot
                 </label>
               )}
+              {editing.telegram_remove ? (
+                <div className="text-sm text-muted">The attached Telegram bot will be removed when you save.</div>
+              ) : (
+                <>
+                  <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                    Attach a bot to this page. Create one with @BotFather on Telegram, then paste its token.
+                    {editing.telegram_has && editing.telegram_username ? ` Currently @${editing.telegram_username}.` : ''}
+                  </div>
+                  <Field label="Bot name">
+                    <input className="input" value={editing.telegram_bot_name} onChange={setTgField('telegram_bot_name')} placeholder="e.g. Wise Cleaner Bot" />
+                  </Field>
+                  <Field label="Bot API key" hint={botKeyHint}>
+                    <input
+                      className="input"
+                      type="password"
+                      value={editing.telegram_api_key}
+                      onChange={setTgField('telegram_api_key')}
+                      autoComplete="new-password"
+                      placeholder={editing.telegram_has ? '••••••••' : '123456789:ABCdef…'}
+                    />
+                  </Field>
+                </>
+              )}
             </div>
-            {editing.telegram_remove ? (
-              <div className="text-sm text-muted">The attached Telegram bot will be removed when you save.</div>
-            ) : (
-              <>
-                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
-                  Attach a bot to this page. Create one with @BotFather on Telegram, then paste its token.
-                  {editing.telegram_has && editing.telegram_username ? ` Currently @${editing.telegram_username}.` : ''}
-                </div>
-                <Field label="Bot name">
-                  <input className="input" value={editing.telegram_bot_name} onChange={setTgField('telegram_bot_name')} placeholder="e.g. Wise Cleaner Bot" />
-                </Field>
-                <Field label="Bot API key" hint={botKeyHint}>
-                  <input
-                    className="input"
-                    type="password"
-                    value={editing.telegram_api_key}
-                    onChange={setTgField('telegram_api_key')}
-                    autoComplete="new-password"
-                    placeholder={editing.telegram_has ? '••••••••' : '123456789:ABCdef…'}
-                  />
-                </Field>
-              </>
-            )}
-          </div>
+          </details>
 
           {/* Optional Instagram channel — replies reuse this page's access token. */}
-          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
-            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
-              <div style={{ fontWeight: 600 }} className="text-sm">
-                Instagram <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
-              </div>
+          <details className="set-acc">
+            <summary className="set-acc__head">
+              <span className="set-acc__title">Instagram <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__status">
+                {editing.instagram_remove ? 'Will be removed' : editing.instagram_account_id ? 'Linked' : 'Not set'}
+              </span>
+            </summary>
+            <div className="set-acc__body">
               {editing.instagram_has && (
-                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer', marginBottom: 8 }}>
                   <input
                     type="checkbox"
                     checked={editing.instagram_remove}
@@ -579,33 +618,36 @@ export default function FacebookPages({ embedded = false }) {
                   Remove
                 </label>
               )}
+              {editing.instagram_remove ? (
+                <div className="text-sm text-muted">The Instagram channel will be detached when you save.</div>
+              ) : (
+                <>
+                  <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                    Link this page&apos;s Instagram professional account. Replies reuse the page access token. Auto-filled when
+                    you Connect with Facebook.
+                  </div>
+                  <Field label="Instagram account ID">
+                    <input className="input" value={editing.instagram_account_id} onChange={setTgField('instagram_account_id')} placeholder="e.g. 17841400000000000" />
+                  </Field>
+                  <Field label="Username" hint="optional">
+                    <input className="input" value={editing.instagram_username} onChange={setTgField('instagram_username')} placeholder="e.g. wisecleanershop" />
+                  </Field>
+                </>
+              )}
             </div>
-            {editing.instagram_remove ? (
-              <div className="text-sm text-muted">The Instagram channel will be detached when you save.</div>
-            ) : (
-              <>
-                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
-                  Link this page&apos;s Instagram professional account. Replies reuse the page access token. Auto-filled when
-                  you Connect with Facebook.
-                </div>
-                <Field label="Instagram account ID">
-                  <input className="input" value={editing.instagram_account_id} onChange={setTgField('instagram_account_id')} placeholder="e.g. 17841400000000000" />
-                </Field>
-                <Field label="Username" hint="optional">
-                  <input className="input" value={editing.instagram_username} onChange={setTgField('instagram_username')} placeholder="e.g. wisecleanershop" />
-                </Field>
-              </>
-            )}
-          </div>
+          </details>
 
           {/* Optional WhatsApp channel — its own Cloud-API token. */}
-          <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
-            <div className="row row--between" style={{ gap: 12, marginBottom: 4 }}>
-              <div style={{ fontWeight: 600 }} className="text-sm">
-                WhatsApp <span className="text-muted" style={{ fontWeight: 400 }}>(optional)</span>
-              </div>
+          <details className="set-acc">
+            <summary className="set-acc__head">
+              <span className="set-acc__title">WhatsApp <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__status">
+                {editing.whatsapp_remove ? 'Will be removed' : editing.whatsapp_has || editing.wa_phone_number_id ? 'Connected' : 'Not set'}
+              </span>
+            </summary>
+            <div className="set-acc__body">
               {editing.whatsapp_has && (
-                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                <label className="text-sm row gap-sm" style={{ alignItems: 'center', cursor: 'pointer', marginBottom: 8 }}>
                   <input
                     type="checkbox"
                     checked={editing.whatsapp_remove}
@@ -614,43 +656,47 @@ export default function FacebookPages({ embedded = false }) {
                   Remove
                 </label>
               )}
+              {editing.whatsapp_remove ? (
+                <div className="text-sm text-muted">The WhatsApp channel will be detached when you save.</div>
+              ) : (
+                <>
+                  <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                    Connect a WhatsApp Cloud API number. From the Meta app&apos;s WhatsApp setup, paste the phone number ID,
+                    WhatsApp Business Account ID, and a permanent access token.
+                  </div>
+                  <Field label="Phone number ID">
+                    <input className="input" value={editing.wa_phone_number_id} onChange={setTgField('wa_phone_number_id')} placeholder="e.g. 123456789012345" />
+                  </Field>
+                  <Field label="WhatsApp Business Account ID" hint="for webhook subscription">
+                    <input className="input" value={editing.wa_business_account_id} onChange={setTgField('wa_business_account_id')} placeholder="e.g. 102030405060708" />
+                  </Field>
+                  <Field label="Display number" hint="optional">
+                    <input className="input" value={editing.wa_phone_display} onChange={setTgField('wa_phone_display')} placeholder="e.g. +63 917 000 0000" />
+                  </Field>
+                  <Field label="Access token" hint={editing.whatsapp_has ? 'leave blank to keep current' : 'permanent system-user token'}>
+                    <input
+                      className="input"
+                      type="password"
+                      value={editing.wa_access_token}
+                      onChange={setTgField('wa_access_token')}
+                      autoComplete="new-password"
+                      placeholder={editing.whatsapp_has ? '••••••••' : 'EAAG…'}
+                    />
+                  </Field>
+                </>
+              )}
             </div>
-            {editing.whatsapp_remove ? (
-              <div className="text-sm text-muted">The WhatsApp channel will be detached when you save.</div>
-            ) : (
-              <>
-                <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
-                  Connect a WhatsApp Cloud API number. From the Meta app&apos;s WhatsApp setup, paste the phone number ID,
-                  WhatsApp Business Account ID, and a permanent access token.
-                </div>
-                <Field label="Phone number ID">
-                  <input className="input" value={editing.wa_phone_number_id} onChange={setTgField('wa_phone_number_id')} placeholder="e.g. 123456789012345" />
-                </Field>
-                <Field label="WhatsApp Business Account ID" hint="for webhook subscription">
-                  <input className="input" value={editing.wa_business_account_id} onChange={setTgField('wa_business_account_id')} placeholder="e.g. 102030405060708" />
-                </Field>
-                <Field label="Display number" hint="optional">
-                  <input className="input" value={editing.wa_phone_display} onChange={setTgField('wa_phone_display')} placeholder="e.g. +63 917 000 0000" />
-                </Field>
-                <Field label="Access token" hint={editing.whatsapp_has ? 'leave blank to keep current' : 'permanent system-user token'}>
-                  <input
-                    className="input"
-                    type="password"
-                    value={editing.wa_access_token}
-                    onChange={setTgField('wa_access_token')}
-                    autoComplete="new-password"
-                    placeholder={editing.whatsapp_has ? '••••••••' : 'EAAG…'}
-                  />
-                </Field>
-              </>
-            )}
-          </div>
+          </details>
 
           {/* Per-page AI assistant prompts — admin only; all three required to connect/save. */}
           {isAdmin && (
-            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
-              <div className="text-sm" style={{ fontWeight: 600 }}>AI Assistant prompts</div>
-              <div className="text-sm text-muted" style={{ margin: '4px 0 8px' }}>
+            <details className="set-acc" open>
+              <summary className="set-acc__head">
+                <span className="set-acc__title">AI Assistant prompts</span>
+                <span className="set-acc__status">required</span>
+              </summary>
+              <div className="set-acc__body">
+              <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
                 How this page&apos;s AI replies for each intent. Pre-filled with sensible defaults — edit them for this
                 business. All three are required. The tool-grounding, human-handoff, and formatting rules are always
                 enforced on top and can&apos;t be removed here.
@@ -685,12 +731,95 @@ export default function FacebookPages({ embedded = false }) {
                   </Field>
                 );
               })}
-            </div>
+              </div>
+            </details>
           )}
 
-          {/* Display currency for product prices — admin only, existing pages. */}
+          {/* Business profile + channel links — admin only. */}
+          {isAdmin && (
+            <details className="set-acc">
+              <summary className="set-acc__head">
+                <span className="set-acc__title">Business info <span className="set-acc__opt">for the AI assistant</span></span>
+              </summary>
+              <div className="set-acc__body">
+              <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                Contact, location, and hours for this page. The AI assistant reads these to answer &ldquo;where are
+                you?&rdquo;, &ldquo;what are your hours?&rdquo;, and &ldquo;how do I contact you?&rdquo; — so it never
+                guesses. All optional; leave a field blank to skip it.
+              </div>
+              <Field label="Address / Location">
+                <textarea
+                  className="input"
+                  rows={2}
+                  value={editing.business_profile?.address || ''}
+                  onChange={setBpField('address')}
+                  placeholder="Blk 30 Lot 2 Rosal Street, TS Cruz subd., Almanza Dos, Las Piñas City"
+                />
+              </Field>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <Field label="Phone">
+                  <input className="input" value={editing.business_profile?.phone || ''} onChange={setBpField('phone')} placeholder="(+63) 939-263-6354" />
+                </Field>
+                <Field label="Viber / WhatsApp">
+                  <input className="input" value={editing.business_profile?.viber || ''} onChange={setBpField('viber')} placeholder="09392636354" />
+                </Field>
+                <Field label="Email">
+                  <input className="input" value={editing.business_profile?.email || ''} onChange={setBpField('email')} placeholder="hello@example.com" />
+                </Field>
+                <Field label="Website">
+                  <input className="input" value={editing.business_profile?.website || ''} onChange={setBpField('website')} placeholder="https://example.com" />
+                </Field>
+              </div>
+              <Field label="Operating hours">
+                <input className="input" value={editing.business_profile?.hours || ''} onChange={setBpField('hours')} placeholder="Monday to Sunday — 7:00 am to 5:00 pm" />
+              </Field>
+              <Field label="Other details" hint="anything else the AI should know about the business">
+                <textarea
+                  className="input"
+                  rows={2}
+                  value={editing.business_profile?.notes || ''}
+                  onChange={setBpField('notes')}
+                  placeholder="Landmarks, parking, branches, payment methods…"
+                />
+              </Field>
+
+              {/* Per-channel links — optional store / social URLs the AI shares on request. */}
+              <div className="text-sm" style={{ fontWeight: 600, margin: '10px 0 2px' }}>Channel &amp; store links</div>
+              <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                Optional. The AI shares these when a customer asks for your page or store (e.g. &ldquo;send me your
+                Shopee&rdquo;). Paste the full URL; leave blank to skip.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {[
+                  { ch: 'facebook', label: 'Facebook / Messenger', ph: 'https://facebook.com/yourpage' },
+                  { ch: 'telegram', label: 'Telegram', ph: 'https://t.me/yourhandle' },
+                  { ch: 'instagram', label: 'Instagram', ph: 'https://instagram.com/yourhandle' },
+                  { ch: 'shopee', label: 'Shopee', ph: 'https://shopee.ph/yourshop' },
+                  { ch: 'tiktok', label: 'TikTok', ph: 'https://tiktok.com/@yourhandle' },
+                  { ch: 'lazada', label: 'Lazada', ph: 'https://lazada.com.ph/shop/yourshop' },
+                ].map(({ ch, label, ph }) => (
+                  <Field key={ch} label={label}>
+                    <input
+                      className="input"
+                      value={editing.business_profile?.links?.[ch] || ''}
+                      onChange={setLinkField(ch)}
+                      placeholder={ph}
+                    />
+                  </Field>
+                ))}
+              </div>
+              </div>
+            </details>
+          )}
+
+          {/* Currency + messaging analytics — admin only, existing pages. */}
           {isAdmin && editing.id && (
-            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
+            <details className="set-acc">
+              <summary className="set-acc__head">
+                <span className="set-acc__title">Currency &amp; messaging analytics</span>
+                <span className="set-acc__status">{editing.currency || 'PHP'}</span>
+              </summary>
+              <div className="set-acc__body">
               <Field label="Currency" hint="used to format product prices">
                 <select
                   className="input"
@@ -704,14 +833,7 @@ export default function FacebookPages({ embedded = false }) {
                   ))}
                 </select>
               </Field>
-            </div>
-          )}
-
-          {/* Messaging analytics thresholds — admin only, existing pages (drives the inbox rail gauges). */}
-          {isAdmin && editing.id && (
-            <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid rgba(127,127,127,0.2)' }}>
-              <div className="text-sm" style={{ fontWeight: 600 }}>Messaging analytics</div>
-              <div className="text-sm text-muted" style={{ margin: '4px 0 8px' }}>
+              <div className="text-sm text-muted" style={{ margin: '14px 0 8px' }}>
                 Thresholds for this page&apos;s live-agent response metrics (CRR / FRT / ART) in the inbox rail. CRR counts
                 customer chats answered within the window; FRT/ART score the average reply time against the target.
               </div>
@@ -729,7 +851,8 @@ export default function FacebookPages({ embedded = false }) {
                   <input className="input" type="number" min="1" max="1440" value={editing.an_artMin} onChange={setAiField('an_artMin')} />
                 </Field>
               </div>
-            </div>
+              </div>
+            </details>
           )}
 
           <div className="row gap-sm" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>

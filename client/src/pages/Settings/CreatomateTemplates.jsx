@@ -117,7 +117,7 @@ export default function CreatomateTemplates({ embedded = false }) {
           </div>
         </div>
         {!editing && (
-          <Button size="sm" onClick={startAdd}>
+          <Button size="sm" className="ct-addbtn" onClick={startAdd}>
             + Add template
           </Button>
         )}

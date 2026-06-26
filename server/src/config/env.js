@@ -42,6 +42,13 @@ export const env = {
     enhanceModel: process.env.OPENAI_ENHANCE_MODEL || 'gpt-5.4-mini',
   },
 
+  // Geoapify — geocoding + driving distance for the AI agent's delivery-distance check
+  // (the check_delivery_distance tool). Unset → the tool returns available:false and the
+  // agent falls back to judging near/far from the address text itself.
+  geoapify: {
+    apiKey: process.env.GEOAPIFY_API_KEY || '',
+  },
+
   aws: {
     region: process.env.AWS_REGION || '',
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
@@ -72,6 +79,9 @@ export const env = {
   // n8n flow both use "Background-Video").
   creatomate: {
     videoKey: process.env.CREATOMATE_VIDEO_KEY || 'Background-Video',
+    // Element names the in-video text + image inputs inject into; match your template.
+    textKey: process.env.CREATOMATE_TEXT_KEY || 'Text-1',
+    imageKey: process.env.CREATOMATE_IMAGE_KEY || 'Image-1',
   },
   n8n: {
     generateWebhookUrl: process.env.N8N_GENERATE_WEBHOOK_URL || '',

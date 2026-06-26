@@ -23,6 +23,7 @@ const DROP_SQL = `
   DROP TABLE IF EXISTS posting_settings;
   DROP TABLE IF EXISTS platform_accounts;
   DROP TABLE IF EXISTS content_notes;
+  DROP TABLE IF EXISTS login_history;
   DROP TABLE IF EXISTS users;
   SET FOREIGN_KEY_CHECKS = 1;
 `;
