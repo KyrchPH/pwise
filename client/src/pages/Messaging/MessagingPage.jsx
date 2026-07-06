@@ -308,6 +308,10 @@ export default function MessagingPage() {
   // changes, and transfer requests — from other users or n8n's inbound webhook.
   useEffect(() => {
     return messaging.subscribe((event) => {
+      // TEMP DIAGNOSTIC: server-side inbound profile resolution (Meta response + resolved
+      // name) piped over SSE so it's visible in the browser console. Remove once the
+      // "Messenger user" cause is confirmed.
+      if (event._debug) console.log('[inbound profile debug]', event._debug);
       if (event.type === 'message:new') {
         setConversations((cur) =>
           cur.map((c) => (c.id === event.conversationId ? mergeIncoming(c, event) : c)),

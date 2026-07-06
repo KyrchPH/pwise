@@ -23,7 +23,7 @@ All three Meta products share ONE app, so they share these:
 | `PUBLIC_URL` | Public HTTPS base of this API. Meta POSTs inbound here. **Must be reachable.** |
 | `FACEBOOK_APP_ID` | The Meta app id. |
 | `FB_APP_SECRET` (or `FACEBOOK_APP_SECRET`) | Signs `X-Hub-Signature-256` on every Meta webhook + OAuth + app access token. |
-| `FB_WEBHOOK_VERIFY_TOKEN` | The GET `hub.challenge` verify token — same for Messenger, IG, WhatsApp. |
+| `WEBHOOK_VERIFY_TOKEN` (legacy: `FB_WEBHOOK_VERIFY_TOKEN`) | The GET `hub.challenge` verify token — same for Messenger, IG, WhatsApp. |
 | `FB_GRAPH_VERSION` | Graph version (default `v21.0`). |
 
 Each **WhatsApp number's** own token is stored **per page** (encrypted, in Settings →
@@ -40,7 +40,7 @@ npm run fb:subscribe-app messenger  # just one (or any subset by path)
 ```
 
 This calls `POST /{app-id}/subscriptions` for each product, pointing it at
-`<PUBLIC_URL>/api/webhooks/{messenger,instagram,whatsapp}` with `FB_WEBHOOK_VERIFY_TOKEN`
+`<PUBLIC_URL>/api/webhooks/{messenger,instagram,whatsapp}` with `WEBHOOK_VERIFY_TOKEN`
 and fields `messages,messaging_postbacks` (WhatsApp: `messages`). Meta runs the
 `hub.challenge` handshake against each callback during the call — which the server answers
 automatically (`metaVerify`).
@@ -98,7 +98,7 @@ have **Advanced Access** — that's App Review, plus its prerequisites:
 ## 6. Smoke-test the handshake
 
 ```bash
-curl "$PUBLIC_URL/api/webhooks/messenger?hub.mode=subscribe&hub.verify_token=$FB_WEBHOOK_VERIFY_TOKEN&hub.challenge=ping123"
+curl "$PUBLIC_URL/api/webhooks/messenger?hub.mode=subscribe&hub.verify_token=$WEBHOOK_VERIFY_TOKEN&hub.challenge=ping123"
 # → ping123   (same for /instagram and /whatsapp)
 ```
 
@@ -107,7 +107,7 @@ curl "$PUBLIC_URL/api/webhooks/messenger?hub.mode=subscribe&hub.verify_token=$FB
 - **`fb:subscribe-app` fails** → `PUBLIC_URL` not reachable (Meta handshakes during the
   call), verify-token mismatch, the product isn't added to the app, or a field isn't valid
   for that product.
-- **Handshake 403** → `FB_WEBHOOK_VERIFY_TOKEN` mismatch.
+- **Handshake 403** → `WEBHOOK_VERIFY_TOKEN` mismatch.
 - **Inbound 401 in logs** → `X-Hub-Signature-256` mismatch → wrong `FB_APP_SECRET`.
 - **Verified but no messages** → the *page/number* isn't subscribed. Re-save the page in
   Settings (re-runs `subscribed_apps`), or check it's subscribed in the dashboard.

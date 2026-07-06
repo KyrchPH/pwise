@@ -76,6 +76,16 @@ function LockIcon() {
   );
 }
 
+// Outline pushpin for the pin-to-Quick-Access toggle on the trailing edge of a row.
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="12" y1="17" x2="12" y2="22" />
+      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+    </svg>
+  );
+}
+
 // Page-scoped views; their content changes with the active page.
 const PRIMARY_NAV = [
   {
@@ -300,6 +310,7 @@ export default function AppLayout() {
   const isProductsPage = pathname.startsWith('/shop');
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
+  const isAccountsPage = pathname === '/accounts';
   // Active page's Facebook connection is broken → gate its page-scoped tools and
   // surface a reconnect prompt (a banner elsewhere, a full block on scoped routes).
   const isPageScoped = PAGE_SCOPED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -329,6 +340,46 @@ export default function AppLayout() {
       /* storage unavailable — collapse just won't persist */
     }
   }, [collapsed]);
+
+  // Pinned nav items → the "Quick Access" group at the top. Stored as an ordered
+  // list of route paths so pins survive reloads and keep the order they were added.
+  const [pinned, setPinned] = useState(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem('pwise:pinned-nav') || '[]');
+      return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('pwise:pinned-nav', JSON.stringify(pinned));
+    } catch {
+      /* storage unavailable — pins just won't persist */
+    }
+  }, [pinned]);
+  const togglePin = (to) =>
+    setPinned((prev) => (prev.includes(to) ? prev.filter((t) => t !== to) : [...prev, to]));
+
+  // Collapsible nav sections (Quick Access / Workspace / General). Stored as the list
+  // of collapsed section ids so the choice persists across reloads.
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem('pwise:nav-groups-collapsed') || '[]');
+      return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('pwise:nav-groups-collapsed', JSON.stringify(collapsedGroups));
+    } catch {
+      /* storage unavailable — section state just won't persist */
+    }
+  }, [collapsedGroups]);
+  const toggleGroup = (id) =>
+    setCollapsedGroups((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
 
   // Unread-messages count for the sidebar badge. TODO: wire to the real source
   // (e.g. the active page's Facebook inbox); 0 keeps the badge hidden.
@@ -389,7 +440,7 @@ export default function AppLayout() {
       el.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
     };
-  }, [collapsed, isAdmin]);
+  }, [collapsed, isAdmin, pinned.length, collapsedGroups]);
 
   // Pull fresh name/followers for every page from Facebook; flag any whose token
   // failed so the tile can show "Expired" + an Update shortcut.
@@ -422,10 +473,13 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navOpen]);
 
-  const renderNavItem = (n, extraClass = '') => {
+  const pinnedSet = new Set(pinned);
+
+  const renderNavItem = (n, { keyPrefix = '' } = {}) => {
     const locked = !canAccessModule(user, n.moduleId) || (n.admin && !isAdmin);
     const label = locked ? `${n.label} locked` : n.label;
-    const className = ['nav__link', extraClass, locked && 'is-locked'].filter(Boolean).join(' ');
+    const className = ['nav__link', n.extraClass, locked && 'is-locked'].filter(Boolean).join(' ');
+    const isPinned = pinnedSet.has(n.to);
     const content = (
       <>
         <span className="nav__icon">{n.icon}</span>
@@ -435,17 +489,12 @@ export default function AppLayout() {
       </>
     );
 
-    if (locked) {
-      return (
-        <span key={n.to} className={className} title={label} aria-disabled="true">
-          {content}
-        </span>
-      );
-    }
-
-    return (
+    const link = locked ? (
+      <span className={className} title={label} aria-disabled="true">
+        {content}
+      </span>
+    ) : (
       <NavLink
-        key={n.to}
         to={n.to}
         title={collapsed ? n.label : undefined}
         className={({ isActive }) => [className, isActive && 'active'].filter(Boolean).join(' ')}
@@ -453,9 +502,92 @@ export default function AppLayout() {
         {content}
       </NavLink>
     );
+
+    return (
+      <div key={`${keyPrefix}${n.to}`} className="nav__item">
+        {link}
+        {!locked && (
+          <button
+            type="button"
+            className={`nav__pin${isPinned ? ' is-pinned' : ''}`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              togglePin(n.to);
+            }}
+            title={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
+            aria-label={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
+            aria-pressed={isPinned}
+          >
+            <PinIcon />
+          </button>
+        )}
+      </div>
+    );
   };
 
   const renderNavLinks = (items) => items.map((n) => renderNavItem(n));
+
+  // A titled nav section whose header collapses/expands its items. In the icons-only
+  // rail the titles are hidden, so collapsing is ignored there (items always show).
+  const renderNavGroup = (id, title, children) => {
+    const closed = !collapsed && collapsedGroups.includes(id);
+    return (
+      <div className={`nav-group${closed ? ' nav-group--closed' : ''}`}>
+        <button
+          type="button"
+          className="nav__title"
+          onClick={() => toggleGroup(id)}
+          aria-expanded={!closed}
+          title={closed ? `Expand ${title}` : `Collapse ${title}`}
+        >
+          <span>{title}</span>
+          <svg className="nav__title-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        {!closed && <nav className="nav">{children}</nav>}
+      </div>
+    );
+  };
+
+  // The two inline "General" items carry live badges, so they're built here (not in
+  // the module-level arrays). `byPath` lets Quick Access resolve a pinned route back
+  // to its icon/label/badge; `pinnedItems` is the pinned set in pin order.
+  const messagingItem = {
+    to: '/messages',
+    label: 'Messaging',
+    moduleId: 'messages',
+    extraClass: 'sidebar__messages',
+    icon: (
+      <Ico>
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </Ico>
+    ),
+    badge:
+      messageCount > 0 ? (
+        <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
+      ) : null,
+  };
+  const connectionsItem = {
+    to: '/connections',
+    label: 'Connections',
+    moduleId: 'connections',
+    icon: (
+      <Ico>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <line x1="19" y1="8" x2="19" y2="14" />
+        <line x1="22" y1="11" x2="16" y2="11" />
+      </Ico>
+    ),
+    badge:
+      connCount > 0 ? (
+        <span className="sidebar__msg-badge">{connCount > 99 ? '99+' : connCount}</span>
+      ) : null,
+  };
+  const byPath = new Map([...PRIMARY_NAV, messagingItem, connectionsItem, ...SECONDARY_NAV].map((n) => [n.to, n]));
+  const pinnedItems = pinned.map((to) => byPath.get(to)).filter(Boolean);
 
   return (
     <PresenceProvider>
@@ -479,50 +611,18 @@ export default function AppLayout() {
         </div>
         {/* Nav scrolls if it outgrows the viewport so the footer stays pinned. */}
         <div className="sidebar__scroll" ref={scrollRef}>
-          <div className="nav-group">
-            <div className="nav__title">Workspace</div>
-            <nav className="nav">{renderNavLinks(PRIMARY_NAV)}</nav>
-          </div>
-          <div className="nav-group">
-            <div className="nav__title">General</div>
-            <nav className="nav">
-              {renderNavItem(
-                {
-                  to: '/messages',
-                  label: 'Messaging',
-                  moduleId: 'messages',
-                  icon: (
-                    <Ico>
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </Ico>
-                  ),
-                  badge:
-                    messageCount > 0 ? (
-                      <span className="sidebar__msg-badge">{messageCount > 99 ? '99+' : messageCount}</span>
-                    ) : null,
-                },
-                'sidebar__messages',
-              )}
-              {renderNavItem({
-                to: '/connections',
-                label: 'Connections',
-                moduleId: 'connections',
-                icon: (
-                  <Ico>
-                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <line x1="19" y1="8" x2="19" y2="14" />
-                    <line x1="22" y1="11" x2="16" y2="11" />
-                  </Ico>
-                ),
-                badge:
-                  connCount > 0 ? (
-                    <span className="sidebar__msg-badge">{connCount > 99 ? '99+' : connCount}</span>
-                  ) : null,
-              })}
-              {renderNavLinks(SECONDARY_NAV)}
-            </nav>
-          </div>
+          {pinnedItems.length > 0 &&
+            renderNavGroup(
+              'quick-access',
+              'Quick Access',
+              pinnedItems.map((n) => renderNavItem(n, { keyPrefix: 'qa-' })),
+            )}
+          {renderNavGroup('workspace', 'Workspace', renderNavLinks(PRIMARY_NAV))}
+          {renderNavGroup('general', 'General', [
+            renderNavItem(messagingItem),
+            renderNavItem(connectionsItem),
+            ...renderNavLinks(SECONDARY_NAV),
+          ])}
         </div>
         <div className="sidebar__foot">
           {pages.length > 0 ? (
@@ -697,7 +797,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             {gated ? (

@@ -487,7 +487,7 @@ export async function getStats(accountId) {
 const healthCache = new Map(); // id -> { at, ok, reason }
 const HEALTH_TTL_MS = 5 * 60 * 1000;
 
-async function checkConnection(id) {
+export async function checkConnection(id) {
   const key = Number(id);
   const cached = healthCache.get(key);
   if (cached && Date.now() - cached.at < HEALTH_TTL_MS) {

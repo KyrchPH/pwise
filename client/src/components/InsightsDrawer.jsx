@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Modal, Spinner, Dropdown } from './ui.jsx';
+import { Modal, Spinner, Dropdown, Button } from './ui.jsx';
 import LineChart from './LineChart.jsx';
 import * as postPool from '../services/post_pool.service.js';
 import { apiError } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { usePages } from '../context/PageContext.jsx';
 
 const METRICS = [
   { key: 'reactions', label: 'Reactions', color: '#e0245e' },
@@ -67,11 +68,13 @@ export function InsightsPanel({ points, metric }) {
  */
 export default function InsightsDrawer({ post, open, onClose }) {
   const toast = useToast();
+  const { activePage } = usePages();
   const isVideo = post?.media_type === 'video';
   const [metric, setMetric] = useState('reactions');
   const [granularity, setGranularity] = useState('day');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (!open || !post) return undefined;
@@ -95,6 +98,33 @@ export default function InsightsDrawer({ post, open, onClose }) {
       active = false;
     };
   }, [open, post, metric, granularity, toast]);
+
+  // Build a professional PDF of this post's insights: pulls the full history for
+  // every metric (day granularity), then hands it to the report builder.
+  const downloadReport = async () => {
+    if (!post || downloading) return;
+    setDownloading(true);
+    try {
+      const metrics = ['reactions', 'comments', 'shares', 'views'].filter((m) => m !== 'views' || isVideo);
+      const entries = await Promise.all(
+        metrics.map((m) =>
+          postPool
+            .insights(post.id, m, 'day')
+            .then((r) => [m, r.points || []])
+            .catch(() => [m, []]),
+        ),
+      );
+      const seriesByMetric = Object.fromEntries(entries);
+      const { buildPostInsightsPdf, loadLogo } = await import('../utils/reportPdf.js');
+      const logo = await loadLogo();
+      const doc = buildPostInsightsPdf({ post, seriesByMetric, pageName: activePage?.account_name || null, logo });
+      doc.save(`post-${post.id}-insights.pdf`);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const points = data?.points ?? [];
   const activeMetric = METRICS.find((m) => m.key === metric) || METRICS[0];
@@ -127,6 +157,11 @@ export default function InsightsDrawer({ post, open, onClose }) {
             },
           ]}
         />
+      }
+      footer={
+        <Button onClick={downloadReport} disabled={downloading}>
+          {downloading ? 'Preparing…' : 'Download PDF report'}
+        </Button>
       }
     >
       <div className="insights">

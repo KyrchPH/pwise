@@ -1100,7 +1100,9 @@ export async function receiveInbound(payload = {}) {
     );
     const msgs = await query('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC', [id]);
     const conversation = rowToConversation(cRows[0], msgs);
-    emitMessagingEvent({ type: 'conversation:new', conversation }, audienceFor(cRows[0]));
+    // TEMP DIAGNOSTIC: _debug carries the inbound profile-resolution detail to the browser
+    // console (see inbound_gateway). Remove once "Messenger user" is diagnosed.
+    emitMessagingEvent({ type: 'conversation:new', conversation, _debug: payload.debug }, audienceFor(cRows[0]));
     return { conversationId: String(id), created: true, conversation };
   }
 
@@ -1114,7 +1116,7 @@ export async function receiveInbound(payload = {}) {
   const audience = conversation.handledBy === 'Live Agent' && conversation.assignedUserId != null
     ? [conversation.assignedUserId]
     : null;
-  emitMessagingEvent({ type: 'message:new', conversationId: String(id), messages, conversation }, audience);
+  emitMessagingEvent({ type: 'message:new', conversationId: String(id), messages, conversation, _debug: payload.debug }, audience);
   return { conversationId: String(id), created: false, messages, conversation };
 }
 

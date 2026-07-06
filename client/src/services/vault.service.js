@@ -8,8 +8,28 @@ export async function list() {
   return data.data.items; // [{ id, parentId, type, name, mediaType, size, uploadedBy, url, thumbUrl }]
 }
 
-export async function createFolder(parentId, name) {
-  const { data } = await api.post('/vault/folder', { parentId: parentId ?? null, name });
+// Create a folder. `options` (admins only) may carry { visibility: 'public'|'private',
+// accessUserIds: [...] } to restrict a private folder to specific users on creation.
+export async function createFolder(parentId, name, options = {}) {
+  const { visibility, accessUserIds } = options;
+  const { data } = await api.post('/vault/folder', {
+    parentId: parentId ?? null,
+    name,
+    ...(visibility ? { visibility } : {}),
+    ...(accessUserIds ? { accessUserIds } : {}),
+  });
+  return data.data.item;
+}
+
+// Read a folder's access config (admin). Returns { id, visibility, userIds: [...] }.
+export async function getFolderAccess(id) {
+  const { data } = await api.get(`/vault/${id}/access`);
+  return data.data;
+}
+
+// Set a folder's access (admin). payload: { visibility: 'public'|'private', userIds: [...] }.
+export async function setFolderAccess(id, payload) {
+  const { data } = await api.patch(`/vault/${id}/access`, payload);
   return data.data.item;
 }
 

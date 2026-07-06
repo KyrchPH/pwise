@@ -155,9 +155,20 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
   const post = await getById(id); // existence
   if (post.status !== 'posted' || !post.platform_post_id) return { comments: [], nextCursor: null };
   const lim = Math.min(Math.max(Number(limit) || 25, 1), 50);
-  const { token } = await pageCtx(post);
+  const { token, fbPageId } = await pageCtx(post);
+  // Comments live on the FEED post. A photo's platform_post_id is the bare photo-object
+  // id (no usable comments edge → "(#100) nonexisting field (comments)"), so use the
+  // composite {page}_{post} id (parent_post_id, resolve if missing). Same id-shape issue
+  // as editCaption above.
+  let commentTarget = post.platform_post_id;
+  if (post.media_type === 'image') {
+    commentTarget =
+      post.parent_post_id ||
+      (await fb.resolveParentPostId(post.platform_post_id, { token, fbPageId })) ||
+      post.platform_post_id;
+  }
   try {
-    return await fb.listComments(post.platform_post_id, { after: after || null, limit: lim }, token);
+    return await fb.listComments(commentTarget, { after: after || null, limit: lim }, token);
   } catch (err) {
     // The post no longer exists on Facebook (deleted there) → mark it 'deleted'
     // here and tell the viewer, so the user can re-post or remove it.
@@ -374,8 +385,31 @@ export async function update(id, data = {}, actor = {}) {
     existing.status === 'posted' &&
     existing.platform_post_id
   ) {
-    const { token } = await pageCtx(existing);
-    await fb.editCaption(existing.platform_post_id, existing.media_type, data.caption, token);
+    // Fast-fail on a known-dead page token instead of firing a Graph edit that would
+    // just be rejected (or, on a slow endpoint, stall). The health check is cached
+    // (populated at app start, 5-min TTL), so this is near-instant on the common path.
+    // Only a DEFINITIVE bad token blocks — a transient 'unknown' still proceeds, so a
+    // Facebook/network hiccup never locks editing.
+    if (existing.account_id) {
+      const health = await accounts.checkConnection(existing.account_id);
+      if (health && health.ok === false && (health.reason === 'invalid_token' || health.reason === 'no_token')) {
+        throw new ApiError(409, "This page's Facebook connection has expired. Reconnect it in Settings → Pages, then try saving again.");
+      }
+    }
+    const { token, fbPageId } = await pageCtx(existing);
+    // A photo's stored platform_post_id is the bare PHOTO-object id, which Facebook
+    // won't edit via `message` (it returns "object does not exist / unsupported"). The
+    // editable object is the composite {page}_{post} FEED id — kept in parent_post_id
+    // (resolve on the fly if it was never backfilled). Videos/text edit their own id
+    // (the video object / the already-composite feed post), so leave those as-is.
+    let editTarget = existing.platform_post_id;
+    if (existing.media_type === 'image') {
+      editTarget =
+        existing.parent_post_id ||
+        (await fb.resolveParentPostId(existing.platform_post_id, { token, fbPageId })) ||
+        existing.platform_post_id;
+    }
+    await fb.editCaption(editTarget, existing.media_type, data.caption, token);
   }
 
   // Reviving a failed or expired post: when an edit leaves it with a future

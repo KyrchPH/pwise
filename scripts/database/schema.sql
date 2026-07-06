@@ -426,6 +426,18 @@ CREATE TABLE IF NOT EXISTS vault_items (
   INDEX idx_vault_parent (parent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- vault_folder_access — allow-list for PRIVATE vault folders (migration 045). A private
+-- folder (vault_items.visibility='private', a column added in migration 045) plus its
+-- whole subtree is visible/accessible only to admins and the users listed here. Public
+-- folders (the default) have no rows. Cascades with the folder or the user.
+CREATE TABLE IF NOT EXISTS vault_folder_access (
+  folder_id INT NOT NULL,
+  user_id   INT NOT NULL,
+  PRIMARY KEY (folder_id, user_id),
+  CONSTRAINT fk_vfa_folder FOREIGN KEY (folder_id) REFERENCES vault_items(id) ON DELETE CASCADE,
+  CONSTRAINT fk_vfa_user   FOREIGN KEY (user_id)   REFERENCES users(id)       ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- conversation_transfers — handoff of a Live Agent conversation to another user --
 -- The recipient (to_user_id) must accept before ownership (conversations.assigned_user_id)
 -- actually moves. One pending transfer per conversation at a time.

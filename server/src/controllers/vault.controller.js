@@ -2,10 +2,11 @@ import asyncHandler from '../utils/asyncHandler.js';
 import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/vault.service.js';
 
-// Shared vault: reads aren't user-scoped (everyone sees every item). Writes pass
-// the acting user (req.user) so the uploader is recorded.
+// Vault reads are scoped to the acting user: private folders (and their contents) are
+// filtered out for non-admins who aren't on the allow-list. Writes pass req.user so the
+// uploader is recorded and access is enforced.
 export const list = asyncHandler(async (req, res) => {
-  sendSuccess(res, { items: await service.listAll() });
+  sendSuccess(res, { items: await service.listAll(req.user) });
 });
 
 export const createFolder = asyncHandler(async (req, res) => {
@@ -21,17 +22,28 @@ export const createFile = asyncHandler(async (req, res) => {
 
 // Move a file/folder under a new parent folder (parentId null → root).
 export const move = asyncHandler(async (req, res) => {
-  const item = await service.move(req.params.id, (req.body || {}).parentId ?? null);
+  const item = await service.move(req.user, req.params.id, (req.body || {}).parentId ?? null);
   sendSuccess(res, { item });
 });
 
 export const remove = asyncHandler(async (req, res) => {
-  sendSuccess(res, await service.remove(req.params.id));
+  sendSuccess(res, await service.remove(req.user, req.params.id));
 });
 
 // Toggle whether a file is hidden from the AI agent's media search. Body: { aiHidden }.
 export const setAiVisibility = asyncHandler(async (req, res) => {
-  const item = await service.setAiHidden(req.params.id, !!(req.body || {}).aiHidden);
+  const item = await service.setAiHidden(req.user, req.params.id, !!(req.body || {}).aiHidden);
+  sendSuccess(res, { item });
+});
+
+// Read a folder's access config (visibility + allow-listed user ids). Admin-only.
+export const getAccess = asyncHandler(async (req, res) => {
+  sendSuccess(res, await service.getFolderAccess(req.params.id));
+});
+
+// Set a folder's access: { visibility: 'public'|'private', userIds: [...] }. Admin-only.
+export const setAccess = asyncHandler(async (req, res) => {
+  const item = await service.setFolderAccess(req.params.id, req.body || {});
   sendSuccess(res, { item });
 });
 
@@ -39,6 +51,6 @@ export const setAiVisibility = asyncHandler(async (req, res) => {
 // matches a customer's words against these (tags weighted highest) when picking
 // media. Body: { description, tags } — tags as an array or comma-separated string.
 export const updateMeta = asyncHandler(async (req, res) => {
-  const item = await service.updateMeta(req.params.id, req.body || {});
+  const item = await service.updateMeta(req.user, req.params.id, req.body || {});
   sendSuccess(res, { item });
 });

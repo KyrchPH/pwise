@@ -12,7 +12,7 @@ import dotenv from 'dotenv';
 //   Run from server/:  npm run fb:subscribe-app            (all three)
 //                       npm run fb:subscribe-app messenger  (a subset by path)
 //
-// Requires FACEBOOK_APP_ID, FB_APP_SECRET (or FACEBOOK_APP_SECRET), FB_WEBHOOK_VERIFY_TOKEN,
+// Requires FACEBOOK_APP_ID, FB_APP_SECRET (or FACEBOOK_APP_SECRET), WEBHOOK_VERIFY_TOKEN,
 // and PUBLIC_URL. Meta runs the GET hub.challenge against each callback DURING this call,
 // so the server must be reachable at PUBLIC_URL when you run it.
 
@@ -62,7 +62,7 @@ async function main() {
   const missing = [];
   if (!cfg.appId) missing.push('FACEBOOK_APP_ID');
   if (!cfg.appSecret) missing.push('FB_APP_SECRET');
-  if (!cfg.verifyToken) missing.push('FB_WEBHOOK_VERIFY_TOKEN');
+  if (!cfg.verifyToken) missing.push('WEBHOOK_VERIFY_TOKEN');
   if (!cfg.publicUrl) missing.push('PUBLIC_URL');
   if (missing.length) {
     console.error(`[fb:subscribe-app] missing required env: ${missing.join(', ')}`);

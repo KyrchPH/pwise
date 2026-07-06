@@ -63,6 +63,40 @@ function TelegramLogo({ title = 'Telegram' }) {
     </span>
   );
 }
+function InstagramLogo({ title = 'Instagram' }) {
+  return (
+    <span className="platform-logo" title={title} aria-label={title}>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <defs>
+          <linearGradient id="ig-badge-grad" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" stopColor="#FEDA75" />
+            <stop offset="0.25" stopColor="#FA7E1E" />
+            <stop offset="0.5" stopColor="#D62976" />
+            <stop offset="0.75" stopColor="#962FBF" />
+            <stop offset="1" stopColor="#4F5BD5" />
+          </linearGradient>
+        </defs>
+        <rect width="24" height="24" rx="6" fill="url(#ig-badge-grad)" />
+        <rect x="6" y="6" width="12" height="12" rx="4" fill="none" stroke="#fff" strokeWidth="1.6" />
+        <circle cx="12" cy="12" r="3" fill="none" stroke="#fff" strokeWidth="1.6" />
+        <circle cx="15.6" cy="8.4" r="1" fill="#fff" />
+      </svg>
+    </span>
+  );
+}
+function WhatsappLogo({ title = 'WhatsApp' }) {
+  return (
+    <span className="platform-logo" title={title} aria-label={title}>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <rect width="24" height="24" rx="6" fill="#25D366" />
+        <path
+          d="M12 5.5a6.4 6.4 0 0 0-5.5 9.66L5.6 18.5l3.43-.9A6.4 6.4 0 1 0 12 5.5zm0 1.5a4.9 4.9 0 0 1 0 9.8 4.86 4.86 0 0 1-2.5-.68l-.24-.14-1.78.47.47-1.73-.16-.25A4.9 4.9 0 0 1 12 7zm2.86 6.02c-.15-.08-.9-.44-1.04-.5-.14-.05-.24-.07-.34.08-.1.15-.39.5-.48.6-.09.1-.18.11-.33.04a4.1 4.1 0 0 1-1.22-.75 4.6 4.6 0 0 1-.84-1.05c-.09-.15 0-.23.07-.31.07-.07.15-.18.22-.27.08-.1.1-.16.15-.26.05-.1.03-.19-.01-.27-.04-.07-.34-.82-.47-1.12-.12-.29-.25-.25-.34-.25h-.29c-.1 0-.26.03-.4.19-.14.15-.53.51-.53 1.25s.54 1.46.62 1.56c.08.1 1.06 1.7 2.63 2.32 1.3.5 1.57.4 1.85.38.28-.03.9-.37 1.03-.73.13-.36.13-.66.09-.73-.04-.06-.14-.1-.3-.18z"
+          fill="#fff"
+        />
+      </svg>
+    </span>
+  );
+}
 
 // `telegram_has`/`telegram_username` are loaded from the page on edit (display +
 // "keep current key" behaviour); `telegram_remove` detaches an attached bot.
@@ -881,11 +915,19 @@ export default function FacebookPages({ embedded = false }) {
               <div className="fb-page-card__body">
                 <div className="fb-page-card__name" title={p.account_name}>{p.account_name}</div>
                 <div className="fb-page-card__sub">
-                  {p.has_telegram_bot ? (
-                    // Page has another platform attached → show the platform logos.
+                  {p.has_telegram_bot || p.instagram_account_id || p.has_whatsapp ? (
+                    // Page has extra channels attached → show the platform logos.
                     <span className="fb-page-card__platforms">
                       <FacebookLogo />
-                      <TelegramLogo title={p.telegram_bot_username ? `Telegram · @${p.telegram_bot_username}` : 'Telegram'} />
+                      {p.has_telegram_bot && (
+                        <TelegramLogo title={p.telegram_bot_username ? `Telegram · @${p.telegram_bot_username}` : 'Telegram'} />
+                      )}
+                      {p.instagram_account_id && (
+                        <InstagramLogo title={p.instagram_username ? `Instagram · @${p.instagram_username}` : 'Instagram'} />
+                      )}
+                      {p.has_whatsapp && (
+                        <WhatsappLogo title={p.wa_phone_display ? `WhatsApp · ${p.wa_phone_display}` : 'WhatsApp'} />
+                      )}
                     </span>
                   ) : (
                     // Facebook only → just a count.

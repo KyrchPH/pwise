@@ -68,7 +68,7 @@ export const env = {
     // check). Accept either spelling — the code historically read FB_*, the env.example
     // documented FACEBOOK_* — so neither file can silently break the other.
     appId: process.env.FACEBOOK_APP_ID || process.env.FB_APP_ID || '',
-    verifyToken: process.env.FB_WEBHOOK_VERIFY_TOKEN || '', // GET handshake for the Messenger webhook
+    verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.FB_WEBHOOK_VERIFY_TOKEN || '', // GET handshake for Meta webhooks (Messenger/IG/WhatsApp); legacy FB_ name still honored
     appSecret: process.env.FB_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '', // OAuth + X-Hub-Signature-256
   },
 

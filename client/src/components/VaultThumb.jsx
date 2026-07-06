@@ -115,9 +115,18 @@ export function VaultThumb({ item }) {
   const mediaType = getVaultMediaType(item);
 
   if (item.type === 'folder') {
+    const isPrivate = item.visibility === 'private';
     return (
-      <span className="vault-thumb__icon vault-thumb__icon--folder">
+      <span className={`vault-thumb__icon vault-thumb__icon--folder${isPrivate ? ' vault-thumb__icon--folder-private' : ''}`}>
         <FolderIcon size={30} />
+        {isPrivate && (
+          <span className="vault-thumb__folder-lock" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="11" width="14" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+          </span>
+        )}
       </span>
     );
   }

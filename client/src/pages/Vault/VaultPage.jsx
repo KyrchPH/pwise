@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Card, Dropdown, Modal, Spinner } from '../../components/ui.jsx';
+import { Button, Card, Dropdown, Modal, Spinner, Toggle } from '../../components/ui.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
 import { downloadVaultItem, formatBytes, getVaultMediaType, useVault } from '../../context/VaultContext.jsx';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import * as connectionsApi from '../../services/connections.service.js';
 
 function DownloadIcon() {
   return (
@@ -101,6 +103,204 @@ function KebabIcon() {
     </svg>
   );
 }
+
+// Padlock — the "Manage access" action + the private-folder name badge.
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+// Small × for removing a selected-user chip.
+function ChipRemoveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </svg>
+  );
+}
+
+// Token/tag input for a private folder's allow-list. Admins are omitted — they always
+// have access — so this is purely "which other users may see this folder". Typing filters
+// the team into a suggestion dropdown; picking one adds a removable chip inside the field.
+// Props are unchanged (users, selected, onToggle) so both the create + manage-access
+// modals reuse it; `selected` is a list of string ids, `onToggle(id)` adds/removes one.
+function UserPicker({ users, selected, onToggle }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [menuPos, setMenuPos] = useState(null);
+  const wrapRef = useRef(null);
+  const fieldRef = useRef(null);
+  const inputRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Admins always have access; inactive/deleted users can't sign in — omit all three.
+  const pickable = users; // sourced from the admin's connections (already active & non-admin)
+  const byId = new Map(users.map((u) => [String(u.id), u]));
+
+  // Chips render from the current selection (resolve id → record for the label).
+  const chosen = selected.map((id) => byId.get(String(id))).filter(Boolean);
+
+  // Suggestions: pickable users not already chosen, matched against the typed query.
+  const q = query.trim().toLowerCase();
+  const suggestions = pickable.filter((u) => {
+    if (selected.includes(String(u.id))) return false;
+    if (!q) return true;
+    return (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
+  });
+
+  // The dropdown is portaled to <body> and fixed-positioned from the field's rect, so
+  // the modal's scrollable body can't clip it (the same trick CardMenu uses).
+  const place = useCallback(() => {
+    const r = fieldRef.current?.getBoundingClientRect();
+    if (r) setMenuPos({ left: r.left, top: r.bottom + 4, width: r.width });
+  }, []);
+
+  // While open: keep the menu glued to the field, and close on an outside click. A
+  // click inside the portaled menu counts as inside — check menuRef too.
+  useEffect(() => {
+    if (!open) return undefined;
+    place();
+    const onDown = (event) => {
+      if (!wrapRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true); // capture: the modal body scrolls too
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open, place]);
+
+  // Reposition when chips are added/removed (the field can grow a row and shift down).
+  useEffect(() => {
+    if (open) place();
+  }, [open, selected.length, place]);
+
+  // Reset the highlighted suggestion whenever the query changes the list.
+  useEffect(() => setActive(0), [query]);
+
+  const add = (u) => {
+    onToggle(String(u.id));
+    setQuery('');
+    setActive(0);
+    setOpen(true); // keep the menu open to add several in a row
+    inputRef.current?.focus();
+  };
+
+  const onKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setOpen(true);
+      setActive((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (event.key === 'Enter' && open && suggestions[active]) {
+      event.preventDefault();
+      add(suggestions[active]);
+    } else if (event.key === 'Escape') {
+      setOpen(false);
+    } else if (event.key === 'Backspace' && !query && chosen.length) {
+      // Backspace on an empty field pops the last chip.
+      onToggle(String(chosen[chosen.length - 1].id));
+    }
+  };
+
+  return (
+    <div className="vault-access__users" role="group" aria-label="Users with access">
+      <p className="vault-access__hint">Admins always have access. Add people from your connections who can also see this folder:</p>
+      {pickable.length === 0 ? (
+        <p className="vault-access__empty">You have no connections yet — connect with teammates to share private folders with them.</p>
+      ) : (
+        <div className="vault-tokens" ref={wrapRef}>
+          <div
+            ref={fieldRef}
+            className={`vault-tokens__field${open ? ' is-open' : ''}`}
+            onClick={() => {
+              inputRef.current?.focus();
+              setOpen(true);
+            }}
+          >
+            {chosen.map((u) => (
+              <span key={u.id} className="vault-token">
+                <span className="vault-token__label">{u.name || u.email}</span>
+                <button
+                  type="button"
+                  className="vault-token__remove"
+                  aria-label={`Remove ${u.name || u.email}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggle(String(u.id));
+                  }}
+                >
+                  <ChipRemoveIcon />
+                </button>
+              </span>
+            ))}
+            <input
+              ref={inputRef}
+              className="vault-tokens__input"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              onKeyDown={onKeyDown}
+              placeholder={chosen.length ? '' : 'Type a name or email…'}
+              role="combobox"
+              aria-expanded={open}
+              aria-autocomplete="list"
+            />
+          </div>
+          {open &&
+            menuPos &&
+            createPortal(
+              <ul
+                ref={menuRef}
+                className="vault-tokens__menu"
+                role="listbox"
+                style={{ position: 'fixed', left: menuPos.left, top: menuPos.top, width: menuPos.width }}
+                onMouseDown={(event) => event.preventDefault()} // keep the input focused on click
+              >
+                {suggestions.length === 0 ? (
+                  <li className="vault-tokens__empty">{q ? 'No matching connections.' : 'No more connections to add.'}</li>
+                ) : (
+                  suggestions.map((u, i) => (
+                    <li
+                      key={u.id}
+                      role="option"
+                      aria-selected={i === active}
+                      className={`vault-tokens__opt${i === active ? ' is-active' : ''}`}
+                      onMouseEnter={() => setActive(i)}
+                      onClick={() => add(u)}
+                    >
+                      <span className="vault-access__user-name">{u.name || u.email}</span>
+                      {u.name && <span className="vault-access__user-email">{u.email}</span>}
+                    </li>
+                  ))
+                )}
+              </ul>,
+              document.body,
+            )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add/remove an id from a selection list (immutable).
+const toggleId = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
 
 // One row in a card's kebab menu: icon + label, with an optional second line of
 // helper text (used to explain the AI-access toggle).
@@ -255,13 +455,21 @@ function uploadStatusLabel(entry) {
 
 export default function VaultPage() {
   const toast = useToast();
-  const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading, setItemAiHidden, setItemMeta } = useVault();
+  const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading, setItemAiHidden, setItemMeta, setFolderAccess, getFolderAccess } = useVault();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [folderId, setFolderId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderPrivate, setNewFolderPrivate] = useState(false); // admin: restrict the new folder
+  const [newFolderUserIds, setNewFolderUserIds] = useState([]); // admin: allow-list for a private new folder
+  const [users, setUsers] = useState([]); // team users for the access pickers (admins only)
+  const [accessFolder, setAccessFolder] = useState(null); // folder whose "Manage access" modal is open
+  const [accessDraft, setAccessDraft] = useState({ visibility: 'public', userIds: [] });
+  const [accessBusy, setAccessBusy] = useState(false); // loading/saving the access modal
   const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState([]); // [{ name, size, percent, status, error }]
   const [deleting, setDeleting] = useState(false);
@@ -394,19 +602,76 @@ export default function VaultPage() {
     };
   }, []);
 
+  // Suggestions for a private folder's allow-list come from the admin's CONNECTIONS
+  // (accepted agent-to-agent "friends"), not the whole team.
+  const loadConnections = async () => {
+    if (!isAdmin || users.length) return;
+    try {
+      const { connections } = await connectionsApi.list();
+      setUsers(connections || []);
+    } catch {
+      /* non-fatal — the picker just shows empty */
+    }
+  };
+
   const submitFolder = async () => {
     const name = newFolderName.trim();
     if (!name || creatingFolder) return;
     setCreatingFolder(true);
     try {
-      await createFolder(folderId, name);
+      const options = isAdmin && newFolderPrivate ? { visibility: 'private', accessUserIds: newFolderUserIds } : {};
+      await createFolder(folderId, name, options);
       toast.success('Folder created');
       setNewFolderName('');
+      setNewFolderPrivate(false);
+      setNewFolderUserIds([]);
       setNewFolderOpen(false);
     } catch (e) {
       toast.error(apiError(e));
     } finally {
       setCreatingFolder(false);
+    }
+  };
+
+  // Admin: open a folder's access manager, loading the user list + its current config.
+  const openManageAccess = async (folder) => {
+    setAccessFolder(folder);
+    setAccessDraft({ visibility: folder.visibility || 'public', userIds: [] });
+    setAccessBusy(true);
+    try {
+      await loadConnections();
+      const cfg = await getFolderAccess(folder.id);
+      // Merge already-granted users (who may no longer be connections) so their chips
+      // resolve; the typeahead suggestions still only offer connections.
+      if (cfg.users?.length) {
+        setUsers((cur) => {
+          const seen = new Set(cur.map((u) => String(u.id)));
+          return [...cur, ...cfg.users.filter((u) => !seen.has(String(u.id)))];
+        });
+      }
+      setAccessDraft({ visibility: cfg.visibility || 'public', userIds: cfg.userIds || [] });
+    } catch (e) {
+      toast.error(apiError(e));
+      setAccessFolder(null);
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  const saveAccess = async () => {
+    if (!accessFolder || accessBusy) return;
+    setAccessBusy(true);
+    try {
+      await setFolderAccess(accessFolder.id, {
+        visibility: accessDraft.visibility,
+        userIds: accessDraft.visibility === 'private' ? accessDraft.userIds : [],
+      });
+      toast.success(accessDraft.visibility === 'private' ? 'Folder is now private' : 'Folder is now public');
+      setAccessFolder(null);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setAccessBusy(false);
     }
   };
 
@@ -454,7 +719,13 @@ export default function VaultPage() {
     }
   };
 
-  const openNewFolder = () => setNewFolderOpen(true);
+  const openNewFolder = () => {
+    setNewFolderName('');
+    setNewFolderPrivate(false);
+    setNewFolderUserIds([]);
+    if (isAdmin) loadConnections();
+    setNewFolderOpen(true);
+  };
   const openUploadPicker = () => fileInputRef.current?.click();
   // Up one level: the second-to-last crumb is the parent (none → back to root).
   const goBack = () => setFolderId(trail[trail.length - 2]?.id ?? null);
@@ -667,10 +938,12 @@ export default function VaultPage() {
             )}
           </div>
         )}
-        {folders.map((folder) => (
+        {folders.map((folder) => {
+          const isPrivate = folder.visibility === 'private';
+          return (
           <div
             key={folder.id}
-            className={`vault-item vault-item--folder${dragId === folder.id ? ' is-dragging' : ''}${
+            className={`vault-item vault-item--folder${isPrivate ? ' vault-item--private' : ''}${dragId === folder.id ? ' is-dragging' : ''}${
               dropTargetId === folder.id ? ' is-drop-target' : ''
             }`}
             draggable
@@ -689,14 +962,32 @@ export default function VaultPage() {
               <span className="vault-item__thumb vault-item__thumb--folder">
                 <VaultThumb item={folder} />
               </span>
-              <span className="vault-item__name">{folder.name}</span>
-              <span className="vault-item__meta">{childrenOf(folder.id).length} items</span>
+              <span className="vault-item__name">
+                {isPrivate && (
+                  <span className="vault-item__lock" title="Private folder">
+                    <LockIcon />
+                  </span>
+                )}
+                {folder.name}
+              </span>
+              <span className="vault-item__meta">
+                {childrenOf(folder.id).length} items{isPrivate ? ' · Private' : ''}
+              </span>
             </button>
             <CardMenu label={`Actions for ${folder.name}`}>
+              {isAdmin && (
+                <MenuItem
+                  icon={<LockIcon />}
+                  label="Manage access"
+                  desc={isPrivate ? 'Private — only chosen users can see it.' : 'Public — everyone can see it.'}
+                  onClick={() => openManageAccess(folder)}
+                />
+              )}
               <MenuItem icon={<TrashIcon />} label="Delete" danger onClick={() => setConfirmDelete(folder)} />
             </CardMenu>
           </div>
-        ))}
+          );
+        })}
         {files.map((file) => (
           <div
             key={file.id}
@@ -807,6 +1098,71 @@ export default function VaultPage() {
           placeholder="Folder name"
           aria-label="Folder name"
         />
+        {isAdmin && (
+          <div className="vault-access">
+            <div className="vault-access__toggle">
+              <div>
+                <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
+                  Private folder
+                </span>
+                <span className="text-sm text-muted">Only admins and the users you choose can see it.</span>
+              </div>
+              <Toggle checked={newFolderPrivate} onChange={setNewFolderPrivate} />
+            </div>
+            {newFolderPrivate && (
+              <UserPicker
+                users={users}
+                selected={newFolderUserIds}
+                onToggle={(id) => setNewFolderUserIds((cur) => toggleId(cur, id))}
+              />
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!accessFolder}
+        title={accessFolder ? `Access — ${accessFolder.name}` : 'Folder access'}
+        onClose={() => !accessBusy && setAccessFolder(null)}
+        className="modal--vaultaccess"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAccessFolder(null)} disabled={accessBusy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={saveAccess} disabled={accessBusy}>
+              {accessBusy ? 'Saving…' : 'Save access'}
+            </Button>
+          </>
+        }
+      >
+        {accessFolder && (
+          <div className="vault-access">
+            <div className="vault-access__toggle">
+              <div>
+                <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
+                  Private folder
+                </span>
+                <span className="text-sm text-muted">
+                  {accessDraft.visibility === 'private'
+                    ? 'Only admins and the chosen users can see and open this folder.'
+                    : 'Public — everyone on the team can see this folder.'}
+                </span>
+              </div>
+              <Toggle
+                checked={accessDraft.visibility === 'private'}
+                onChange={(on) => setAccessDraft((d) => ({ ...d, visibility: on ? 'private' : 'public' }))}
+              />
+            </div>
+            {accessDraft.visibility === 'private' && (
+              <UserPicker
+                users={users}
+                selected={accessDraft.userIds}
+                onToggle={(id) => setAccessDraft((d) => ({ ...d, userIds: toggleId(d.userIds, id) }))}
+              />
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal open={!!preview} title={preview?.name} onClose={() => setPreview(null)} className="modal--vaultpreview">

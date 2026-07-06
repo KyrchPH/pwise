@@ -81,12 +81,21 @@ export function VaultProvider({ children }) {
     [items],
   );
 
-  const createFolder = useCallback(async (parentId, name) => {
+  const createFolder = useCallback(async (parentId, name, options = {}) => {
     const clean = (name || '').trim();
     if (!clean) return null;
-    const item = await vaultApi.createFolder(parentId ?? null, clean);
+    const item = await vaultApi.createFolder(parentId ?? null, clean, options);
     setItems((cur) => [...cur, item]);
     return item;
+  }, []);
+
+  // Change a folder's visibility + allow-list (admin only). Patches the folder in place
+  // so its lock badge + color update at once. Admins still see private folders even if
+  // they aren't on the list (they bypass access); non-admins get filtered on next refresh.
+  const setFolderAccess = useCallback(async (id, payload) => {
+    const updated = await vaultApi.setFolderAccess(id, payload);
+    setItems((cur) => cur.map((it) => (it.id === updated.id ? { ...it, ...updated } : it)));
+    return updated;
   }, []);
 
   // Upload each file straight to S3 (presigned PUT), generate + upload an optimized
@@ -186,8 +195,8 @@ export function VaultProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta }),
-    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta],
+    () => ({ items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta, setFolderAccess, getFolderAccess: vaultApi.getFolderAccess }),
+    [items, loading, error, refresh, childrenOf, getItem, pathTo, createFolder, uploadFiles, moveItem, deleteItem, setItemAiHidden, setItemMeta, setFolderAccess],
   );
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;

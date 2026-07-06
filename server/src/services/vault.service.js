@@ -56,6 +56,7 @@ async function withUrls(row) {
     type: row.type,
     name: row.name,
     mediaType: row.type === 'folder' ? undefined : row.media_type || 'file',
+    visibility: row.type === 'folder' ? (row.visibility === 'private' ? 'private' : 'public') : undefined, // folders only
     size: Number(row.size) || 0,
     uploadedBy: row.uploaded_by || '',
     createdAt: row.created_at,
@@ -97,25 +98,132 @@ async function assertFolder(id) {
 
 // Every item, folders first then files, A→Z. The dataset is small (a team's
 // shared files), so the client fetches the whole tree and slices it per folder.
-export async function listAll() {
+// Access control: a PRIVATE folder — and its whole subtree — is stripped for any
+// non-admin who isn't on its allow-list, so unauthorized users never see (or get a
+// signed URL for) anything inside it. Admins see everything.
+export async function listAll(actor = {}) {
   const rows = await query('SELECT * FROM vault_items ORDER BY type DESC, name ASC, id ASC');
-  return Promise.all(rows.map(withUrls));
+  const visible = actor.role === 'admin' ? rows : await filterByAccess(rows, actor);
+  return Promise.all(visible.map(withUrls));
+}
+
+// Drop every item under a private folder the user can't access: build a parent→children
+// index once, then remove the subtree of each blocked private folder (handles nesting —
+// an inaccessible outer folder hides accessible inner ones too, since you can't reach them).
+async function filterByAccess(rows, actor) {
+  const privateFolders = rows.filter((r) => r.type === 'folder' && r.visibility === 'private');
+  if (!privateFolders.length) return rows; // nothing restricted → everyone sees all
+  const granted = await grantedFolderIds(actor.id);
+  const toHide = privateFolders.filter((r) => !granted.has(Number(r.id)));
+  if (!toHide.length) return rows; // user is on every private folder's list
+  const byParent = new Map();
+  for (const r of rows) {
+    const p = r.parent_id != null ? Number(r.parent_id) : null;
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p).push(Number(r.id));
+  }
+  const hidden = new Set();
+  const stack = toHide.map((r) => Number(r.id));
+  while (stack.length) {
+    const id = stack.pop();
+    if (hidden.has(id)) continue;
+    hidden.add(id);
+    for (const child of byParent.get(id) || []) stack.push(child);
+  }
+  return rows.filter((r) => !hidden.has(Number(r.id)));
+}
+
+// Private-folder ids a user is explicitly allowed into.
+async function grantedFolderIds(userId) {
+  if (!userId) return new Set();
+  const rows = await query('SELECT folder_id FROM vault_folder_access WHERE user_id = ?', [userId]);
+  return new Set(rows.map((r) => Number(r.folder_id)));
+}
+
+// Throw 403 if a non-admin acts on an item sitting inside a private folder they can't
+// access. Walks the (shallow) ancestor chain. No-op for admins / items with no private
+// ancestor. Complements listAll's filtering so private contents can't be reached by id.
+async function assertCanAccess(actor = {}, id) {
+  if (actor.role === 'admin' || id == null) return;
+  const privateAncestors = [];
+  let cursor = id;
+  const seen = new Set();
+  while (cursor != null && !seen.has(Number(cursor))) {
+    seen.add(Number(cursor));
+    const rows = await query('SELECT id, parent_id, type, visibility FROM vault_items WHERE id = ?', [cursor]);
+    if (!rows.length) break;
+    if (rows[0].type === 'folder' && rows[0].visibility === 'private') privateAncestors.push(Number(rows[0].id));
+    cursor = rows[0].parent_id;
+  }
+  if (!privateAncestors.length) return;
+  const granted = await grantedFolderIds(actor.id);
+  for (const fid of privateAncestors) {
+    if (!granted.has(fid)) throw ApiError.forbidden('you do not have access to this folder');
+  }
+}
+
+// Replace a private folder's allow-list with `userIds` (validated against real users).
+async function replaceGrants(folderId, userIds) {
+  await query('DELETE FROM vault_folder_access WHERE folder_id = ?', [folderId]);
+  const ids = [...new Set((Array.isArray(userIds) ? userIds : []).map((x) => parseInt(x, 10)).filter(Number.isInteger))];
+  if (!ids.length) return;
+  const real = await query(`SELECT id FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  const valid = real.map((r) => Number(r.id));
+  if (!valid.length) return;
+  const params = [];
+  for (const uid of valid) params.push(folderId, uid);
+  await query(`INSERT INTO vault_folder_access (folder_id, user_id) VALUES ${valid.map(() => '(?, ?)').join(', ')}`, params);
 }
 
 export async function getItem(id) {
   return withUrls(await getRow(id));
 }
 
-export async function createFolder(actor = {}, { parentId = null, name } = {}) {
+export async function createFolder(actor = {}, { parentId = null, name, visibility, accessUserIds } = {}) {
   const clean = String(name ?? '').trim();
   if (!clean) throw ApiError.badRequest('a folder name is required');
   if (clean.length > 255) throw ApiError.badRequest('name is too long (max 255 characters)');
-  if (parentId != null) await assertFolder(parentId);
+  if (parentId != null) {
+    await assertFolder(parentId);
+    await assertCanAccess(actor, parentId); // can't create inside a private folder you can't see
+  }
+  // Only admins may restrict a folder; everyone else's folders are public (the default).
+  const isPrivate = actor.role === 'admin' && String(visibility) === 'private';
   const result = await query(
-    'INSERT INTO vault_items (parent_id, type, name, user_id, uploaded_by) VALUES (?, "folder", ?, ?, ?)',
-    [parentId ?? null, clean, actor.id ?? null, actor.name ?? null],
+    'INSERT INTO vault_items (parent_id, type, name, visibility, user_id, uploaded_by) VALUES (?, "folder", ?, ?, ?, ?)',
+    [parentId ?? null, clean, isPrivate ? 'private' : 'public', actor.id ?? null, actor.name ?? null],
   );
+  if (isPrivate) await replaceGrants(result.insertId, accessUserIds);
   return getItem(result.insertId);
+}
+
+// Read a folder's access config for the admin manage-access UI. Admin-only (route).
+// Joins users so the client can render the current allow-list as chips even for people
+// who aren't among the admin's connection suggestions (e.g. a since-removed connection).
+export async function getFolderAccess(id) {
+  const rows = await query('SELECT id, type, visibility FROM vault_items WHERE id = ?', [id]);
+  if (!rows.length || rows[0].type !== 'folder') throw ApiError.notFound('folder not found');
+  const grants = await query(
+    'SELECT u.id, u.name, u.email FROM vault_folder_access a JOIN users u ON u.id = a.user_id WHERE a.folder_id = ?',
+    [id],
+  );
+  return {
+    id: String(id),
+    visibility: rows[0].visibility === 'private' ? 'private' : 'public',
+    userIds: grants.map((r) => String(r.id)),
+    users: grants.map((r) => ({ id: r.id, name: r.name, email: r.email })),
+  };
+}
+
+// Set a folder's visibility + allow-list. Admin-only (route). 'public' clears the list.
+export async function setFolderAccess(id, { visibility, userIds } = {}) {
+  const rows = await query('SELECT id, type FROM vault_items WHERE id = ?', [id]);
+  if (!rows.length || rows[0].type !== 'folder') throw ApiError.notFound('folder not found');
+  const isPrivate = String(visibility) === 'private';
+  await query('UPDATE vault_items SET visibility = ? WHERE id = ?', [isPrivate ? 'private' : 'public', id]);
+  if (isPrivate) await replaceGrants(id, userIds);
+  else await query('DELETE FROM vault_folder_access WHERE folder_id = ?', [id]);
+  return getItem(id);
 }
 
 // Persist a file AFTER its bytes (and any thumbnail) are already in S3 — the
@@ -128,7 +236,10 @@ export async function createFile(actor = {}, data = {}) {
   // Guard against pointing the record at an arbitrary object: vault uploads live
   // under vault/ (see upload.controller presignedUrl).
   if (!s3Key.startsWith('vault/')) throw ApiError.badRequest('invalid s3Key for a vault file');
-  if (data.parentId != null) await assertFolder(data.parentId);
+  if (data.parentId != null) {
+    await assertFolder(data.parentId);
+    await assertCanAccess(actor, data.parentId); // can't upload into a private folder you can't see
+  }
   const mediaType = ALLOWED_MEDIA.includes(data.mediaType) ? data.mediaType : 'file';
   const thumbKey = data.thumbnailS3Key ? String(data.thumbnailS3Key).trim() : null;
 
@@ -153,11 +264,13 @@ export async function createFile(actor = {}, data = {}) {
 // Move an item under a new parent folder (newParentId null/'' → root). Guards
 // against folder cycles: a folder can't be moved into itself or any of its own
 // descendants. No-op (returns the item unchanged) if it's already there.
-export async function move(id, newParentId) {
+export async function move(actor, id, newParentId) {
   const row = await getRow(id); // 404 if missing
+  await assertCanAccess(actor, id); // can't move something you can't access
   const parentId = newParentId == null || newParentId === '' ? null : Number(newParentId);
   if (parentId != null) {
     await assertFolder(parentId);
+    await assertCanAccess(actor, parentId); // ...or into a private folder you can't access
     if (row.type === 'folder') {
       const subtree = await collectSubtree(id); // [id, ...descendants]
       if (subtree.includes(parentId)) throw ApiError.badRequest("can't move a folder inside itself");
@@ -189,8 +302,9 @@ async function collectSubtree(rootId) {
 
 // Delete a folder (and everything inside) or a single file. The FK cascade removes
 // descendant rows; we delete their S3 objects first so nothing is orphaned.
-export async function remove(id) {
+export async function remove(actor, id) {
   await getRow(id); // 404 if missing
+  await assertCanAccess(actor, id);
   const ids = await collectSubtree(id);
   const files = await query(
     `SELECT s3_key, thumbnail_s3_key FROM vault_items WHERE type = 'file' AND id IN (${ids.map(() => '?').join(',')})`,
@@ -207,8 +321,9 @@ export async function remove(id) {
 // Toggle a FILE's "Hide from AI" flag — hidden files are excluded from the agent's
 // media search (searchAiMedia) and shown with a distinct card in the Vault UI.
 // Folders aren't AI-searched directly, so the flag only applies to files.
-export async function setAiHidden(id, hidden) {
+export async function setAiHidden(actor, id, hidden) {
   const row = await getRow(id); // 404 if missing
+  await assertCanAccess(actor, id);
   if (row.type !== 'file') throw ApiError.badRequest('only files can be hidden from the AI');
   await query('UPDATE vault_items SET ai_hidden = ? WHERE id = ?', [hidden ? 1 : 0, id]);
   return getItem(id);
@@ -217,8 +332,9 @@ export async function setAiHidden(id, hidden) {
 // Update a file's AI metadata — free-text `description` and curated `tags` (the
 // agent matches a customer's words against both, with tags weighted highest; see
 // searchAiMedia). Either field may be omitted to leave it unchanged.
-export async function updateMeta(id, { description, tags } = {}) {
+export async function updateMeta(actor, id, { description, tags } = {}) {
   const row = await getRow(id); // 404 if missing
+  await assertCanAccess(actor, id);
   const nextDescription = description === undefined ? (row.description ?? null) : normalizeDescription(description);
   const nextTags = tags === undefined ? (row.tags ?? '') : normalizeTags(tags);
   await query('UPDATE vault_items SET description = ?, tags = ? WHERE id = ?', [nextDescription, nextTags, row.id]);

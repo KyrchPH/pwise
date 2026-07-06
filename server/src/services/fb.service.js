@@ -9,8 +9,11 @@ import ApiError from '../utils/ApiError.js';
 // The caption lives in a different Graph field per media type.
 function captionField(mediaType) {
   if (mediaType === 'video') return 'description'; // videos / reels (verified editable)
-  if (mediaType === 'image') return 'caption'; // photos
-  return 'message'; // text / link feed posts
+  // Photo posts AND text/link posts edit via the story's `message`. (A photo's `caption`
+  // field is NOT editable on the feed-story id — Facebook rejects it — even though the
+  // photo's on-post text lives there; `message` is what actually updates. Verified live
+  // via Graph API Explorer against a page photo post.)
+  return 'message';
 }
 
 function tokenOrThrow(token) {
@@ -28,6 +31,37 @@ export function isObjectGoneError(messageOrError) {
   return OBJECT_GONE_RE.test(msg);
 }
 
+// Facebook refuses caption/message edits on posts past its edit window (or that were
+// never editable). The exact wording has drifted across Graph versions, so match the
+// family of phrasings rather than a single code — anything unmatched still surfaces the
+// raw Graph message, so a miss is visible (and easy to add here).
+const EDIT_CLOSED_RE = /too old|too long ago|no longer be edited|can(?:no|'?)t be edited|not (?:allowed|eligible|permitted) to edit/i;
+export function isEditWindowClosedError(messageOrError) {
+  const msg = typeof messageOrError === 'string' ? messageOrError : messageOrError?.message || '';
+  return EDIT_CLOSED_RE.test(msg);
+}
+
+// Every Graph call is bounded by a client-side timeout. Without one, a slow or hung
+// Facebook endpoint keeps the Express request pending until nginx's upstream timeout,
+// which returns a 502 the browser reports (misleadingly) as a CORS error. Aborting at
+// GRAPH_TIMEOUT_MS (well under nginx's default 60s) turns that into a fast, catchable
+// error the client can actually read.
+const GRAPH_TIMEOUT_MS = 20000;
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new ApiError(504, `Facebook didn't respond within ${GRAPH_TIMEOUT_MS / 1000}s — please try again.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Thin Graph API call against a single object id. The access token rides in the
 // query string for GET/DELETE and in the form body for POST.
 async function graph(id, { method = 'GET', fields = {}, token } = {}) {
@@ -36,9 +70,10 @@ async function graph(id, { method = 'GET', fields = {}, token } = {}) {
   let res;
   try {
     res = method === 'POST'
-      ? await fetch(url, { method, body: params })
-      : await fetch(`${url}?${params.toString()}`, { method });
+      ? await fetchWithTimeout(url, { method, body: params })
+      : await fetchWithTimeout(`${url}?${params.toString()}`, { method });
   } catch (err) {
+    if (err instanceof ApiError) throw err; // already a clean timeout (504)
     throw new ApiError(502, `Facebook request failed: ${err.message}`);
   }
   const data = await res.json().catch(() => ({}));
@@ -52,8 +87,9 @@ async function graphBatch(ops, token) {
   const body = new URLSearchParams({ access_token: tokenOrThrow(token), batch: JSON.stringify(ops) });
   let res;
   try {
-    res = await fetch(`https://graph.facebook.com/${env.facebook.graphVersion}/`, { method: 'POST', body });
+    res = await fetchWithTimeout(`https://graph.facebook.com/${env.facebook.graphVersion}/`, { method: 'POST', body });
   } catch (err) {
+    if (err instanceof ApiError) throw err; // already a clean timeout (504)
     throw new ApiError(502, `Facebook batch request failed: ${err.message}`);
   }
   const data = await res.json().catch(() => null);
@@ -83,7 +119,22 @@ export async function editCaption(platformPostId, mediaType, caption, token) {
     token,
   });
   if (ok) return { edited: true };
-  throw new ApiError(502, `Couldn't update the caption on Facebook: ${error?.message || 'unknown error'}`);
+  // TEMP DIAGNOSTIC — logs exactly what we sent (object id + field for this media type)
+  // and the raw Facebook error (code/subcode/message) for any edit that still fails.
+  console.log(
+    `[fb.editCaption] postId=${platformPostId} mediaType=${mediaType} field=${captionField(mediaType)} error=${JSON.stringify(error)}`,
+  );
+  if (isEditWindowClosedError(error)) {
+    throw new ApiError(422, 'This post is too old to edit on Facebook — its caption can no longer be changed.');
+  }
+  if (isObjectGoneError(error)) {
+    throw new ApiError(422, "Facebook won't let this app edit that post — it may have been removed on Facebook, or this page's connection lacks permission to edit it.");
+  }
+  // 422, NOT 502: this is a Facebook-side rejection the user needs to SEE. The reverse
+  // proxy (nginx/Cloudflare) intercepts 5xx responses and strips their body + CORS
+  // headers — which is exactly what masked this as a generic "CORS / Network Error". A
+  // 4xx passes through untouched, so the real reason reaches the browser.
+  throw new ApiError(422, `Couldn't update the caption on Facebook: ${error?.message || 'unknown error'}`);
 }
 
 // One page of comment content for a published post, oldest first. NOTE: Facebook
@@ -278,16 +329,19 @@ export async function sendMedia(token, recipientId, { url, type } = {}) {
 // short-lived Meta CDN link, so callers should refresh it on each inbound message.
 export async function getUserProfile(token, psid) {
   if (!token || !psid) return null;
+  let meta = null; // TEMP DIAGNOSTIC: raw Meta result of the last attempt, surfaced to callers
   const fetchFields = async (fieldStr) => {
-    const { ok, data } = await graph(String(psid), { fields: { fields: fieldStr }, token });
+    const { ok, error, data } = await graph(String(psid), { fields: { fields: fieldStr }, token });
+    meta = { fields: fieldStr, ok, error, data };
     return ok ? data : null;
   };
   try {
     const data = (await fetchFields('name,profile_pic')) || (await fetchFields('name'));
-    if (!data) return null;
-    return { name: data.name || null, avatar: data.profile_pic ? String(data.profile_pic) : null };
-  } catch {
-    return null;
+    const name = data ? data.name || null : null;
+    const avatar = data && data.profile_pic ? String(data.profile_pic) : null;
+    return { name, avatar, meta };
+  } catch (e) {
+    return { name: null, avatar: null, meta: { error: String(e?.message || e) } };
   }
 }
 

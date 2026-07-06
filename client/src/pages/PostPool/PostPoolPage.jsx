@@ -4,6 +4,7 @@ import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { usePages } from '../../context/PageContext.jsx';
 import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
 
@@ -40,6 +41,7 @@ function fmtSched(iso) {
 
 export default function PostPoolPage() {
   const toast = useToast();
+  const { activePage } = usePages();
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [viewing, setViewing] = useState(null);
@@ -50,6 +52,18 @@ export default function PostPoolPage() {
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(null); // id of the post currently being retried
   const [menuPostId, setMenuPostId] = useState(null);
+  // "Export Analytics Data" dialog — a PDF of posts in a chosen date range.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportStart, setExportStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 29);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  });
+  const [exportEnd, setExportEnd] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  });
 
   const {
     data,
@@ -110,18 +124,24 @@ export default function PostPoolPage() {
   const saveEdit = async (e) => {
     e.preventDefault();
     setEditError(null);
-    if ((editing._schedDate && !editing._schedTime) || (!editing._schedDate && editing._schedTime)) {
-      setEditError('Pick both a date and a time to schedule (or clear both).');
-      return;
+    // A published post can't be rescheduled — only its caption is editable (and the
+    // server pushes that edit to Facebook). So don't send, or require, a schedule for
+    // it; a schedule only applies to a post that hasn't gone out yet.
+    const payload = { caption: editing.caption };
+    if (editing.status !== 'posted') {
+      if ((editing._schedDate && !editing._schedTime) || (!editing._schedDate && editing._schedTime)) {
+        setEditError('Pick both a date and a time to schedule (or clear both).');
+        return;
+      }
+      payload.scheduled_at =
+        editing._schedDate && editing._schedTime
+          ? new Date(`${editing._schedDate}T${editing._schedTime}`).toISOString()
+          : null;
     }
-    const scheduled_at =
-      editing._schedDate && editing._schedTime
-        ? new Date(`${editing._schedDate}T${editing._schedTime}`).toISOString()
-        : null;
 
     setSaving(true);
     try {
-      await postPool.update(editing.id, { caption: editing.caption, scheduled_at });
+      await postPool.update(editing.id, payload);
       toast.success('Post updated');
       setEditing(null);
       reload();
@@ -168,6 +188,51 @@ export default function PostPoolPage() {
 
   const editField = (key) => (e) => setEditing((p) => ({ ...p, [key]: e.target.value }));
 
+  // Page through every posted item, keep those published in the chosen window, and
+  // render a PDF analytics report from them.
+  const runExport = async () => {
+    if (exporting) return;
+    if (!exportStart || !exportEnd || exportStart > exportEnd) {
+      toast.error('Pick a valid start and end date');
+      return;
+    }
+    setExporting(true);
+    try {
+      const startMs = new Date(`${exportStart}T00:00:00`).getTime();
+      const endMs = new Date(`${exportEnd}T23:59:59.999`).getTime();
+      const all = [];
+      const LIMIT = 200;
+      for (let offset = 0; ; offset += LIMIT) {
+        const res = await postPool.list({ status: 'posted', limit: LIMIT, offset });
+        all.push(...(res.posts || []));
+        if (!res.posts?.length || all.length >= (res.total || 0) || all.length >= 2000) break;
+      }
+      const inRange = all.filter((p) => {
+        const t = new Date(p.posted_at).getTime();
+        return !Number.isNaN(t) && t >= startMs && t <= endMs;
+      });
+      if (!inRange.length) {
+        toast.error('No posted content in that date range');
+        return;
+      }
+      const { buildRangeAnalyticsPdf, loadLogo } = await import('../../utils/reportPdf.js');
+      const logo = await loadLogo();
+      const doc = buildRangeAnalyticsPdf({
+        start: new Date(`${exportStart}T00:00:00`),
+        end: new Date(`${exportEnd}T00:00:00`),
+        posts: inRange,
+        pageName: activePage?.account_name || null,
+        logo,
+      });
+      doc.save(`analytics-${exportStart}_to_${exportEnd}.pdf`);
+      setExportOpen(false);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
       <div className="page-head">
@@ -175,9 +240,14 @@ export default function PostPoolPage() {
           <h1 className="page-head__title">Post Pool</h1>
           <div className="page-head__sub">All uploaded content the agent can publish.</div>
         </div>
-        <Button as={Link} to="/upload">
-          + Upload post
-        </Button>
+        <div className="row">
+          <Button variant="ghost" onClick={() => setExportOpen(true)}>
+            Export Analytics Data
+          </Button>
+          <Button as={Link} to="/upload">
+            + Upload post
+          </Button>
+        </div>
       </div>
 
       <div className="toolbar">
@@ -355,14 +425,24 @@ export default function PostPoolPage() {
             <Field label="Caption">
               <textarea className="textarea" value={editing.caption || ''} onChange={editField('caption')} />
             </Field>
-            <div className="field">
-              <span className="field__label">Schedule</span>
-              <div className="grid-2">
-                <input className="input" type="date" value={editing._schedDate || ''} onChange={editField('_schedDate')} />
-                <TimeSelect value={editing._schedTime || ''} onChange={editField('_schedTime')} date={editing._schedDate} />
+            {editing.status === 'posted' ? (
+              <div className="field">
+                <span className="field__label">Schedule</span>
+                <span className="field__hint">
+                  {editing.posted_at ? `Published ${fmtSched(editing.posted_at)}.` : 'Already published.'} A posted post
+                  can’t be rescheduled — only its caption is editable.
+                </span>
               </div>
-              <span className="field__hint">Pick a future date and time. One post per slot.</span>
-            </div>
+            ) : (
+              <div className="field">
+                <span className="field__label">Schedule</span>
+                <div className="grid-2">
+                  <input className="input" type="date" value={editing._schedDate || ''} onChange={editField('_schedDate')} />
+                  <TimeSelect value={editing._schedTime || ''} onChange={editField('_schedTime')} date={editing._schedDate} />
+                </div>
+                <span className="field__hint">Pick a future date and time. One post per slot.</span>
+              </div>
+            )}
             {editError && <div className="error-text">{editError}</div>}
           </form>
         )}
@@ -386,6 +466,36 @@ export default function PostPoolPage() {
         }
       >
         Are you sure you want to delete post <strong>#{deleting?.id}</strong>? This can't be undone.
+      </Modal>
+
+      {/* Export analytics as a PDF for a chosen date range */}
+      <Modal
+        open={exportOpen}
+        title="Export Analytics Data"
+        onClose={() => setExportOpen(false)}
+        dismissable={!exporting}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setExportOpen(false)} disabled={exporting}>
+              Cancel
+            </Button>
+            <Button className="btn--flat" onClick={runExport} disabled={exporting || !exportStart || !exportEnd || exportStart > exportEnd}>
+              {exporting ? 'Preparing…' : 'Export PDF'}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-muted text-sm" style={{ marginTop: 0, marginBottom: 14 }}>
+          Generate a PDF report of posts published in this window, with per-post engagement and totals.
+        </p>
+        <div className="grid-2">
+          <Field label="Start date">
+            <input className="input" type="date" value={exportStart} max={exportEnd || undefined} onChange={(e) => setExportStart(e.target.value)} />
+          </Field>
+          <Field label="End date">
+            <input className="input" type="date" value={exportEnd} min={exportStart || undefined} onChange={(e) => setExportEnd(e.target.value)} />
+          </Field>
+        </div>
       </Modal>
     </>
   );

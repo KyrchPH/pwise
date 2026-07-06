@@ -244,12 +244,27 @@ async function handleMetaMessaging(body, { object, origin, platform, resolveColu
 
       let resolvedName = null;
       let customerAvatar = null;
+      let profileMeta = null;
       if (pageToken) {
         const prof = await fb.getUserProfile(pageToken, senderId).catch(() => null);
         if (prof?.name) resolvedName = prof.name;
         if (prof?.avatar) customerAvatar = prof.avatar;
+        profileMeta = prof?.meta || null;
       }
       const customerName = resolvedName || defaultName;
+
+      // TEMP DIAGNOSTIC — rides along on the SSE event so it shows in the browser console
+      // (the Meta lookup itself is server-side, so this is the only way to see it client
+      // side). Remove once "Messenger user" is diagnosed.
+      const debug = {
+        origin,
+        senderId,
+        hasPageToken: !!pageToken,
+        resolvedName,
+        customerName,
+        hasAvatar: !!customerAvatar,
+        meta: profileMeta,
+      };
 
       const result = await messaging.receiveInbound({
         accountId: acct,
@@ -264,6 +279,7 @@ async function handleMetaMessaging(body, { object, origin, platform, resolveColu
         customerNameResolved: resolvedName,
         customerAvatar,
         externalId,
+        debug,
       });
 
       if (text && aiShouldReply(result?.conversation)) {

@@ -36,6 +36,7 @@
     "db:migrate:channels": "node src/db/apply.js database/migrations/040_account_channels.sql",
     "db:migrate:msgid-len": "node src/db/apply.js database/migrations/041_messages_external_id_len.sql",
     "db:migrate:block": "node src/db/apply.js database/migrations/043_conversation_block.sql",
+    "db:migrate:vault-access": "node src/db/apply.js database/migrations/045_vault_folder_access.sql",
     "vault:backfill-folders": "node src/backfill-vault-folders.js",
     "ai:backfill-prompts": "node src/backfill-ai-prompts.js",
     "assistant:import-context": "node src/import-wise-assistant-context.js",

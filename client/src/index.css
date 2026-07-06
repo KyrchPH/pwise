@@ -164,6 +164,13 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .btn--lg { height: 50px; padding: 0 26px; font-size: 1rem; }
 .btn--block { width: 100%; }
 .btn--icon { padding: 0; width: 38px; height: 38px; border-radius: 12px; }
+/* Flat variant of a solid button — drops the raised gradient/shadow + press-down. */
+.btn--flat.btn--primary {
+  background: var(--blue); border-color: var(--blue-600);
+  box-shadow: none; transform: none;
+}
+.btn--flat.btn--primary:hover { background: var(--blue-600); filter: none; transform: none; }
+.btn--flat.btn--primary:active { background: var(--blue-700); box-shadow: none; transform: none; }
 
 /* --- Forms --- */
 .field { display: block; margin-bottom: 16px; }
@@ -481,6 +488,8 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   .sidebar.is-collapsed .nav__link { width: 44px; height: 44px; padding: 0; gap: 0; justify-content: center; align-self: center; position: relative; }
   .sidebar.is-collapsed .nav__label,
   .sidebar.is-collapsed .nav__title { display: none; }
+  .sidebar.is-collapsed .nav__item { display: flex; justify-content: center; }
+  .sidebar.is-collapsed .nav__pin { display: none; }
   .sidebar.is-collapsed .nav__lock {
     position: absolute;
     right: 4px;
@@ -520,12 +529,21 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .nav__link.is-locked:hover { background: transparent; color: rgba(255, 255, 255, 0.72); }
 .nav__icon { width: 18px; display: inline-flex; align-items: center; justify-content: center; }
 .nav__lock { margin-left: auto; flex-shrink: 0; opacity: 0.9; }
-/* Small category heading above each nav group. */
+/* Category heading above each nav group — a button that collapses/expands the group. */
 .nav__title {
-  padding: 0 14px; margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; border: none; background: none; cursor: pointer; font-family: inherit;
+  padding: 5px 12px 5px 14px; margin-bottom: 6px; border-radius: 8px;
   font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.55); transition: color 0.15s ease, background 0.15s ease;
 }
+.nav__title:hover { color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.08); }
+.nav__title-caret { flex-shrink: 0; opacity: 0.75; transition: transform 0.18s ease; }
+.nav-group--closed .nav__title-caret { transform: rotate(-90deg); }
+/* A collapsed section is just its header — drop the title's trailing margin and most of
+   the tall inter-section gap so it sits snug against the next section. */
+.nav-group--closed .nav__title { margin-bottom: 0; }
+.nav-group--closed:not(:last-child) { margin-bottom: -18px; }
 .sidebar__foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
 .sidebar__footlink { color: #fff; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .sidebar__footlink:hover { color: var(--yellow); }
@@ -540,6 +558,25 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   background: var(--red); color: #fff; font-size: 0.64rem; font-weight: 800; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
 }
+
+/* Each nav row = the link plus a trailing pin-to-Quick-Access toggle. The link keeps
+   right padding so its label/badge never sit under the pin. */
+.nav__item { position: relative; }
+.nav__link { padding-right: 36px; }
+.nav__pin {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); z-index: 1;
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border: none; background: transparent; border-radius: 7px; cursor: pointer;
+  color: rgba(255, 255, 255, 0.55); opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.nav__item:hover .nav__pin { opacity: 1; }
+.nav__pin:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.nav__pin.is-pinned { opacity: 1; color: var(--yellow); }
+/* On the active (white) row, tint the pin so it reads on the light pill. */
+.nav__item:has(.nav__link.active) .nav__pin { color: rgba(15, 60, 95, 0.4); }
+.nav__item:has(.nav__link.active) .nav__pin:hover { background: rgba(15, 60, 95, 0.1); color: var(--blue-700); }
+.nav__item:has(.nav__link.active) .nav__pin.is-pinned { color: var(--blue-600); }
 
 .main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* Empty on desktop now the account menu lives in the sidebar footer, so it's
@@ -1793,6 +1830,9 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
   box-shadow: none;
 }
 .profile-card--meta { grid-column: 2; }
+/* Active sessions spans the full width below the hero/details/meta — otherwise it
+   auto-places into the narrow left column and its contents get squished. */
+.profile-card--security { grid-column: 1 / -1; }
 .profile-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
 .profile-meta > div { padding: 12px; border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface-2); }
 .profile-meta dt { color: var(--muted); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
@@ -3477,6 +3517,73 @@ h1, h2, h3, h4 { margin: 0; font-family: var(--font-display); font-weight: 700; 
 .vault-item--folder .vault-item__name { padding-top: 12px; }
 .vault-item--folder .vault-item__meta { color: #9b6500; font-weight: 700; }
 .vault-item--folder .vault-thumb__icon--folder { color: #b97800; }
+
+/* Private folders (access-restricted) read in a distinct VIOLET vs the default gold, so
+   a restricted folder is obvious at a glance — folder icon, a lock badge on it, the name
+   lock, the meta text, and a tinted card border. */
+.vault-item--private.vault-item--folder .vault-thumb__icon--folder,
+.vault-thumb__icon--folder-private { color: #7b61ff; }
+.vault-item--private.vault-item--folder .vault-item__meta { color: #6b4bd6; }
+.vault-item--private { border-color: rgba(123, 97, 255, 0.45); }
+.vault-thumb__icon--folder-private { position: relative; }
+.vault-thumb__folder-lock {
+  position: absolute; left: 50%; top: 56%; transform: translate(-50%, -50%);
+  display: grid; place-items: center; width: 15px; height: 15px; padding: 1px;
+  border-radius: 5px; background: #7b61ff; color: #fff;
+}
+.vault-item__lock { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: #7b61ff; }
+.vault-item__lock svg { width: 13px; height: 13px; }
+
+/* Folder access controls — the visibility toggle + user allow-list checklist shown in the
+   New-folder and Manage-access modals (admins only). */
+.vault-access { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+.vault-access__toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2);
+}
+.vault-access__hint { margin: 0 0 4px; font-size: 0.78rem; color: var(--muted); }
+.vault-access__empty { margin: 0; font-size: 0.85rem; color: var(--muted); }
+.vault-access__users { display: flex; flex-direction: column; gap: 6px; }
+.vault-access__user-name { font-weight: 600; font-size: 0.86rem; color: var(--text); }
+.vault-access__user-email { font-size: 0.75rem; color: var(--muted); }
+
+/* Token/tag input for the private-folder allow-list. */
+.vault-tokens { position: relative; }
+.vault-tokens__field {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px;
+  padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface-2); cursor: text; transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.vault-tokens__field.is-open, .vault-tokens__field:focus-within { border-color: #7b61ff; box-shadow: var(--ring); }
+.vault-token {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 5px 3px 10px; border-radius: 999px;
+  background: rgba(123, 97, 255, 0.14); color: var(--text); font-size: 0.82rem; font-weight: 600;
+}
+.vault-token__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-token__remove {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.vault-token__remove:hover { background: rgba(123, 97, 255, 0.28); color: var(--text); }
+.vault-tokens__input {
+  flex: 1; min-width: 120px; border: 0; outline: none; background: transparent;
+  color: var(--text); font-size: 0.86rem; padding: 4px 2px;
+}
+.vault-tokens__input::placeholder { color: var(--muted); }
+/* Portaled to <body> and fixed-positioned inline (left/top/width) so the modal's
+   scrollable body can't clip it; z-index sits above the overlay (50). */
+.vault-tokens__menu {
+  z-index: 60; margin: 0; padding: 6px; list-style: none; max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow);
+}
+.vault-tokens__opt {
+  display: flex; flex-direction: column; gap: 1px; padding: 7px 9px; border-radius: 8px; cursor: pointer;
+}
+.vault-tokens__opt.is-active, .vault-tokens__opt:hover { background: rgba(123, 97, 255, 0.14); }
+.vault-tokens__empty { padding: 8px 9px; font-size: 0.82rem; color: var(--muted); }
 .vault-item__actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.12s ease; }
 .vault-item:hover .vault-item__actions, .vault-item:focus-within .vault-item__actions { opacity: 1; }
 .vault-item__act {
