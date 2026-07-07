@@ -7,8 +7,10 @@ export async function list(params = {}) {
   return data.data; // { posts, total }
 }
 
-export async function get(id) {
-  const { data } = await api.get(`/post-pool/${id}`);
+// Pass { refresh: true } to force a live engagement re-read (bypassing the server's
+// TTL) before responding — used by the post viewer so its counts match live comments.
+export async function get(id, { refresh } = {}) {
+  const { data } = await api.get(`/post-pool/${id}`, { params: refresh ? { refresh: 1 } : {} });
   return data.data.post;
 }
 
@@ -52,6 +54,19 @@ export async function slotAvailable(scheduledAt, excludeId) {
 // cursor (omit for the first page). Returns { comments, nextCursor }.
 export async function comments(id, after) {
   const { data } = await api.get(`/post-pool/${id}/comments`, { params: after ? { after } : {} });
+  return data.data;
+}
+
+// Reply to a Facebook comment as the Page (from the post view). Returns { id }.
+export async function replyToComment(id, commentId, message) {
+  const { data } = await api.post(`/post-pool/${id}/comments/${commentId}/reply`, { message });
+  return data.data;
+}
+
+// Message the person who left a comment via a Messenger private reply, opening the
+// conversation. Returns { conversationId, created }.
+export async function messageCommenter(id, commentId, message) {
+  const { data } = await api.post(`/post-pool/${id}/comments/${commentId}/message`, { message });
   return data.data;
 }
 

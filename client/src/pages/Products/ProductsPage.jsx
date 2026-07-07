@@ -6,7 +6,6 @@ import { isVariable, priceRangeLabel, variantLabel, findVariant, unitPriceOf } f
 import { useToast } from '../../context/ToastContext.jsx';
 import * as productsApi from '../../services/products.service.js';
 import * as discountsApi from '../../services/discounts.service.js';
-import { evaluateDiscounts } from '../../config/discounts.js';
 import { apiError } from '../../services/api.js';
 import ProductForm from '../Shop/ProductForm.jsx';
 import { Button, Card, Modal, Spinner } from '../../components/ui.jsx';
@@ -78,6 +77,26 @@ function EyeIcon() {
   );
 }
 
+function EditIcon() {
+  return (
+    <Icon size={16}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </Icon>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <Icon size={16}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </Icon>
+  );
+}
+
 const cartKeyOf = (productId, variantId) => `${productId}:${variantId ?? '_'}`;
 
 export default function ProductsPage() {
@@ -93,8 +112,10 @@ export default function ProductsPage() {
   const [busy, setBusy] = useState(false); // delete in flight
   const [cartOpen, setCartOpen] = useState(false);
   const [cart, setCart] = useState([]); // { key, productId, variantId, variantLabel, quantity }
+  const [unchecked, setUnchecked] = useState(() => new Set()); // cart keys the shopper unticked (default: all ticked)
   const [viewing, setViewing] = useState(null); // product shown in the quick-view modal
   const [viewSel, setViewSel] = useState({}); // chosen option values in the quick-view
+  const [viewQty, setViewQty] = useState(1); // quantity chosen in the quick-view
 
   useEffect(() => {
     setCart([]);
@@ -136,6 +157,7 @@ export default function ProductsPage() {
 
   // Quick-view: default each axis to its first value when a variable product opens.
   useEffect(() => {
+    setViewQty(1);
     if (!viewing || !isVariable(viewing)) {
       setViewSel({});
       return;
@@ -171,21 +193,26 @@ export default function ProductsPage() {
     })
     .filter(Boolean);
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-  const cartSubtotal = cartItems.reduce((sum, item) => sum + (item.unitPrice == null ? 0 : item.unitPrice * item.quantity), 0);
-  const hasQuoteItems = cartItems.some((item) => item.unitPrice == null);
-  const discountResult = evaluateDiscounts(
-    cartItems.map((it) => ({ productId: it.productId, category: it.product.category, unitPrice: it.unitPrice, quantity: it.quantity })),
-    discounts,
-  );
+  // Total quantity of each product (summed across its variants) for the tile's in-cart badge.
+  const cartQtyByProduct = cart.reduce((acc, item) => {
+    acc[item.productId] = (acc[item.productId] || 0) + item.quantity;
+    return acc;
+  }, {});
+  // Items ticked for checkout — all ticked by default; `unchecked` holds the ones the
+  // shopper unticked. The summary + Proceed to checkout act on these.
+  const checkedItems = cartItems.filter((it) => !unchecked.has(it.key));
+  const cartSubtotal = checkedItems.reduce((sum, item) => sum + (item.unitPrice == null ? 0 : item.unitPrice * item.quantity), 0);
+  const hasQuoteItems = checkedItems.some((item) => item.unitPrice == null);
 
-  const addToCart = (product, variant = null) => {
+  const addToCart = (product, variant = null, qty = 1) => {
     const variantId = variant?.id ?? null;
     const key = cartKeyOf(product.id, variantId);
     const label = variant ? variantLabel(variant.optionValues, product.options) : '';
+    const add = Math.max(1, Math.floor(Number(qty)) || 1);
     setCart((cur) => {
       const existing = cur.find((item) => item.key === key);
-      if (existing) return cur.map((item) => (item.key === key ? { ...item, quantity: item.quantity + 1 } : item));
-      return [...cur, { key, productId: product.id, variantId, variantLabel: label, quantity: 1 }];
+      if (existing) return cur.map((item) => (item.key === key ? { ...item, quantity: item.quantity + add } : item));
+      return [...cur, { key, productId: product.id, variantId, variantLabel: label, quantity: add }];
     });
     toast.success(`${product.name}${label ? ` (${label})` : ''} added to cart`);
   };
@@ -207,6 +234,61 @@ export default function ProductsPage() {
   const removeFromCart = (key) => setCart((cur) => cur.filter((item) => item.key !== key));
   const removeProductFromCart = (productId) => setCart((cur) => cur.filter((item) => item.productId !== productId));
   const clearCart = () => setCart([]);
+
+  const toggleChecked = (key) =>
+    setUnchecked((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Hand the ticked items off to the standalone checkout page, which opens in a NEW TAB.
+  // The cart can't be shared across tabs via React state, so we snapshot everything the
+  // checkout needs (line items + the page's discount rules + product names for summaries)
+  // into localStorage under a one-time ref, pass the ref in the URL, then EMPTY this cart —
+  // the checkout tab now owns those items.
+  const proceedToCheckout = () => {
+    if (!checkedItems.length) return;
+    const ref = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const payload = {
+      accountId: activeId,
+      currency,
+      createdAt: Date.now(),
+      items: checkedItems.map((it) => ({
+        productId: it.productId,
+        variantId: it.variantId ?? null,
+        variantLabel: it.variantLabel || '',
+        name: it.product.name,
+        category: it.product.category || '',
+        unitPrice: it.unitPrice, // number, or null for "Quote" items
+        media: it.media || '',
+        quantity: it.quantity,
+      })),
+      discounts,
+      products: products.map((p) => ({ id: p.id, name: p.name })), // for discount summaries
+    };
+    let opened = null;
+    try {
+      localStorage.setItem(`pwise:checkout:${ref}`, JSON.stringify(payload));
+      // NB: passing 'noopener' makes window.open return null, so we can't detect a
+      // blocked pop-up. Open normally, then sever the back-reference ourselves (same
+      // origin, so this works) to get both a usable return value AND no window.opener.
+      opened = window.open(`${window.location.origin}/checkout?ref=${encodeURIComponent(ref)}`, '_blank');
+      if (opened) opened.opener = null;
+    } catch {
+      /* storage or pop-up blocked — handled below */
+    }
+    if (!opened) {
+      toast.error('Please allow pop-ups for this site to open checkout.');
+      return;
+    }
+    // Empty the cart on this page — the checkout tab has the items now.
+    setCart([]);
+    setUnchecked(new Set());
+    setCartOpen(false);
+    toast.success('Checkout opened in a new tab');
+  };
 
   const startAdd = () => {
     if (!isAdmin) return;
@@ -254,6 +336,24 @@ export default function ProductsPage() {
     : '';
   const viewMedia = viewVariant?.photoUrl || viewing?.photoUrl || '';
   const viewAddDisabled = viewing ? isVariable(viewing) && (!viewVariant || viewVariant.active === false) : false;
+  // Gallery thumbnails: each variant's own photo (variable products only). Clicking one
+  // selects that variant, swapping the main image + price. Simple / one-photo products show
+  // just the main image (the strip hides when there's ≤1 image).
+  const galleryThumbs = [];
+  if (viewing && isVariable(viewing)) {
+    const seenThumb = new Set();
+    for (const v of viewing.variants || []) {
+      if (v.hasPhoto && v.photoUrl && !seenThumb.has(v.photoUrl)) {
+        seenThumb.add(v.photoUrl);
+        galleryThumbs.push({
+          key: v.id ?? v.comboKey ?? v.photoUrl,
+          url: v.photoUrl,
+          values: v.optionValues || {},
+          label: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+        });
+      }
+    }
+  }
 
   return (
     <section className="products-page">
@@ -310,8 +410,10 @@ export default function ProductsPage() {
         </Card>
       ) : (
         <div className="products-grid">
-          {products.map((p) => (
-            <Card key={p.id} className="product-tile">
+          {products.map((p) => {
+            const inCart = cartQtyByProduct[p.id] || 0;
+            return (
+            <Card key={p.id} className={`product-tile${inCart > 0 ? ' is-in-cart' : ''}`}>
               <div className="product-tile__media">
                 {p.photoUrl ? <img src={p.photoUrl} alt="" loading="lazy" /> : <span className="product-tile__noimg">No photo</span>}
                 <div className="product-tile__hover">
@@ -326,12 +428,12 @@ export default function ProductsPage() {
                   </button>
                   <button
                     type="button"
-                    className="product-tile__iconbtn"
+                    className={`product-tile__iconbtn${inCart > 0 ? ' product-tile__iconbtn--incart' : ''}`}
                     onClick={() => onTileAdd(p)}
-                    aria-label={`Add ${p.name} to cart`}
-                    title={isVariable(p) ? 'Choose a variant' : 'Add to cart'}
+                    aria-label={inCart > 0 ? `${p.name} in cart (${inCart}) — add another` : `Add ${p.name} to cart`}
+                    title={inCart > 0 ? `In cart: ${inCart}` : isVariable(p) ? 'Choose a variant' : 'Add to cart'}
                   >
-                    <CartIcon />
+                    {inCart > 0 ? <span className="product-tile__cartqty">{inCart}</span> : <CartIcon />}
                   </button>
                 </div>
               </div>
@@ -340,88 +442,148 @@ export default function ProductsPage() {
                 <div className="product-tile__price">{priceRangeLabel(p, currency)}</div>
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      <Modal open={!!viewing} title={viewing?.name || ''} onClose={() => setViewing(null)} className="modal--product-view">
+      <Modal
+        open={!!viewing}
+        title=""
+        onClose={() => setViewing(null)}
+        className="modal--product-view"
+        headerActions={
+          isAdmin && viewing ? (
+            <>
+              <button
+                type="button"
+                className="btn btn--ghost btn--icon"
+                title="Edit"
+                aria-label="Edit product"
+                onClick={() => {
+                  const v = viewing;
+                  setViewing(null);
+                  startEdit(v);
+                }}
+              >
+                <EditIcon />
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--icon product-view__del"
+                title="Delete"
+                aria-label="Delete product"
+                onClick={() => {
+                  const v = viewing;
+                  setViewing(null);
+                  del(v);
+                }}
+              >
+                <TrashIcon />
+              </button>
+            </>
+          ) : null
+        }
+      >
         {viewing && (
           <div className="product-view">
-            <div className="product-view__media">
-              {viewMedia ? <img src={viewMedia} alt="" /> : <span>No photo</span>}
-            </div>
-            <div className="product-view__price">{viewPrice}</div>
-            {viewing.category && <div className="product-view__cat">{viewing.category}</div>}
-            {viewing.description && <p className="product-view__desc">{viewing.description}</p>}
+            <div className="product-view__top">
+              <div className="product-view__gallery">
+                <div className="product-view__media">
+                  {viewMedia ? <img src={viewMedia} alt="" /> : <span>No photo</span>}
+                </div>
+                {galleryThumbs.length > 1 && (
+                  <div className="product-view__thumbs">
+                    {galleryThumbs.map((t) => (
+                      <button
+                        type="button"
+                        key={t.key}
+                        className={`product-view__thumb${t.url === viewMedia ? ' is-active' : ''}`}
+                        onClick={() => setViewSel({ ...t.values })}
+                        aria-label={t.label}
+                      >
+                        <img src={t.url} alt="" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-            {isVariable(viewing) && (
-              <div className="product-view__variants">
-                {viewing.options.map((axis) => (
-                  <label className="product-view__axis" key={axis.name}>
-                    <span className="field__label">{axis.name}</span>
-                    <select
-                      className="select"
-                      value={viewSel[axis.name] ?? ''}
-                      onChange={(e) => setViewSel((s) => ({ ...s, [axis.name]: e.target.value }))}
+              <div className="product-view__info">
+                <div className="product-view__name">{viewing.name}</div>
+                <div className="product-view__price">{viewPrice}</div>
+                {viewing.category && <div className="product-view__cat">{viewing.category}</div>}
+
+                {isVariable(viewing) && (
+                  <div className="product-view__variants">
+                    {viewing.options.map((axis) => (
+                      <div className="product-view__axis" key={axis.name}>
+                        <span className="product-view__axis-name">{axis.name}</span>
+                        <select
+                          className="product-view__select"
+                          value={viewSel[axis.name] ?? ''}
+                          onChange={(e) => setViewSel((s) => ({ ...s, [axis.name]: e.target.value }))}
+                        >
+                          {axis.values.map((val) => (
+                            <option key={val} value={val}>{val}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                    {viewVariant && viewVariant.active === false && (
+                      <p className="text-sm text-muted" style={{ margin: 0 }}>This combination is unavailable.</p>
+                    )}
+                  </div>
+                )}
+
+                <div className="product-view__actions">
+                  <div className="product-view__qty">
+                    <button
+                      type="button"
+                      onClick={() => setViewQty((q) => Math.max(1, q - 1))}
+                      disabled={viewQty <= 1}
+                      aria-label="Decrease quantity"
                     >
-                      {axis.values.map((val) => (
-                        <option key={val} value={val}>{val}</option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-                {viewVariant && viewVariant.active === false && (
-                  <p className="text-sm text-muted">This combination is unavailable.</p>
+                      <MinusIcon />
+                    </button>
+                    <span className="product-view__qty-val">{viewQty}</span>
+                    <button type="button" onClick={() => setViewQty((q) => q + 1)} aria-label="Increase quantity">
+                      <PlusIcon />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--flat"
+                    disabled={viewAddDisabled}
+                    onClick={() => {
+                      addToCart(viewing, viewVariant, viewQty);
+                      setViewing(null);
+                    }}
+                  >
+                    <CartIcon /> Add to cart
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {(viewing.description || viewing.tags?.length > 0) && (
+              <div className="product-view__detail">
+                {viewing.description && (
+                  <>
+                    <div className="product-view__detail-head">Product description</div>
+                    <p className="product-view__desc">{viewing.description}</p>
+                  </>
+                )}
+                {viewing.tags?.length > 0 && (
+                  <div className="product-view__tags">
+                    <span className="product-view__tags-label">Tags:</span>
+                    {viewing.tags.map((t) => (
+                      <span key={t} className="product-tile__tag">{t}</span>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
-
-            {viewing.tags?.length > 0 && (
-              <div className="product-view__tags">
-                {viewing.tags.map((t) => (
-                  <span key={t} className="product-tile__tag">{t}</span>
-                ))}
-              </div>
-            )}
-            <div className="product-view__actions">
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={viewAddDisabled}
-                onClick={() => {
-                  addToCart(viewing, viewVariant);
-                  setViewing(null);
-                }}
-              >
-                <CartIcon /> Add to cart
-              </button>
-              {isAdmin && (
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  onClick={() => {
-                    const v = viewing;
-                    setViewing(null);
-                    startEdit(v);
-                  }}
-                >
-                  Edit
-                </button>
-              )}
-              {isAdmin && (
-                <button
-                  type="button"
-                  className="btn btn--ghost product-view__del"
-                  onClick={() => {
-                    const v = viewing;
-                    setViewing(null);
-                    del(v);
-                  }}
-                >
-                  Delete
-                </button>
-              )}
-            </div>
           </div>
         )}
       </Modal>
@@ -437,9 +599,16 @@ export default function ProductsPage() {
                   {cartCount} {cartCount === 1 ? 'item' : 'items'}
                 </p>
               </div>
-              <button type="button" className="product-cart__close" onClick={() => setCartOpen(false)} aria-label="Close cart">
-                <RemoveIcon />
-              </button>
+              <div className="product-cart__head-actions">
+                {cartItems.length > 0 && (
+                  <button type="button" className="product-cart__clear" onClick={clearCart} aria-label="Clear cart" title="Clear cart">
+                    <TrashIcon />
+                  </button>
+                )}
+                <button type="button" className="product-cart__close" onClick={() => setCartOpen(false)} aria-label="Close cart">
+                  <RemoveIcon />
+                </button>
+              </div>
             </div>
 
             {cartItems.length === 0 ? (
@@ -454,6 +623,13 @@ export default function ProductsPage() {
                     const lineTotal = item.unitPrice == null ? null : item.unitPrice * item.quantity;
                     return (
                       <div className="product-cart__item" key={item.key}>
+                        <input
+                          type="checkbox"
+                          className="product-cart__check"
+                          checked={!unchecked.has(item.key)}
+                          onChange={() => toggleChecked(item.key)}
+                          aria-label={`Select ${item.product.name} for checkout`}
+                        />
                         <div className="product-cart__media">
                           {item.media ? <img src={item.media} alt="" /> : <span>No photo</span>}
                         </div>
@@ -492,24 +668,20 @@ export default function ProductsPage() {
                 </div>
 
                 <div className="product-cart__summary">
-                  <div className="product-cart__summary-row">
-                    <span>Subtotal</span>
-                    <span>{formatPrice(cartSubtotal, currency)}</span>
-                  </div>
-                  {discountResult.applied.map((a) => (
-                    <div className="product-cart__summary-row product-cart__summary-row--discount" key={a.id}>
-                      <span title={a.name}>{a.name}</span>
-                      <span>−{formatPrice(a.amount, currency)}</span>
-                    </div>
-                  ))}
                   <div className="product-cart__summary-row product-cart__summary-total">
-                    <span>Total</span>
-                    <strong>{formatPrice(discountResult.total, currency)}</strong>
+                    <span>Subtotal</span>
+                    <strong>{formatPrice(cartSubtotal, currency)}</strong>
                   </div>
                   {hasQuoteItems && <p className="product-cart__note">Quote items are not included in the subtotal.</p>}
-                  <Button type="button" variant="ghost" size="sm" onClick={clearCart}>
-                    Clear cart
-                  </Button>
+                  <p className="product-cart__note">Any discount codes are applied at checkout.</p>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--block btn--flat product-cart__checkout"
+                    disabled={checkedItems.length === 0}
+                    onClick={proceedToCheckout}
+                  >
+                    Proceed to checkout
+                  </button>
                 </div>
               </>
             )}

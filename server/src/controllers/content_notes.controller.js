@@ -34,6 +34,17 @@ export const setDate = asyncHandler(async (req, res) => {
   sendSuccess(res, { note });
 });
 
+export const setColor = asyncHandler(async (req, res) => {
+  const note = await service.setColor(req.params.id, req.body || {}, req.user);
+  sendSuccess(res, { note });
+});
+
+export const reorder = asyncHandler(async (req, res) => {
+  const { date, ids } = req.body || {};
+  const notes = await service.reorder(date, ids, req.user);
+  sendSuccess(res, { notes });
+});
+
 export const remove = asyncHandler(async (req, res) => {
   const result = await service.remove(req.params.id, req.user);
   sendSuccess(res, result);

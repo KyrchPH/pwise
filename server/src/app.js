@@ -27,6 +27,10 @@ import connectionsRoutes from './routes/connections.routes.js';
 import webhooksRoutes from './routes/webhooks.routes.js';
 import vaultRoutes from './routes/vault.routes.js';
 import wiseAssistantRoutes from './routes/wise_assistant.routes.js';
+import plannerRoutes from './routes/planner.routes.js';
+import orderRoutes from './routes/order.routes.js';
+import receiptRoutes from './routes/receipt.routes.js';
+import publicAgreementRoutes from './routes/public_agreements.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -65,6 +69,13 @@ export function createApp() {
   app.use('/api/pages', revalidate, platformAccountsRoutes);
   app.use('/api/page-products', revalidate, pageProductsRoutes);
   app.use('/api/page-discounts', revalidate, pageDiscountsRoutes);
+  // Public agreement viewer (customer opens a shared token link, no JWT) — MUST be mounted
+  // before the authed /api/orders router so it isn't gated (mirrors the fb-oauth callback).
+  app.use('/api/public/agreements', publicAgreementRoutes);
+  // Shop → Orders + the checkout agreement flow. Real-time (SSE + confirm writes), uncached.
+  app.use('/api/orders', orderRoutes);
+  // Shop → Receipts carry rotating presigned URLs, so left uncached (like the vault).
+  app.use('/api/receipts', receiptRoutes);
   // Messaging is real-time (SSE + frequent writes), so it's left uncached.
   app.use('/api/messages', messagingRoutes);
   // Per-page canned-reply templates (normal CRUD — cacheable like other page content).
@@ -76,6 +87,9 @@ export function createApp() {
   // Agent-to-agent connections ("friends") — gates A2A DM replies.
   app.use('/api/connections', connectionsRoutes);
   app.use('/api/wise-assistant', wiseAssistantRoutes);
+  // Planner goals — the list mutates status/baseline on read (reconcile-on-read),
+  // so it's left uncached rather than served a stale ETag.
+  app.use('/api/planner', plannerRoutes);
 
   // Public inbound webhooks from messaging platforms (Telegram now; Messenger later).
   // No JWT — each platform verifies itself; the page is tagged via ?accountId.

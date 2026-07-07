@@ -151,6 +151,26 @@ export async function listComments(platformPostId, { after = null, limit = 25 } 
   };
 }
 
+// Reply to a comment AS THE PAGE — posts a reply under the given comment. `commentId`
+// is a comment's own id (from listComments); replies attach directly to it, so there's
+// no photo/feed id-shape concern here. Returns the new reply's id. Requires the
+// `pages_manage_engagement` permission on the page token. Throws 422 (not 5xx) on a
+// Facebook rejection so the real reason reaches the browser — a masked 5xx would show
+// up as a bogus CORS error (see the CORS/502 note).
+export async function replyToComment(commentId, message, token) {
+  if (!commentId) throw new ApiError(400, 'a comment id is required');
+  const { ok, error, data } = await graph(`${commentId}/comments`, {
+    method: 'POST',
+    fields: { message: String(message ?? '') },
+    token,
+  });
+  if (ok) return { id: data.id || null };
+  if (isObjectGoneError(error)) {
+    throw new ApiError(422, "Facebook won't let this app reply to that comment — it may have been deleted, or this page's connection lacks permission (pages_manage_engagement).");
+  }
+  throw new ApiError(422, `Couldn't post the reply on Facebook: ${error?.message || 'unknown error'}`);
+}
+
 // Resolve a published post's {page}_{post} feed id from its stored platform id.
 // Best-effort: returns null if not found yet (caller retries).
 export async function resolveParentPostId(platformPostId, { token, fbPageId } = {}) {
@@ -291,6 +311,29 @@ export async function sendMessage(token, recipientId, text) {
     });
     if (!ok) return { ok: false, error: error?.message || 'Messenger send failed' };
     return { ok: true, messageId: data.message_id ?? null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Private Reply: send the FIRST message to a person who commented, addressing them by
+// their COMMENT id (Facebook doesn't expose the commenter's PSID otherwise). Facebook
+// allows this once per comment, within 7 days. The response's `recipient_id` IS the
+// customer's PSID — the caller uses it to create/track the conversation from then on.
+// Returns { ok, recipientId, messageId } or { ok:false, error }.
+export async function privateReplyToComment(token, commentId, text) {
+  if (!token || !commentId) return { ok: false, error: 'missing token or comment id' };
+  try {
+    const { ok, error, data } = await graph('me/messages', {
+      method: 'POST',
+      token,
+      fields: {
+        recipient: JSON.stringify({ comment_id: String(commentId) }),
+        message: JSON.stringify({ text: String(text ?? '') }),
+      },
+    });
+    if (!ok) return { ok: false, error: error?.message || 'Private reply failed' };
+    return { ok: true, recipientId: data.recipient_id ?? null, messageId: data.message_id ?? null };
   } catch (e) {
     return { ok: false, error: e.message };
   }

@@ -426,3 +426,77 @@ export function buildRangeAnalyticsPdf({ start, end, posts, pageName, logo }) {
   drawFooters(doc);
   return doc;
 }
+
+/**
+ * Page-performance report for the Analytics page: summary cards, the three metric line
+ * charts (reach / engagement / new follows) and the top-posts table — mirroring what the
+ * Analytics screen shows for the selected range. Reuses the shared header/cards/chart/table
+ * helpers. `series` is keyed by metric → [{ period, value }]; `ranking` is the top posts.
+ */
+export function buildPageAnalyticsPdf({ start, end, pageName, logo, followers, series = {}, ranking = [] }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const ctx = {
+    title: 'Analytics report',
+    subtitle: `${fmtDateLong(start)} – ${fmtDateLong(end)}`,
+    pageName,
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+
+  const sum = (arr) => (arr || []).reduce((a, p) => a + num(p.value), 0);
+  const impressions = sum(series.page_posts_impressions);
+  const engagement = sum(series.page_post_engagements);
+  const netFollows = sum(series.page_daily_follows_unique) - sum(series.page_daily_unfollows_unique);
+
+  drawStatCards(doc, ctx, [
+    { label: 'Followers', value: followers != null ? fmtInt(followers) : '—', color: COLORS.primary },
+    { label: 'Net followers', value: signed(netFollows), color: METRIC_META.shares.color },
+    { label: 'Impressions', value: fmtCompact(impressions), color: METRIC_META.comments.color },
+    { label: 'Engagement', value: fmtCompact(engagement), color: METRIC_META.views.color },
+  ]);
+
+  const charts = [
+    { key: 'page_impressions_unique', label: 'Reach', color: [31, 155, 230] },
+    { key: 'page_post_engagements', label: 'Engagement', color: [47, 180, 87] },
+    { key: 'page_daily_follows_unique', label: 'New follows', color: [124, 58, 237] },
+  ];
+  charts.forEach((c) => {
+    const pts = series[c.key] || [];
+    if (pts.length) drawLineChart(doc, ctx, { points: pts, color: c.color, title: c.label });
+  });
+
+  if (ranking && ranking.length) {
+    ensureSpace(doc, ctx, 40);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...COLORS.dark);
+    doc.text('Top posts by engagement', M, ctx.y);
+    ctx.y += 12;
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [['#', 'Post', 'React', 'Cmt', 'Shr', 'Engagement']],
+      body: ranking.map((p) => [
+        `#${p.id}`,
+        (p.caption || '').replace(/\s+/g, ' ').trim().slice(0, 70) || '—',
+        fmtInt(p.reactions_count),
+        fmtInt(p.comments_count),
+        fmtInt(p.shares_count),
+        fmtInt(p.engagement),
+      ]),
+      columnStyles: {
+        0: { cellWidth: 34 },
+        1: { cellWidth: 'auto' },
+        2: { halign: 'right', cellWidth: 44 },
+        3: { halign: 'right', cellWidth: 40 },
+        4: { halign: 'right', cellWidth: 40 },
+        5: { halign: 'right', cellWidth: 74 },
+      },
+    });
+    ctx.y = doc.lastAutoTable.finalY + 16;
+  }
+
+  drawFooters(doc);
+  return doc;
+}

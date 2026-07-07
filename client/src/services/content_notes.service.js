@@ -35,6 +35,20 @@ export async function setDate(id, note_date) {
   return data.data.note;
 }
 
+// Persist a day's note order. `ids` is the note ids top-to-bottom. Returns the
+// day's notes in the saved order.
+export async function reorder(date, ids) {
+  const { data } = await api.patch('/content-notes/reorder', { date, ids });
+  return data.data.notes;
+}
+
+// Set (or clear with null/'') a note's text / background colour. Omit a field to
+// leave it unchanged.
+export async function setColor(id, colors) {
+  const { data } = await api.patch(`/content-notes/${id}/color`, colors);
+  return data.data.note;
+}
+
 export async function remove(id) {
   const { data } = await api.delete(`/content-notes/${id}`);
   return data.data;

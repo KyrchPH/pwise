@@ -45,6 +45,10 @@ function toSafe(r) {
     // Admin-filled business profile (contact / location / hours) the AI agent reads
     // via get_page_info. Always an object ({} when none set yet).
     business_profile: parseBusinessProfile(r.business_profile),
+    // Default first message prefilled when messaging a commenter (Comment → DM). '' = open blank.
+    comment_dm_default_message: r.comment_dm_default_message || '',
+    // Message the app sends the customer when the AI hands the chat to a live agent. '' = default used.
+    live_agent_transfer_message: r.live_agent_transfer_message || '',
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -401,6 +405,16 @@ export async function update(id, data = {}) {
   // Messaging-analytics thresholds — stored resolved/clamped (blanks → defaults).
   if (data.analytics_config !== undefined) {
     set('analytics_config', JSON.stringify(resolveAnalyticsConfig(data.analytics_config)));
+  }
+
+  // Default first message for messaging a commenter (Comment → DM). Empty → NULL (blank composer).
+  if (data.comment_dm_default_message !== undefined) {
+    set('comment_dm_default_message', String(data.comment_dm_default_message ?? '').trim() || null);
+  }
+
+  // Message the app sends when the AI transfers a chat to a live agent. Empty → NULL (default used).
+  if (data.live_agent_transfer_message !== undefined) {
+    set('live_agent_transfer_message', String(data.live_agent_transfer_message ?? '').trim() || null);
   }
 
   // Display currency (ISO 4217, 3 letters). Anything else → Peso.

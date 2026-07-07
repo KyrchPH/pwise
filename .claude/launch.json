@@ -7,6 +7,12 @@
       "runtimeArgs": ["run", "dev:client"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:server"],
+      "port": 5000
     }
   ]
 }

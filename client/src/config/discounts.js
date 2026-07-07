@@ -122,10 +122,14 @@ function baseFor(discount, ctx) {
  * Evaluate a cart against a page's discounts.
  * @param lines [{ productId, category, unitPrice (number|null), quantity }]
  * @param discounts the page's discount rules (camelCase from the API)
- * @param now Date to test schedule windows against (defaults to current time)
+ * @param options.appliedCodes coupon codes the shopper has entered/selected. A discount
+ *   WITH a `code` is a coupon — it only applies when its code is in this list. A discount
+ *   with no code auto-applies (as before). Matching is case-insensitive.
+ * @param options.now Date to test schedule windows against (defaults to current time)
  * @returns { applied: [{id,name,amount}], totalDiscount, subtotal, total }
  */
-export function evaluateDiscounts(lines, discounts, now = new Date()) {
+export function evaluateDiscounts(lines, discounts, { appliedCodes = [], now = new Date() } = {}) {
+  const codes = new Set((appliedCodes || []).map((c) => String(c).trim().toUpperCase()).filter(Boolean));
   const norm = (lines || []).map((l) => {
     const unit = l.unitPrice == null ? 0 : Number(l.unitPrice);
     const qty = Number(l.quantity) || 0;
@@ -141,6 +145,9 @@ export function evaluateDiscounts(lines, discounts, now = new Date()) {
   for (const d of discounts || []) {
     if (!d.active) continue;
     if (!(Number(d.value) > 0)) continue;
+    // A coupon (has a code) only applies when the shopper entered/selected its code;
+    // a codeless discount auto-applies.
+    if (d.code && !codes.has(String(d.code).trim().toUpperCase())) continue;
     if (!withinSchedule(d, now)) continue;
     if (!qualifies(d, ctx)) continue;
     const amount = amountFor(d, baseFor(d, ctx));

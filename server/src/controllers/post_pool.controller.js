@@ -21,7 +21,13 @@ export const create = asyncHandler(async (req, res) => {
 });
 
 export const get = asyncHandler(async (req, res) => {
-  const post = await service.getById(req.params.id);
+  let post = await service.getById(req.params.id);
+  // ?refresh=1 → force a live engagement pull (bypassing the 5-min TTL) so the post
+  // viewer's counts match its live comments. Best-effort: refreshEngagement leaves the
+  // cached counts in place if Facebook is unreachable.
+  if ((req.query.refresh === '1' || req.query.refresh === 'true') && post.status === 'posted' && post.platform_post_id) {
+    [post] = await service.refreshEngagement([post], { force: true });
+  }
   sendSuccess(res, { post });
 });
 
@@ -31,6 +37,23 @@ export const comments = asyncHandler(async (req, res) => {
     limit: req.query.limit,
   });
   sendSuccess(res, result);
+});
+
+// Reply to a Facebook comment as the page (from the post view).
+export const replyComment = asyncHandler(async (req, res) => {
+  const result = await service.replyToComment(req.params.id, req.params.commentId, req.body?.message);
+  sendSuccess(res, result, 201);
+});
+
+// Message the person who left a comment — private reply, then open the conversation.
+export const messageCommenter = asyncHandler(async (req, res) => {
+  const result = await service.messageCommenter(
+    req.params.id,
+    req.params.commentId,
+    { message: req.body?.message },
+    req.user,
+  );
+  sendSuccess(res, result, 201);
 });
 
 export const insights = asyncHandler(async (req, res) => {

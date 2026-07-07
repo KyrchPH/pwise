@@ -10,13 +10,15 @@ import SignupPage from './pages/Signup/SignupPage.jsx';
 import PrivacyPolicyPage from './pages/Privacy/PrivacyPolicyPage.jsx';
 import DashboardPage from './pages/Dashboard/DashboardPage.jsx';
 import ContentCalendarPage from './pages/ContentCalendar/ContentCalendarPage.jsx';
+import PlannerPage from './pages/Planner/PlannerPage.jsx';
 import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import ProductsPage from './pages/Products/ProductsPage.jsx';
 import ShopLayout from './pages/Shop/ShopLayout.jsx';
-import ComingSoon from './pages/Shop/ComingSoon.jsx';
 import DiscountsPage from './pages/Shop/DiscountsPage.jsx';
+import OrdersPage from './pages/Shop/OrdersPage.jsx';
+import ReceiptsPage from './pages/Shop/ReceiptsPage.jsx';
 import SettingsPage from './pages/Settings/SettingsPage.jsx';
 import ChangePasswordPage from './pages/Profile/ChangePasswordPage.jsx';
 import LogsPage from './pages/Logs/LogsPage.jsx';
@@ -26,6 +28,8 @@ import MessagingPage from './pages/Messaging/MessagingPage.jsx';
 import ConnectionsPage from './pages/Connections/ConnectionsPage.jsx';
 import VaultPage from './pages/Vault/VaultPage.jsx';
 import ProfilePage from './pages/Profile/ProfilePage.jsx';
+import CheckoutPage from './pages/Checkout/CheckoutPage.jsx';
+import AgreementViewer from './pages/Agreement/AgreementViewer.jsx';
 
 export default function App() {
   const { bootstrapError, retryBootstrap, retrying } = useAuth();
@@ -39,6 +43,12 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      {/* Standalone checkout tab — self-contained from a localStorage snapshot (see
+          CheckoutPage), so it lives outside the app shell/auth gate. */}
+      <Route path="/checkout" element={<CheckoutPage />} />
+      {/* Public customer-facing order agreement — opened by the customer via a shared
+          token link, so it lives outside the auth gate (the token is the capability). */}
+      <Route path="/agreement/:token" element={<AgreementViewer />} />
 
       <Route
         element={
@@ -50,6 +60,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/content-calendar" element={<ModuleRoute moduleId="content-calendar"><ContentCalendarPage /></ModuleRoute>} />
+        <Route path="/planner" element={<ModuleRoute moduleId="planner"><PlannerPage /></ModuleRoute>} />
         <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
         <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><PostPoolPage /></ModuleRoute>} />
         <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
@@ -57,8 +68,8 @@ export default function App() {
           <Route index element={<Navigate to="/shop/products" replace />} />
           <Route path="products" element={<ProductsPage />} />
           <Route path="discounts" element={<DiscountsPage />} />
-          <Route path="orders" element={<ComingSoon title="Orders" />} />
-          <Route path="receipts" element={<ComingSoon title="Receipts" />} />
+          <Route path="orders" element={<OrdersPage />} />
+          <Route path="receipts" element={<ReceiptsPage />} />
         </Route>
         <Route path="/products" element={<Navigate to="/shop/products" replace />} />
         <Route path="/settings" element={<ModuleRoute moduleId="settings"><SettingsPage /></ModuleRoute>} />

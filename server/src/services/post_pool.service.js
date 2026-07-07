@@ -5,6 +5,7 @@ import { createDownloadUrl, deleteObject } from './s3.service.js';
 import * as fb from './fb.service.js';
 import * as activity from './activity.service.js';
 import * as accounts from './platform_accounts.service.js';
+import * as messaging from './messaging.service.js';
 import { getSelectedAccountId } from './settings.service.js';
 
 // Decrypted page credentials for a post's connected page. Returns {} when the
@@ -168,7 +169,19 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
       post.platform_post_id;
   }
   try {
-    return await fb.listComments(commentTarget, { after: after || null, limit: lim }, token);
+    const result = await fb.listComments(commentTarget, { after: after || null, limit: lim }, token);
+    // Tag any comment already messaged via "message a commenter" with its conversation id,
+    // so the post view can show "Messaged" + deep-link to the thread.
+    const ids = (result.comments || []).map((c) => c.id).filter(Boolean);
+    if (ids.length) {
+      const links = await query(
+        `SELECT comment_id, conversation_id FROM comment_conversations WHERE comment_id IN (${ids.map(() => '?').join(',')})`,
+        ids,
+      );
+      const byComment = new Map(links.map((l) => [String(l.comment_id), Number(l.conversation_id)]));
+      result.comments = result.comments.map((c) => ({ ...c, conversationId: byComment.get(String(c.id)) ?? null }));
+    }
+    return result;
   } catch (err) {
     // The post no longer exists on Facebook (deleted there) → mark it 'deleted'
     // here and tell the viewer, so the user can re-post or remove it.
@@ -178,6 +191,89 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
     }
     throw err;
   }
+}
+
+// Post a reply to a Facebook comment AS THE PAGE, from the post view. `commentId` is a
+// comment's own id (from listComments) — replies attach directly to it, so no photo/feed
+// id-shape concern here. Needs `pages_manage_engagement` on the page token.
+export async function replyToComment(id, commentId, message) {
+  const body = String(message ?? '').trim();
+  if (!body) throw ApiError.badRequest('a reply message is required');
+  if (!commentId) throw ApiError.badRequest('a comment id is required');
+  const post = await getById(id); // existence — must be a published post of this page
+  if (post.status !== 'posted' || !post.platform_post_id) {
+    throw ApiError.badRequest('you can only reply to comments on a published post');
+  }
+  // Fast-fail on a known-dead page token (same guard as editCaption) so a definite bad
+  // token returns a clear 409 instead of a Facebook rejection.
+  if (post.account_id) {
+    const health = await accounts.checkConnection(post.account_id);
+    if (health && health.ok === false && (health.reason === 'invalid_token' || health.reason === 'no_token')) {
+      throw new ApiError(409, "This page's Facebook connection has expired. Reconnect it in Settings → Pages, then try again.");
+    }
+  }
+  const { token } = await pageCtx(post);
+  return fb.replyToComment(commentId, body, token);
+}
+
+// "Message a commenter" (Comment → DM): send a Messenger PRIVATE REPLY to the person who
+// left `commentId` (Facebook hides their PSID, so we address them by the comment id), then
+// open/record the conversation in the inbox owned by the acting user. Facebook allows this
+// once per comment within 7 days. Returns { conversationId, created }.
+export async function messageCommenter(id, commentId, { message } = {}, actor = {}) {
+  const body = String(message ?? '').trim();
+  if (!body) throw ApiError.badRequest('a message is required');
+  if (!commentId) throw ApiError.badRequest('a comment id is required');
+  const post = await getById(id); // existence — must be a published post of this page
+  if (post.status !== 'posted' || !post.platform_post_id) {
+    throw ApiError.badRequest('you can only message commenters on a published post');
+  }
+  if (!post.account_id) throw ApiError.badRequest('this post is not linked to a connected page');
+
+  // Fast-fail on a known-dead page token (same guard as editCaption/reply).
+  const health = await accounts.checkConnection(post.account_id);
+  if (health && health.ok === false && (health.reason === 'invalid_token' || health.reason === 'no_token')) {
+    throw new ApiError(409, "This page's Facebook connection has expired. Reconnect it in Settings → Pages, then try again.");
+  }
+
+  const { token } = await pageCtx(post);
+  const sent = await fb.privateReplyToComment(token, commentId, body);
+  if (!sent.ok || !sent.recipientId) {
+    // 422 (not 5xx) so the real Facebook reason reaches the browser instead of a masked CORS error.
+    throw new ApiError(422, `Couldn't send the private message on Facebook: ${sent.error || 'unknown error'}`);
+  }
+
+  // Open/record the conversation (page-initiated outbound). The message is ALREADY delivered
+  // via the private reply above; handled_by 'Live Agent' means receiveInbound won't re-send it.
+  const result = await messaging.receiveInbound({
+    accountId: post.account_id,
+    customerHandle: sent.recipientId, // the PSID Facebook returned
+    customerName: 'Facebook user', // FB withholds the commenter's name; heals on their reply
+    origin: 'messenger',
+    handledBy: 'Live Agent',
+    side: 'outgoing',
+    text: body,
+    externalId: sent.messageId,
+    incrementUnread: false,
+    createIfMissing: true,
+  });
+
+  // A brand-new thread → bind it to the agent who reached out, so it lands in their "For you".
+  if (result.created && actor?.id) {
+    await query('UPDATE conversations SET assigned_user_id = ?, assigned_user_name = ? WHERE id = ?', [
+      actor.id,
+      actor.name || '',
+      result.conversationId,
+    ]);
+  }
+  // Remember which comment opened this conversation, so the post view can show "Messaged"
+  // and deep-link to the thread on a later visit (survives reloads).
+  await query(
+    'INSERT INTO comment_conversations (comment_id, conversation_id, account_id) VALUES (?, ?, ?) ' +
+      'ON DUPLICATE KEY UPDATE conversation_id = VALUES(conversation_id)',
+    [String(commentId), result.conversationId, post.account_id],
+  );
+  return { conversationId: String(result.conversationId), created: !!result.created };
 }
 
 // `actor` = { id, name } of the signed-in user creating the post (recorded as
@@ -484,9 +580,9 @@ export async function counts(accountId = null) {
 // page of the pool — so cost stays flat no matter how big the pool grows. Stale-
 // only (TTL) so repeat views are cheap, and best-effort throughout: any failure
 // leaves the last-known counts untouched. Mutates and returns the same `posts`.
-export async function refreshEngagement(posts = []) {
+export async function refreshEngagement(posts = [], { force = false } = {}) {
   const stale = posts.filter(
-    (p) => p.status === 'posted' && p.platform_post_id && engagementStale(p.engagement_synced_at),
+    (p) => p.status === 'posted' && p.platform_post_id && (force || engagementStale(p.engagement_synced_at)),
   );
   if (!stale.length) return posts;
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button, Card, EmptyState } from '../../components/ui.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as connections from '../../services/connections.service.js';
@@ -30,6 +31,7 @@ function Person({ person, actions }) {
 
 export default function ConnectionsPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const [data, setData] = useState({ connections: [], incoming: [], outgoing: [] });
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -93,9 +95,14 @@ export default function ConnectionsPage() {
   const searchAction = (p) => {
     if (p.status === 'connected')
       return (
-        <Button variant="ghost" size="sm" disabled={busy === p.id} onClick={() => act(connections.remove, p.id)}>
-          Remove
-        </Button>
+        <>
+          <Button variant="primary" size="sm" className="btn--flat" onClick={() => navigate(`/messages?dm=${p.id}`)}>
+            Message
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy === p.id} onClick={() => act(connections.remove, p.id)}>
+            Remove
+          </Button>
+        </>
       );
     if (p.status === 'outgoing')
       return (
@@ -192,9 +199,14 @@ export default function ConnectionsPage() {
                       key={p.id}
                       person={p}
                       actions={
-                        <Button variant="ghost" size="sm" disabled={busy === p.id} onClick={() => act(connections.remove, p.id)}>
-                          Remove
-                        </Button>
+                        <>
+                          <Button variant="primary" size="sm" className="btn--flat" onClick={() => navigate(`/messages?dm=${p.id}`)}>
+                            Message
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={busy === p.id} onClick={() => act(connections.remove, p.id)}>
+                            Remove
+                          </Button>
+                        </>
                       }
                     />
                   ))}

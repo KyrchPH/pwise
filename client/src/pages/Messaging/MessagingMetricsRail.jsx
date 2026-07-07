@@ -218,22 +218,18 @@ export default function MessagingMetricsRail({ accountId }) {
       </div>
       {showingYou ? (
         <div className="msg-agent-metrics" aria-label="Agent-level response metrics">
-          {data && currentAgent ? (
+          {failed ? (
+            <div className="msg-agent-metric msg-agent-metric--empty">Unavailable</div>
+          ) : (
+            // No agent activity yet → still show the three rings, empty ("—"), like the
+            // ALL view does, instead of a "No data" message.
             <div className="msg-agent-metric" title="Your metrics">
               <div className="msg-agent-metric__rings">
-                {agentMetrics(currentAgent).map((m) => (
-                  <Gauge
-                    key={m.label}
-                    label={m.label}
-                    pct={m.pct}
-                    onShow={showTip(m)}
-                    onHide={hideTip}
-                  />
+                {agentMetrics(currentAgent || {}).map((m) => (
+                  <Gauge key={m.label} label={m.label} pct={m.pct} onShow={showTip(m)} onHide={hideTip} />
                 ))}
               </div>
             </div>
-          ) : (
-            <div className="msg-agent-metric msg-agent-metric--empty">{failed ? 'Unavailable' : 'No data'}</div>
           )}
         </div>
       ) : (

@@ -34,7 +34,7 @@ export default function ContentCalendarPage() {
         </div>
       </div>
 
-      <Card className="card--pad">
+      <Card className="card--pad calendar-card">
         <CalendarMonth posts={scheduled} onPostsChanged={onPostsChanged} />
       </Card>
     </>

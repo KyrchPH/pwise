@@ -3,6 +3,7 @@ import ApiError from '../utils/ApiError.js';
 import * as activity from './activity.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const MAX_LEN = 2000;
 const STATUSES = ['pending', 'ongoing', 'completed', 'cancelled'];
 
@@ -29,9 +30,18 @@ function normalizeStatus(value) {
   return s;
 }
 
+// An optional per-note colour. Empty / null clears it (falls back to the theme
+// default); otherwise it must be a hex string (#RGB, #RGBA, #RRGGBB, #RRGGBBAA).
+function normalizeColor(value) {
+  if (value == null || value === '') return null;
+  const c = String(value).trim();
+  if (!COLOR_RE.test(c)) throw ApiError.badRequest('invalid colour (expected a hex value like #a1b2c3)');
+  return c.toLowerCase();
+}
+
 // Common projection — note_date formatted as a string so mysql2 can't shift the
 // DATE across timezones.
-const SELECT_COLS = `id, DATE_FORMAT(note_date, '%Y-%m-%d') AS note_date, content, status, user_id, user_name, created_at, updated_at`;
+const SELECT_COLS = `id, DATE_FORMAT(note_date, '%Y-%m-%d') AS note_date, content, status, position, text_color, note_color, user_id, user_name, created_at, updated_at`;
 
 export async function getById(id) {
   const rows = await query(`SELECT ${SELECT_COLS} FROM content_notes WHERE id = ?`, [id]);
@@ -39,11 +49,12 @@ export async function getById(id) {
   return rows[0];
 }
 
-// All notes planned for one calendar day, in the order they were added.
+// All notes planned for one calendar day, in the user's chosen order (position),
+// then add order as a stable tie-breaker.
 export async function listByDate(date) {
   const d = normalizeDate(date);
   return query(
-    `SELECT ${SELECT_COLS} FROM content_notes WHERE note_date = ? ORDER BY created_at ASC, id ASC`,
+    `SELECT ${SELECT_COLS} FROM content_notes WHERE note_date = ? ORDER BY position ASC, created_at ASC, id ASC`,
     [d],
   );
 }
@@ -58,19 +69,25 @@ export async function monthCounts(year, month) {
   if (!Number.isInteger(m) || m < 1 || m > 12) throw ApiError.badRequest('invalid month (1-12)');
   const CHIPS_PER_DAY = 3;
   const rows = await query(
-    `SELECT DATE_FORMAT(note_date, '%Y-%m-%d') AS d, LEFT(content, 80) AS text, status
+    `SELECT DATE_FORMAT(note_date, '%Y-%m-%d') AS d, LEFT(content, 80) AS text, status, note_color
        FROM content_notes
       WHERE YEAR(note_date) = ? AND MONTH(note_date) = ?
-      ORDER BY note_date ASC, created_at ASC, id ASC`,
+      ORDER BY note_date ASC, position ASC, created_at ASC, id ASC`,
     [y, m],
   );
   const counts = {};
   for (const r of rows) {
     const e = counts[r.d] || (counts[r.d] = { count: 0, notes: [] });
     e.count += 1;
-    if (e.notes.length < CHIPS_PER_DAY) e.notes.push({ text: r.text, status: r.status });
+    if (e.notes.length < CHIPS_PER_DAY) e.notes.push({ text: r.text, status: r.status, color: r.note_color });
   }
   return counts;
+}
+
+// The next free position (0-based) at the end of a day's list.
+async function nextPosition(date) {
+  const [row] = await query('SELECT COALESCE(MAX(position) + 1, 0) AS next FROM content_notes WHERE note_date = ?', [date]);
+  return row?.next ?? 0;
 }
 
 // `actor` = { id, name } of the signed-in user (recorded as the author).
@@ -78,9 +95,10 @@ export async function create(actor = {}, { note_date, content, status } = {}) {
   const d = normalizeDate(note_date);
   const c = normalizeContent(content);
   const s = status == null || status === '' ? 'pending' : normalizeStatus(status);
+  const position = await nextPosition(d); // new notes land at the bottom of the day
   const result = await query(
-    'INSERT INTO content_notes (note_date, content, status, user_id, user_name) VALUES (?, ?, ?, ?, ?)',
-    [d, c, s, actor.id ?? null, actor.name ?? null],
+    'INSERT INTO content_notes (note_date, content, status, position, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?)',
+    [d, c, s, position, actor.id ?? null, actor.name ?? null],
   );
   const note = await getById(result.insertId);
   await activity.log({
@@ -131,7 +149,8 @@ export async function setDate(id, { note_date } = {}, actor = {}) {
   const existing = await getById(id);
   const d = normalizeDate(note_date);
   if (d === existing.note_date) return existing;
-  await query('UPDATE content_notes SET note_date = ? WHERE id = ?', [d, id]);
+  const position = await nextPosition(d); // land at the bottom of the target day
+  await query('UPDATE content_notes SET note_date = ?, position = ? WHERE id = ?', [d, position, id]);
   await activity.log({
     noteId: Number(id),
     userId: actor.id,
@@ -139,6 +158,48 @@ export async function setDate(id, { note_date } = {}, actor = {}) {
     action: 'edited',
     details: `moved ${existing.note_date} → ${d}`,
   });
+  return getById(id);
+}
+
+// Re-rank a day's notes to match `ids` (the note ids in their new top-to-bottom
+// order). Only notes actually on that day are touched; unknown / foreign ids are
+// ignored. Returns the day's notes in the new order. Cosmetic — not logged.
+export async function reorder(date, ids, _actor = {}) {
+  const d = normalizeDate(date);
+  if (!Array.isArray(ids)) throw ApiError.badRequest('ids must be an array of note ids');
+  const numericIds = ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+  // Bulk single-statement re-rank: a CASE maps each id to its new position, scoped
+  // to the day so a stale id from another day can never be moved here.
+  if (numericIds.length) {
+    const cases = numericIds.map((id, i) => `WHEN ${id} THEN ${i}`).join(' ');
+    const placeholders = numericIds.map(() => '?').join(', ');
+    await query(
+      `UPDATE content_notes SET position = CASE id ${cases} ELSE position END
+        WHERE note_date = ? AND id IN (${placeholders})`,
+      [d, ...numericIds],
+    );
+  }
+  return listByDate(d);
+}
+
+// Set (or clear) a note's text / background colour overrides. Either field may be
+// omitted to leave it unchanged, or set to null/'' to reset to the theme default.
+// Cosmetic — not logged to the activity trail.
+export async function setColor(id, { text_color, note_color } = {}, _actor = {}) {
+  const existing = await getById(id); // existence check
+  const sets = [];
+  const params = [];
+  if (text_color !== undefined) {
+    sets.push('text_color = ?');
+    params.push(normalizeColor(text_color));
+  }
+  if (note_color !== undefined) {
+    sets.push('note_color = ?');
+    params.push(normalizeColor(note_color));
+  }
+  if (!sets.length) return existing;
+  params.push(id);
+  await query(`UPDATE content_notes SET ${sets.join(', ')} WHERE id = ?`, params);
   return getById(id);
 }
 

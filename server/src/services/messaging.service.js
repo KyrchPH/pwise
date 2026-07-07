@@ -1010,7 +1010,10 @@ export async function receiveInbound(payload = {}) {
       return rows;
     };
     ({ id, created } = await resolveOrCreateConversation(payload, account, {
-      createIfMissing: side !== 'outgoing',
+      // Outgoing normally can't create a thread (an AI reply must target an existing one).
+      // A page-INITIATED outbound (e.g. a Messenger private reply to a commenter) opts in
+      // with createIfMissing:true so it can open a brand-new conversation.
+      createIfMissing: payload.createIfMissing ?? side !== 'outgoing',
       runner,
     }));
 
@@ -1070,8 +1073,10 @@ export async function receiveInbound(payload = {}) {
   // Deliver an outgoing message (e.g. an AI reply posted here by n8n) to the customer
   // on their platform — but only while the thread is still AI-handled, so the AI
   // doesn't talk over a human who took over mid-generation. Live Agent replies are
-  // delivered by sendMessage instead.
-  if (side === 'outgoing') {
+  // delivered by sendMessage instead. Callers that only RECORD an already-sent message
+  // (e.g. a human's Messenger echo, sent from the Page inbox) pass deliver:false so we
+  // don't bounce it back to the customer a second time.
+  if (side === 'outgoing' && payload.deliver !== false) {
     const dRows = await query(
       'SELECT id, origin, customer_handle, account_id, handled_by, assigned_user_id FROM conversations WHERE id = ?',
       [id],
@@ -1128,6 +1133,23 @@ export async function receiveInbound(payload = {}) {
 // on the thread. If no agent is available it falls back to flagging HANDOFF_STATUS
 // (unbound) so the AI still pauses and the thread waits to be claimed. Idempotent; a
 // no-op if a human already owns it.
+// Fallback wording for the app-sent "a human is taking over" notice when a page hasn't
+// set its own live_agent_transfer_message in Settings → Pages.
+const DEFAULT_TRANSFER_MESSAGE =
+  'Let me connect you with a live agent who can better assist you. 🙌 Please hold on — someone will be with you shortly.';
+
+// The page's configured transfer notice (or the default). Best-effort.
+async function transferNotice(acctId) {
+  if (acctId == null) return DEFAULT_TRANSFER_MESSAGE;
+  try {
+    const rows = await query('SELECT live_agent_transfer_message FROM platform_accounts WHERE id = ?', [acctId]);
+    const msg = String(rows[0]?.live_agent_transfer_message ?? '').trim();
+    return msg || DEFAULT_TRANSFER_MESSAGE;
+  } catch {
+    return DEFAULT_TRANSFER_MESSAGE;
+  }
+}
+
 export async function handoffToLiveAgent({ accountId, customerHandle, origin, reason, note } = {}) {
   const handle = String(customerHandle ?? '').trim();
   if (!handle) throw ApiError.badRequest('customerHandle is required');
@@ -1150,6 +1172,25 @@ export async function handoffToLiveAgent({ accountId, customerHandle, origin, re
   // A human already has it — leave their ownership untouched.
   if (conv.handled_by === 'Live Agent') {
     return { conversationId: String(conv.id), handedOff: false, alreadyLive: true };
+  }
+
+  // Tell the customer a human is taking over — deterministically, from the app (not the
+  // LLM). Sent WHILE the thread is still AI-handled and BEFORE ownership flips, so it
+  // delivers even in the online case (where a post-handoff AI message would be suppressed
+  // by the "don't talk over a human" guard in receiveInbound). Best-effort — never blocks
+  // the handoff itself.
+  try {
+    await receiveInbound({
+      accountId: acctId,
+      origin,
+      side: 'outgoing',
+      sender: 'AI Agent',
+      text: await transferNotice(acctId),
+      customerHandle: handle,
+      incrementUnread: false,
+    });
+  } catch (e) {
+    console.warn(`[messaging] transfer notice failed (conv ${conv.id}): ${e?.message || e}`);
   }
 
   // Every handoff leaves a note on the thread so whoever picks it up has context. The

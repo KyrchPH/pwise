@@ -5,8 +5,8 @@ import { generateThumbnail } from './thumbnail.service.js';
 //    that should live under tmp/ (auto-expiring), e.g. a template's input video.
 //    Pass { vault: true } for the file manager — it allows ANY file type (not just
 //    image/video) and stores under vault/.
-export async function getPresignedUrl(filename, contentType, { temporary = false, vault = false, avatar = false } = {}) {
-  const { data } = await api.post('/upload/presigned-url', { filename, contentType, temporary, vault, avatar });
+export async function getPresignedUrl(filename, contentType, { temporary = false, vault = false, avatar = false, receipt = false } = {}) {
+  const { data } = await api.post('/upload/presigned-url', { filename, contentType, temporary, vault, avatar, receipt });
   return data.data; // { uploadUrl, s3Key, mediaUrl }
 }
 

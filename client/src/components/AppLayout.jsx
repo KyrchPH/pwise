@@ -115,6 +115,18 @@ const PRIMARY_NAV = [
     ),
   },
   {
+    to: '/planner',
+    label: 'Planner',
+    moduleId: 'planner',
+    icon: (
+      <Ico>
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="5" />
+        <circle cx="12" cy="12" r="1.5" />
+      </Ico>
+    ),
+  },
+  {
     to: '/analytics',
     label: 'Analytics',
     moduleId: 'analytics',
@@ -307,6 +319,7 @@ export default function AppLayout() {
   const isMessagingPage = pathname === '/messages';
   const isConnectionsPage = pathname === '/connections';
   const isVaultPage = pathname === '/vault';
+  const isCalendarPage = pathname === '/content-calendar';
   const isProductsPage = pathname.startsWith('/shop');
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
@@ -797,7 +810,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             {gated ? (

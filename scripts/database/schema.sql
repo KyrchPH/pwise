@@ -217,13 +217,17 @@ CREATE TABLE IF NOT EXISTS content_notes (
   note_date  DATE NOT NULL,
   content    TEXT NOT NULL,
   status     VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending | ongoing | completed | cancelled
+  position   INT NOT NULL DEFAULT 0,                   -- rank within the day (drag-to-reorder)
+  text_color VARCHAR(9) NULL,                          -- optional hex (#RRGGBB[AA]) text override
+  note_color VARCHAR(9) NULL,                          -- optional hex (#RRGGBB[AA]) background override
   user_id    INT NULL,
   user_name  VARCHAR(255),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_content_notes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT chk_content_notes_status CHECK (status IN ('pending','ongoing','completed','cancelled')),
-  INDEX idx_content_notes_date (note_date)
+  INDEX idx_content_notes_date (note_date),
+  INDEX idx_content_notes_date_pos (note_date, position)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- post_insight_history — one engagement snapshot per post per HOUR ------------
@@ -510,4 +514,110 @@ CREATE TABLE IF NOT EXISTS page_discounts (
   CONSTRAINT fk_pd_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_pd_editor  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_pd_account (account_id, active, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Orders, agreements & receipts (migration 049) — the post-cart checkout flow.
+-- order_agreements is the IMMUTABLE pre-order snapshot a staff member generates and
+-- shares with the customer via an unguessable token (public /agreement/:token); it
+-- expires in 30 min and, once the customer confirms, spawns an `orders` row. Orders and
+-- receipts are owner-scoped (created_by) with admin bypass.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS order_agreements (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  token            CHAR(40) NOT NULL,                   -- crypto-random hex; the public-link capability
+  account_id       INT NOT NULL,                        -- page scope
+  created_by       INT NULL,                            -- owner (staff who drafted it)
+  created_by_name  VARCHAR(255) NULL,
+  currency         VARCHAR(8) NOT NULL DEFAULT 'PHP',
+  customer_name    VARCHAR(255) NOT NULL,
+  delivery_address TEXT NOT NULL,
+  contact_number   VARCHAR(60) NOT NULL,
+  email            VARCHAR(255) NULL,
+  notes            TEXT NULL,
+  language         VARCHAR(8) NOT NULL DEFAULT 'en',
+  items            JSON NOT NULL,                        -- [{productId,variantId,name,variantLabel,unitPrice,quantity,category,media}]
+  discounts        JSON NOT NULL,                        -- applied [{id,name,amount}]
+  subtotal         DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total_discount   DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total            DECIMAL(12,2) NOT NULL DEFAULT 0,
+  status           ENUM('active','confirmed','expired','cancelled') NOT NULL DEFAULT 'active',
+  expires_at       DATETIME NOT NULL,
+  first_viewed_at  DATETIME NULL,
+  last_viewed_at   DATETIME NULL,
+  confirmed_at     DATETIME NULL,
+  order_id         INT NULL,                             -- set on confirm (no FK: orders is created after)
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_oa_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_oa_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE KEY uq_oa_token (token),
+  INDEX idx_oa_account (account_id, created_by, id),
+  INDEX idx_oa_status (status, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS orders (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  agreement_id     INT NULL,
+  account_id       INT NOT NULL,
+  created_by       INT NULL,                             -- owner (admins bypass)
+  created_by_name  VARCHAR(255) NULL,
+  currency         VARCHAR(8) NOT NULL DEFAULT 'PHP',
+  customer_name    VARCHAR(255) NOT NULL,
+  delivery_address TEXT NOT NULL,
+  contact_number   VARCHAR(60) NOT NULL,
+  email            VARCHAR(255) NULL,
+  notes            TEXT NULL,
+  subtotal         DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total_discount   DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total            DECIMAL(12,2) NOT NULL DEFAULT 0,
+  status           ENUM('pending','paid','processing','ready_for_pickup','shipped','out_for_delivery','completed','cancelled') NOT NULL DEFAULT 'pending',
+  confirmed_at     DATETIME NULL,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ord_account   FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ord_agreement FOREIGN KEY (agreement_id) REFERENCES order_agreements(id) ON DELETE SET NULL,
+  CONSTRAINT fk_ord_creator   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_ord_account (account_id, created_by, id),
+  INDEX idx_ord_status (account_id, status, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS order_items (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  order_id      INT NOT NULL,
+  product_id    INT NULL,                                -- reference only; the rest are value snapshots
+  name          VARCHAR(255) NOT NULL,
+  variant_label VARCHAR(255) NULL,
+  unit_price    DECIMAL(12,2) NULL,                      -- NULL = quote item
+  quantity      INT NOT NULL DEFAULT 1,
+  line_total    DECIMAL(12,2) NULL,
+  CONSTRAINT fk_oi_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+  INDEX idx_oi_order (order_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS order_discounts (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  order_id    INT NOT NULL,
+  discount_id INT NULL,
+  name        VARCHAR(255) NOT NULL,
+  amount      DECIMAL(12,2) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_od_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+  INDEX idx_od_order (order_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS receipts (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  account_id      INT NOT NULL,
+  created_by      INT NULL,                              -- owner (admins bypass)
+  created_by_name VARCHAR(255) NULL,
+  title           VARCHAR(255) NULL,
+  s3_key          VARCHAR(512) NOT NULL,                 -- private S3 object, presigned on read
+  content_type    VARCHAR(120) NULL,
+  file_size       INT NULL,
+  note            TEXT NULL,
+  order_id        INT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_rcpt_account FOREIGN KEY (account_id) REFERENCES platform_accounts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_rcpt_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_rcpt_order   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+  INDEX idx_rcpt_account (account_id, created_by, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

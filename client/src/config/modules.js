@@ -1,6 +1,7 @@
 export const APP_MODULES = [
   { id: 'dashboard', label: 'Dashboard', route: '/dashboard', core: true },
   { id: 'content-calendar', label: 'Content Calendar', route: '/content-calendar' },
+  { id: 'planner', label: 'Planner', route: '/planner' },
   { id: 'analytics', label: 'Analytics', route: '/analytics' },
   { id: 'post-pool', label: 'Post Pool', route: '/post-pool' },
   { id: 'upload', label: 'Upload', route: '/upload' },

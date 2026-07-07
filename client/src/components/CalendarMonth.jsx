@@ -24,6 +24,7 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
   const [noteCounts, setNoteCounts] = useState({});
   const [selectedDate, setSelectedDate] = useState(null);
   const [draggingNote, setDraggingNote] = useState(null);
+  const [dragSourceCount, setDragSourceCount] = useState(0); // notes in the note's day at drag start
   const [dragOverKey, setDragOverKey] = useState(null);
   const [notesRefreshToken, setNotesRefreshToken] = useState(0);
   const [creatingForDate, setCreatingForDate] = useState(null);
@@ -54,13 +55,20 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
 
   // A note dragged from the day dialog and dropped on `targetKey` moves to that
   // day. Refreshes the badges and tells the open dialog to drop the moved note.
+  // If it was the open day's LAST note, follow it: re-open the dialog on the day it
+  // landed on (rather than leaving an empty dialog behind).
   const moveNote = async (note, targetKey) => {
     if (!note || targetKey === note.note_date) return;
+    const wasLastInOpenDay = selectedDate === note.note_date && dragSourceCount <= 1;
     try {
       await notesService.setDate(note.id, targetKey);
       toast.success('Note moved');
       refreshNoteCounts();
-      setNotesRefreshToken((t) => t + 1);
+      if (wasLastInOpenDay) {
+        setSelectedDate(targetKey); // reloads the dialog for the destination day
+      } else {
+        setNotesRefreshToken((t) => t + 1); // just refresh the still-open dialog
+      }
     } catch (e) {
       toast.error(apiError(e));
     }
@@ -145,7 +153,7 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
         ))}
       </div>
 
-      <div className="calendar__grid">
+      <div className="calendar__grid calendar__grid--days">
         {cells.map((d, i) => {
           if (d === null) return <div key={`b${i}`} className="calendar__cell calendar__cell--blank" />;
           const k = keyOf(year, month, d);
@@ -203,7 +211,12 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
               {noteChips.length > 0 && (
                 <div className="calendar__notechips">
                   {noteChips.map((n, idx) => (
-                    <span key={idx} className={`notechip notechip--${n.status || 'pending'}`} title={n.text}>
+                    <span
+                      key={idx}
+                      className={`notechip notechip--${n.status || 'pending'}`}
+                      style={n.color ? { '--c': n.color } : undefined}
+                      title={n.text}
+                    >
                       {n.text}
                     </span>
                   ))}
@@ -252,13 +265,17 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
 
       <DayNotesModal
         dateKey={selectedDate}
-        hidden={!!draggingNote || !!creatingForDate}
+        hidden={!!creatingForDate}
+        dragging={!!draggingNote}
         refreshToken={notesRefreshToken}
         posts={dayPosts}
         onCreatePost={(k) => setCreatingForDate(k)}
         onClose={() => setSelectedDate(null)}
         onChanged={refreshNoteCounts}
-        onNoteDragStart={(note) => setDraggingNote(note)}
+        onNoteDragStart={(note, count) => {
+          setDraggingNote(note);
+          setDragSourceCount(count || 0);
+        }}
         onNoteDragEnd={() => {
           setDraggingNote(null);
           setDragOverKey(null);

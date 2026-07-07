@@ -376,6 +376,42 @@ export default function MessagingPage() {
     setSearchParams(nextSearchParams, { replace: true });
   }, [isAllPages, requestedPageId, searchParams, selectedPageId, setSearchParams]);
 
+  // Deep-link: ?c=<conversationId> (e.g. the post view's "Messaged" button) opens that thread.
+  // A messaged-commenter thread is a Live-Agent chat, so switch to the customer inbox + "For
+  // you" view; the actual selection is applied once the thread loads (effect below). The param
+  // is consumed so it doesn't override later manual navigation.
+  const pendingConvRef = useRef(null);
+  useEffect(() => {
+    const c = searchParams.get('c');
+    if (!c) return;
+    pendingConvRef.current = String(c);
+    setMessageMode('customer');
+    setTemplatesView(false);
+    setAgentView('foryou');
+    const next = new URLSearchParams(searchParams);
+    next.delete('c');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Deep-link: ?dm=<userId> (e.g. the Connections "Message" button) opens the
+  // Agent-to-Agent view and starts/opens a direct message with that teammate. The
+  // param is consumed so it doesn't override later manual navigation.
+  useEffect(() => {
+    const dm = searchParams.get('dm');
+    if (!dm) return;
+    const id = Number(dm);
+    if (Number.isFinite(id) && id > 0) {
+      setTemplatesView(false);
+      setPendingAgentPeer(id);
+      setMessageMode('agent');
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('dm');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   // Close the page-filter dropdown on outside-click / Escape.
   useEffect(() => {
     if (!filterOpen) return undefined;
@@ -429,6 +465,16 @@ export default function MessagingPage() {
         ? current
         : visibleConversations[0]?.id || null,
     );
+  }, [conversationSnapshot]);
+
+  // Apply a pending ?c= deep-link once its thread is loaded + visible (runs after the reset
+  // above, so it wins). Cleared once applied.
+  useEffect(() => {
+    const pend = pendingConvRef.current;
+    if (pend && visibleConversations.some((conversation) => String(conversation.id) === pend)) {
+      setSelectedConversationId(pend);
+      pendingConvRef.current = null;
+    }
   }, [conversationSnapshot]);
 
   const activeConversation =

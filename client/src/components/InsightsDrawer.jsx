@@ -159,7 +159,7 @@ export default function InsightsDrawer({ post, open, onClose }) {
         />
       }
       footer={
-        <Button onClick={downloadReport} disabled={downloading}>
+        <Button onClick={downloadReport} disabled={downloading} className="btn--flat">
           {downloading ? 'Preparing…' : 'Download PDF report'}
         </Button>
       }

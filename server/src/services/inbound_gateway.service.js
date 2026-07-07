@@ -178,6 +178,52 @@ export async function handleTelegramUpdate(accountId, update = {}) {
 
 // ── Messenger + Instagram (shared Meta Messaging envelope) ──────────────────────
 
+// A human replying from the Facebook Page inbox / Messenger app (i.e. OUTSIDE pwise)
+// comes back to us as a message "echo". We record it as a Live Agent message and mark
+// the thread "needs human" so the AI stops auto-replying (aiShouldReply treats
+// HANDOFF_STATUS as "stay quiet") — otherwise the AI keeps talking over the human and the
+// thread turns into a mix of AI + human replies. The customer already received this
+// message, so deliver:false prevents receiveInbound from bouncing it back to them.
+//
+// Only echoes with NO app_id are handled here; the caller has already filtered out our
+// own Send-API replies (AI + pwise-agent), which always carry an app_id.
+async function recordOutsideAgentReply(event, message, { acct, origin, platform }) {
+  const customerHandle = String(event.recipient?.id || ''); // in an echo, recipient = the customer
+  if (!customerHandle || acct == null) return;
+
+  const text = String(message.text || '').trim();
+  const rawMedia = (Array.isArray(message.attachments) ? message.attachments : [])
+    .filter((a) => a?.payload?.url)
+    .map((a) => {
+      const t = String(a.type || '').toLowerCase();
+      return { url: a.payload.url, type: t === 'image' ? 'image' : t === 'video' ? 'video' : 'file', name: t || 'attachment' };
+    });
+  if (!text && !rawMedia.length) return;
+
+  // Meta can redeliver a webhook — skip if we've already stored this message id.
+  const mid = message.mid ? String(message.mid) : null;
+  if (mid) {
+    const dup = await query('SELECT id FROM messages WHERE external_id = ? LIMIT 1', [mid]).catch(() => []);
+    if (dup.length) return;
+  }
+
+  const media = rawMedia.length ? await ingestRemoteMedia(rawMedia, acct, platform) : [];
+
+  await messaging.receiveInbound({
+    accountId: acct,
+    origin,
+    side: 'outgoing',
+    sender: 'Live Agent', // a human staff member replied, not the AI
+    text,
+    media,
+    customerHandle,
+    externalId: mid,
+    incrementUnread: false,
+    status: messaging.HANDOFF_STATUS, // silence the AI + surface the thread for takeover
+    deliver: false, // the customer already got this reply on their platform
+  });
+}
+
 // Both Messenger and Instagram deliver the SAME shape — all subscribed accounts' events
 // in one POST, each `entry` tagged with its account id and carrying `messaging[]` events
 // (customer id + message). They differ only in: body.object, which column maps the entry
@@ -205,11 +251,23 @@ async function handleMetaMessaging(body, { object, origin, platform, resolveColu
     }
 
     for (const event of entry.messaging || []) {
+      const message = event.message;
+
+      // Page → customer echo (a copy of an outgoing message on this thread). Echoes of
+      // OUR OWN sends (AI + pwise-agent replies via the Send API) carry an app_id — skip
+      // those. An echo with NO app_id was typed by a human in the Facebook Page inbox /
+      // Messenger app: record it and back the AI off so it doesn't talk over the human.
+      if (message?.is_echo) {
+        if (!message.app_id) {
+          await recordOutsideAgentReply(event, message, { acct, origin, platform }).catch((e) => {
+            if (env.nodeEnv === 'development') console.warn(`[gateway] recordOutsideAgentReply failed: ${e?.message || e}`);
+          });
+        }
+        continue;
+      }
+
       const senderId = String(event.sender?.id || '');
       if (!senderId) continue;
-
-      const message = event.message;
-      if (message?.is_echo) continue; // our own outgoing, echoed back
 
       // Normalize either a real message OR a postback (button tap, incl. Get Started)
       // into one inbound record. Delivery/read receipts + reactions carry no content.

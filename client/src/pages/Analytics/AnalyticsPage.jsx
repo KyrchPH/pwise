@@ -25,13 +25,46 @@ const fmtNum = (n) => {
   if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k`;
   return String(v);
 };
+// Exact, thousands-separated — the headline KPI cards show the precise figure
+// (e.g. 3,742) rather than the abbreviated 3.7k.
+const fmtExact = (n) => (Number(n) || 0).toLocaleString('en-US');
 const sumSeries = (arr) => (arr || []).reduce((a, p) => a + (Number(p.value) || 0), 0);
 
 export default function AnalyticsPage() {
   const toast = useToast();
   const [range, setRange] = useState(28);
+  const [downloading, setDownloading] = useState(false);
 
   const { data, loading, error } = useCachedResource(`analytics:overview:${range}`, () => analytics.overview(range));
+
+  // Build a professional PDF of the current range (summary cards, metric charts, top posts).
+  const downloadReport = async () => {
+    if (!data) return;
+    setDownloading(true);
+    try {
+      // Lazy-load the PDF builder (jsPDF) so it stays out of the main bundle, matching
+      // how the post InsightsDrawer imports it.
+      const { buildPageAnalyticsPdf, loadLogo } = await import('../../utils/reportPdf.js');
+      const end = new Date();
+      const start = new Date();
+      start.setDate(start.getDate() - (range - 1));
+      const logo = await loadLogo();
+      const doc = buildPageAnalyticsPdf({
+        start,
+        end,
+        pageName: data.pageName,
+        logo,
+        followers: data.followers,
+        series: data.series || {},
+        ranking: data.ranking || [],
+      });
+      doc.save(`analytics-${range}d.pdf`);
+    } catch {
+      toast.error('Could not generate the report.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   useEffect(() => {
     if (error) toast.error(apiError(error));
@@ -44,13 +77,18 @@ export default function AnalyticsPage() {
 
   const impressions = sumSeries(series.page_posts_impressions);
   const engagement = sumSeries(series.page_post_engagements);
-  const netFollows = sumSeries(series.page_daily_follows_unique) - sumSeries(series.page_daily_unfollows_unique);
+  const newFollows = sumSeries(series.page_daily_follows_unique);
+  const unfollows = sumSeries(series.page_daily_unfollows_unique);
+  const visits = sumSeries(series.page_views_total);
+  const hasVisits = (series.page_views_total || []).length > 0;
 
   const stats = [
-    { label: 'Followers', value: data?.followers != null ? fmtNum(data.followers) : '—', color: 'var(--primary)' },
-    { label: `Net followers · ${range}d`, value: `${netFollows >= 0 ? '+' : ''}${fmtNum(netFollows)}`, color: 'var(--success)' },
-    { label: `Impressions · ${range}d`, value: fmtNum(impressions), color: 'var(--accent)' },
-    { label: `Engagement · ${range}d`, value: fmtNum(engagement), color: 'var(--blue)' },
+    { label: 'Followers', value: data?.followers != null ? fmtExact(data.followers) : '—', color: 'var(--primary)' },
+    { label: `New followers · ${range}d`, value: fmtExact(newFollows), color: 'var(--success)' },
+    { label: `Unfollows · ${range}d`, value: fmtExact(unfollows), color: 'var(--danger)' },
+    { label: `Visits · ${range}d`, value: hasVisits ? fmtExact(visits) : '—', color: 'var(--warning)' },
+    { label: `Impressions · ${range}d`, value: fmtExact(impressions), color: 'var(--accent)' },
+    { label: `Engagement · ${range}d`, value: fmtExact(engagement), color: 'var(--blue)' },
   ];
 
   return (
@@ -60,21 +98,26 @@ export default function AnalyticsPage() {
           <h1 className="page-head__title">Analytics</h1>
           <div className="page-head__sub">{data?.pageName || 'Your page performance over time.'}</div>
         </div>
-        <div className="seg">
-          {RANGES.map((r) => (
-            <button
-              key={r.days}
-              type="button"
-              className={`seg__btn ${range === r.days ? 'is-active' : ''}`}
-              onClick={() => setRange(r.days)}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div className="analytics-actions">
+          <div className="seg">
+            {RANGES.map((r) => (
+              <button
+                key={r.days}
+                type="button"
+                className={`seg__btn ${range === r.days ? 'is-active' : ''}`}
+                onClick={() => setRange(r.days)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn btn--subtle btn--sm" onClick={downloadReport} disabled={downloading || !hasData}>
+            {downloading ? 'Preparing…' : 'Download report'}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid--stats">
+      <div className="grid grid--stats grid--stats--3">
         {stats.map((s) => (
           <Card key={s.label} className="stat">
             <div className="stat__label">

@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon, Button } from './ui.jsx';
 import InsightsDrawer from './InsightsDrawer.jsx';
+import DockedChat from './DockedChat.jsx';
 import * as postPool from '../services/post_pool.service.js';
+import { usePages } from '../context/PageContext.jsx';
 import { apiError } from '../services/api.js';
 
 const ChartIcon = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 3v18h18" />
     <path d="M7 13l3.5-3.5 3 3L19 7" />
+  </svg>
+);
+
+const MessageIcon = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
   </svg>
 );
 
@@ -27,16 +36,26 @@ const fmtNum = (n) => {
   return String(v);
 };
 
+// Label beside a stat count — singular when the raw count is exactly 1.
+const plural = (n, word) => `${word}${Number(n) === 1 ? '' : 's'}`;
+
 // Live Facebook comments for a published post. The first page loads when the
 // viewer opens; more pages lazy-load as you scroll near the bottom. Shows each
 // comment's text + time — Facebook withholds the commenter's identity (`from`)
 // for ordinary users (privacy), so author names aren't available.
-function CommentsSection({ post, onDeleted }) {
+function CommentsSection({ post, onDeleted, onMessageComment, onOpenConversation, sessionMessaged = {} }) {
   const [comments, setComments] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState(null);
+  // Reply composer: which comment is open, its draft, busy/error, and the replies we
+  // posted this session (Facebook won't echo our reply back into the comments list).
+  const [replyOpenId, setReplyOpenId] = useState(null);
+  const [replyText, setReplyText] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyError, setReplyError] = useState(null);
+  const [sentReplies, setSentReplies] = useState({}); // { [commentId]: [{ id, message }] }
   const scrollerRef = useRef(null);
   const cursorRef = useRef(null); // mirror of `cursor` for the scroll handler (no stale closure)
   const loadingRef = useRef(false);
@@ -76,6 +95,10 @@ function CommentsSection({ post, onDeleted }) {
     cursorRef.current = null;
     setLoadedOnce(false);
     setError(null);
+    setReplyOpenId(null);
+    setReplyText('');
+    setReplyError(null);
+    setSentReplies({});
     if (canHaveComments) fetchPage(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id]);
@@ -88,6 +111,35 @@ function CommentsSection({ post, onDeleted }) {
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) fetchPage(cursorRef.current);
   };
 
+  const openReply = (commentId) => {
+    setReplyOpenId(commentId);
+    setReplyText('');
+    setReplyError(null);
+  };
+  const cancelReply = () => {
+    setReplyOpenId(null);
+    setReplyText('');
+    setReplyError(null);
+  };
+  const submitReply = async (commentId) => {
+    const body = replyText.trim();
+    if (!body) return;
+    setReplyBusy(true);
+    setReplyError(null);
+    try {
+      const { id } = await postPool.replyToComment(post.id, commentId, body);
+      setSentReplies((prev) => ({
+        ...prev,
+        [commentId]: [...(prev[commentId] || []), { id: id || `local-${(prev[commentId] || []).length}`, message: body }],
+      }));
+      cancelReply();
+    } catch (err) {
+      setReplyError(apiError(err));
+    } finally {
+      setReplyBusy(false);
+    }
+  };
+
   return (
     <div className="post-comments">
       <div className="post-comments__head">Comments</div>
@@ -96,6 +148,69 @@ function CommentsSection({ post, onDeleted }) {
           <div className="comment" key={c.id}>
             <div className="comment__body">{c.message || <em className="text-muted">(no text)</em>}</div>
             <div className="comment__time">{fmt(c.created_time)}</div>
+
+            {(sentReplies[c.id] || []).map((r) => (
+              <div className="comment__reply" key={r.id}>
+                <span className="comment__reply-badge">You</span>
+                <span className="comment__reply-body">{r.message}</span>
+              </div>
+            ))}
+
+            {replyOpenId === c.id ? (
+              <div className="comment__reply-form">
+                <textarea
+                  className="textarea comment__reply-input"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  placeholder="Write a reply…"
+                  rows={2}
+                  autoFocus
+                  disabled={replyBusy}
+                />
+                {replyError && (
+                  <div className="post-comments__status post-comments__status--error">{replyError}</div>
+                )}
+                <div className="comment__reply-actions">
+                  <Button type="button" variant="ghost" size="sm" onClick={cancelReply} disabled={replyBusy}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="btn--flat"
+                    onClick={() => submitReply(c.id)}
+                    disabled={replyBusy || !replyText.trim()}
+                  >
+                    {replyBusy ? 'Sending…' : 'Reply'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="comment__actions">
+                <button type="button" className="comment__reply-btn" onClick={() => openReply(c.id)}>
+                  Reply
+                </button>
+                {c.conversationId || sessionMessaged[c.id] ? (
+                  <button
+                    type="button"
+                    className="comment__reply-btn comment__msg-btn comment__msg-btn--done"
+                    onClick={() => onOpenConversation?.(c.conversationId || sessionMessaged[c.id])}
+                    title="Open the conversation in Messaging"
+                  >
+                    <MessageIcon /> Messaged
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="comment__reply-btn comment__msg-btn"
+                    onClick={() => onMessageComment?.(c.id)}
+                    title="Message this commenter privately"
+                  >
+                    <MessageIcon /> Message
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ))}
         {loading && <div className="post-comments__status">Loading…</div>}
@@ -117,10 +232,35 @@ function CommentsSection({ post, onDeleted }) {
  * full-height on the right. Renders nothing when `post` is null.
  */
 export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, onDeletedOnFacebook }) {
+  const { activePage } = usePages();
+  const navigate = useNavigate();
   const [showInsights, setShowInsights] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [deletedDialog, setDeletedDialog] = useState(false); // post was removed on Facebook
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [dockedChat, setDockedChat] = useState(null); // { postId, commentId, prefill } — commenter DM
+  const [sessionMessaged, setSessionMessaged] = useState({}); // { [commentId]: conversationId } this session
+  // Engagement counts shown in the viewer. Seeded from the (possibly stale) list
+  // snapshot, then force-refreshed live on open so they match the live comments list.
+  const [stats, setStats] = useState(() => ({
+    reactions_count: post?.reactions_count,
+    comments_count: post?.comments_count,
+    shares_count: post?.shares_count,
+    views_count: post?.views_count,
+    engagement_synced_at: post?.engagement_synced_at,
+  }));
+
+  // Open the docked mini-chat to message a commenter, prefilled with the page's default.
+  const openMessageCommenter = (commentId) =>
+    setDockedChat({ postId: post.id, commentId, prefill: activePage?.comment_dm_default_message || '' });
+
+  // "Messaged" → jump to the existing conversation in Messaging (closes the viewer).
+  const openConversation = (conversationId) => {
+    if (!conversationId) return;
+    const page = activePage?.id != null ? `&page=${activePage.id}` : '';
+    navigate(`/messages?c=${conversationId}${page}`);
+    onClose?.();
+  };
 
   // Close on Escape and lock background scroll while open.
   useEffect(() => {
@@ -143,8 +283,42 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
     setShowInsights(false);
     setRetryBusy(false);
     setDeleteBusy(false);
+    setDockedChat(null);
+    setSessionMessaged({});
     setDeletedDialog(post?.status === 'deleted');
   }, [post?.id, post?.status]);
+
+  // Force a fresh engagement pull when the viewer opens (bypassing the server's 5-min
+  // TTL), so the counts match the live comments instead of the last list-load snapshot.
+  useEffect(() => {
+    if (!post) return undefined;
+    setStats({
+      reactions_count: post.reactions_count,
+      comments_count: post.comments_count,
+      shares_count: post.shares_count,
+      views_count: post.views_count,
+      engagement_synced_at: post.engagement_synced_at,
+    });
+    if (post.status !== 'posted' || !post.platform_post_id) return undefined;
+    let cancelled = false;
+    postPool
+      .get(post.id, { refresh: true })
+      .then((fresh) => {
+        if (cancelled || !fresh) return;
+        setStats({
+          reactions_count: fresh.reactions_count,
+          comments_count: fresh.comments_count,
+          shares_count: fresh.shares_count,
+          views_count: fresh.views_count,
+          engagement_synced_at: fresh.engagement_synced_at,
+        });
+      })
+      .catch(() => {}); // best-effort: keep the seeded snapshot on failure
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post?.id]);
 
   if (!post) return null;
 
@@ -300,33 +474,49 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
         </div>
 
         {/* Engagement pulled back from the platform (shown once synced) */}
-        {post.engagement_synced_at && (
+        {stats.engagement_synced_at && (
           <div className="post-stats">
             <div className="post-stats__row">
               <span className="post-stats__item" title="Reactions">
-                <HeartIcon size={16} />{fmtNum(post.reactions_count)}
+                <HeartIcon size={16} />{fmtNum(stats.reactions_count)}
+                <span className="post-stats__label">{plural(stats.reactions_count, 'Reaction')}</span>
               </span>
               <span className="post-stats__item" title="Comments">
-                <CommentIcon size={16} />{fmtNum(post.comments_count)}
+                <CommentIcon size={16} />{fmtNum(stats.comments_count)}
+                <span className="post-stats__label">{plural(stats.comments_count, 'Comment')}</span>
               </span>
               <span className="post-stats__item" title="Shares">
-                <ShareIcon size={16} />{fmtNum(post.shares_count)}
+                <ShareIcon size={16} />{fmtNum(stats.shares_count)}
+                <span className="post-stats__label">{plural(stats.shares_count, 'Share')}</span>
               </span>
               {post.media_type === 'video' && (
                 <span className="post-stats__item" title="Views">
-                  <EyeIcon size={16} />{fmtNum(post.views_count)}
+                  <EyeIcon size={16} />{fmtNum(stats.views_count)}
+                  <span className="post-stats__label">{plural(stats.views_count, 'View')}</span>
                 </span>
               )}
             </div>
-            <div className="post-stats__synced">Updated {fmt(post.engagement_synced_at)}</div>
+            <div className="post-stats__synced">Updated {fmt(stats.engagement_synced_at)}</div>
           </div>
         )}
 
         {/* Live comments from Facebook — first page on open, lazy-load on scroll */}
-        <CommentsSection post={post} onDeleted={onDeletedDetected} />
+        <CommentsSection
+          post={post}
+          onDeleted={onDeletedDetected}
+          onMessageComment={openMessageCommenter}
+          onOpenConversation={openConversation}
+          sessionMessaged={sessionMessaged}
+        />
       </aside>
 
       <InsightsDrawer post={post} open={showInsights} onClose={() => setShowInsights(false)} />
+
+      <DockedChat
+        chat={dockedChat}
+        onClose={() => setDockedChat(null)}
+        onOpened={(commentId, cid) => setSessionMessaged((m) => ({ ...m, [commentId]: cid }))}
+      />
 
       {/* Shown when the post no longer exists on Facebook (deleted there). Rendered
           inside the viewer so it sits above it (a normal Modal would fall behind). */}

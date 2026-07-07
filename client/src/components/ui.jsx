@@ -441,7 +441,7 @@ export function EmptyState({ icon = '📭', title, message, action, lottie }) {
   );
 }
 
-export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '', hidden = false, headerActions = null }) {
+export function Modal({ open, title, onClose, children, footer, dismissable = true, className = '', hidden = false, dragThrough = false, headerActions = null }) {
   // Lock background page scroll while the dialog is open; restore on close/unmount.
   // Released while `hidden` (e.g. dragging an item out) so the page behind can scroll.
   useEffect(() => {
@@ -459,9 +459,15 @@ export function Modal({ open, title, onClose, children, footer, dismissable = tr
   if (!open) return null;
   return (
     // `hidden` keeps the dialog mounted but visually gone and click-through — used
-    // while dragging an item out onto the page behind it. When not dismissable, the
-    // backdrop swallows clicks and the ✕ is hidden, so it's a true barrier.
-    <div className={`overlay${hidden ? ' overlay--hidden' : ''}`} onClick={dismissable ? onClose : undefined}>
+    // while dragging an item out onto the page behind it. `dragThrough` is a softer
+    // variant: the dialog stays visible + interactive (so its list can be reordered)
+    // but the backdrop turns transparent and click-through, so a dragged item can be
+    // dropped either back in the list or onto the page behind. When not dismissable,
+    // the backdrop swallows clicks and the ✕ is hidden, so it's a true barrier.
+    <div
+      className={`overlay${hidden ? ' overlay--hidden' : ''}${dragThrough ? ' overlay--dragthrough' : ''}`}
+      onClick={dismissable ? onClose : undefined}
+    >
       <div className={`card modal ${className}`} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="card__head">
           <div className="card__title">{title}</div>

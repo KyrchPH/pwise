@@ -124,6 +124,8 @@ const BLANK = {
   ai_prompt_sales: '',
   ai_prompt_support: '',
   ai_prompt_general: '',
+  comment_dm_default_message: '',
+  live_agent_transfer_message: '',
   ai_defaults: null,
   // Business profile (contact / location / hours + per-channel links) the AI reads via get_page_info.
   business_profile: {
@@ -329,6 +331,8 @@ export default function FacebookPages({ embedded = false }) {
       an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
       an_artMin: Math.round((p.analytics_config?.artTargetSeconds ?? 300) / 60),
       currency: p.currency || 'PHP',
+      comment_dm_default_message: p.comment_dm_default_message || '',
+      live_agent_transfer_message: p.live_agent_transfer_message || '',
       // Merge stored profile over the blank shape so every field is a controlled input
       // (links are merged separately so missing channels stay '' rather than undefined).
       business_profile: {
@@ -472,6 +476,9 @@ export default function FacebookPages({ embedded = false }) {
         payload.ai_prompt_general = editing.ai_prompt_general ?? '';
         // Business profile the AI reads via get_page_info (the server trims + drops blanks).
         payload.business_profile = editing.business_profile || {};
+        // Default first message prefilled when messaging a commenter (Comment → DM).
+        payload.comment_dm_default_message = editing.comment_dm_default_message ?? '';
+        payload.live_agent_transfer_message = editing.live_agent_transfer_message ?? '';
       }
       // Messaging-analytics thresholds (admin-only; existing pages). Minutes → seconds;
       // the server clamps to sane ranges.
@@ -548,26 +555,12 @@ export default function FacebookPages({ embedded = false }) {
 
   const body = (
     <>
-      <div className="row row--between" style={{ marginBottom: 14, gap: 12 }}>
-        <div>
-          <div style={{ fontWeight: 600 }}>Facebook Pages</div>
-          <div className="text-sm text-muted">
-            Pages you can post to — each can optionally have a Telegram bot attached. Credentials are encrypted at rest;
-            switch the active page from the top bar.
-          </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 600 }}>Facebook Pages</div>
+        <div className="text-sm text-muted">
+          Pages you can post to — each can optionally have a Telegram bot attached. Credentials are encrypted at rest;
+          switch the active page from the top bar.
         </div>
-        {!editing && (
-          <div className="row gap-sm" style={{ flexWrap: 'wrap' }}>
-            {isAdmin && (
-              <Button size="sm" onClick={startFacebookConnect} disabled={fbBusy}>
-                {fbBusy ? 'Connecting…' : 'Connect with Facebook'}
-              </Button>
-            )}
-            <Button size="sm" variant="ghost" onClick={startAdd}>
-              + Add manually
-            </Button>
-          </div>
-        )}
       </div>
 
       {editing ? (
@@ -765,6 +758,54 @@ export default function FacebookPages({ embedded = false }) {
                   </Field>
                 );
               })}
+              </div>
+            </details>
+          )}
+
+          {/* Comment → DM default message — admin only. */}
+          {isAdmin && (
+            <details className="set-acc">
+              <summary className="set-acc__head">
+                <span className="set-acc__title">Comment → DM default message <span className="set-acc__opt">optional</span></span>
+              </summary>
+              <div className="set-acc__body">
+                <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                  When an agent clicks Message on someone who commented on a post, the chat composer opens prefilled with
+                  this message. Leave it blank to open an empty composer.
+                </div>
+                <Field label="Default first message" hint="optional">
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={editing.comment_dm_default_message}
+                    onChange={(e) => setEditing((ed) => ({ ...ed, comment_dm_default_message: e.target.value }))}
+                    placeholder="Hi! Thanks for your comment 😊 How can we help?"
+                  />
+                </Field>
+              </div>
+            </details>
+          )}
+
+          {/* Live-agent transfer message — admin only. */}
+          {isAdmin && (
+            <details className="set-acc">
+              <summary className="set-acc__head">
+                <span className="set-acc__title">Live-agent transfer message <span className="set-acc__opt">optional</span></span>
+              </summary>
+              <div className="set-acc__body">
+                <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                  When the AI hands a conversation to a live agent, the app automatically sends the customer this
+                  message, then the AI stops replying. Leave it blank to use the default.
+                </div>
+                <Field label="Message sent on transfer" hint="optional">
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={editing.live_agent_transfer_message}
+                    onChange={(e) => setEditing((ed) => ({ ...ed, live_agent_transfer_message: e.target.value }))}
+                    placeholder="Let me connect you with a live agent who can better assist you. 🙌 Please hold on."
+                  />
+                </Field>
               </div>
             </details>
           )}
@@ -995,6 +1036,19 @@ export default function FacebookPages({ embedded = false }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {!editing && (
+        <div className="row gap-sm" style={{ flexWrap: 'wrap', marginTop: 16, justifyContent: 'flex-start' }}>
+          {isAdmin && (
+            <Button size="sm" className="btn--flat" onClick={startFacebookConnect} disabled={fbBusy}>
+              {fbBusy ? 'Connecting…' : 'Connect with Facebook'}
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={startAdd}>
+            + Add manually
+          </Button>
         </div>
       )}
 

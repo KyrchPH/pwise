@@ -13,6 +13,13 @@ export const PAGE_METRICS = [
   'page_daily_unfollows_unique', // unfollows
 ];
 
+// Fetched in their OWN request, NOT the batch above: some Graph API versions no
+// longer serve these, and a single unknown metric fails the whole batched
+// insights call. Best-effort — the metric simply stays absent when Meta drops it.
+export const ISOLATED_METRICS = [
+  'page_views_total', // page visits
+];
+
 async function upsertDaily(accountId, metric, points = []) {
   for (const p of points) {
     if (!p.date) continue;
@@ -37,6 +44,16 @@ export async function refreshPageInsights(days = 30, page = {}) {
   }
   for (const metric of Object.keys(series)) {
     await upsertDaily(page.accountId ?? null, metric, series[metric]);
+  }
+  // Best-effort, isolated: pull each ISOLATED metric on its own so a rejection
+  // (Meta no longer serving it) can't fail the batched request above.
+  for (const metric of ISOLATED_METRICS) {
+    try {
+      const extra = await fb.fetchPageInsights([metric], since, until, { token: page.token, fbPageId: page.fbPageId });
+      for (const m of Object.keys(extra)) await upsertDaily(page.accountId ?? null, m, extra[m]);
+    } catch {
+      /* metric unavailable on this Graph version — skip */
+    }
   }
   return { ok: true, metrics: Object.keys(series).length };
 }
@@ -74,7 +91,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
   // (which would surface another page's or orphaned data when nothing is connected).
   if (accountId == null) {
     const empty = {};
-    for (const m of PAGE_METRICS) empty[m] = [];
+    for (const m of [...PAGE_METRICS, ...ISOLATED_METRICS]) empty[m] = [];
     return { rangeDays, followers: null, pageName: null, series: empty, ranking: [] };
   }
 
@@ -97,7 +114,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
     params,
   );
   const series = {};
-  for (const m of PAGE_METRICS) series[m] = [];
+  for (const m of [...PAGE_METRICS, ...ISOLATED_METRICS]) series[m] = [];
   for (const r of rows) {
     if (!series[r.metric]) series[r.metric] = [];
     series[r.metric].push({ period: r.date, value: Number(r.value) });

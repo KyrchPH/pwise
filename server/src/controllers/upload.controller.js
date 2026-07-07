@@ -12,17 +12,23 @@ const ALLOWED_PREFIXES = ['image/', 'video/'];
 // uploads are the file manager — they accept ANY file type (not just media) and
 // land under vault/.
 export const presignedUrl = asyncHandler(async (req, res) => {
-  const { filename, contentType, temporary, vault, avatar } = req.body || {};
+  const { filename, contentType, temporary, vault, avatar, receipt } = req.body || {};
   if (!filename || !contentType) throw ApiError.badRequest('filename and contentType are required');
   if (avatar && !String(contentType).startsWith('image/')) {
     throw ApiError.badRequest('only image uploads are allowed for profile photos');
   }
-  // Posts are restricted to image/video; the vault stores arbitrary files.
-  if (!vault && !ALLOWED_PREFIXES.some((p) => String(contentType).startsWith(p))) {
+  // Receipts accept photos or PDF documents; the vault stores arbitrary files; everything
+  // else (posts) is restricted to image/video.
+  if (receipt) {
+    const ct = String(contentType);
+    if (!ct.startsWith('image/') && ct !== 'application/pdf') {
+      throw ApiError.badRequest('receipts must be an image or a PDF');
+    }
+  } else if (!vault && !ALLOWED_PREFIXES.some((p) => String(contentType).startsWith(p))) {
     throw ApiError.badRequest('only image/* or video/* uploads are allowed');
   }
   const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-  const base = avatar ? 'avatars' : vault ? 'vault' : temporary ? 'tmp' : 'uploads';
+  const base = avatar ? 'avatars' : receipt ? 'receipts' : vault ? 'vault' : temporary ? 'tmp' : 'uploads';
   const s3Key = `${base}/${req.user.id}/${crypto.randomUUID()}-${safeName}`;
   const uploadUrl = await s3.createUploadUrl(s3Key, contentType);
   sendSuccess(res, { uploadUrl, s3Key, mediaUrl: s3.publicObjectUrl(s3Key) });

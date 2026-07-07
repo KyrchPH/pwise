@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { formatPrice } from '../../config/currency.js';
-import { summarizeRule, scopeLabel, SCOPE_OPTIONS } from '../../config/discounts.js';
+import { summarizeRule, SCOPE_OPTIONS } from '../../config/discounts.js';
 import * as discountsApi from '../../services/discounts.service.js';
 import * as productsApi from '../../services/products.service.js';
 import { apiError } from '../../services/api.js';
@@ -14,7 +13,7 @@ const BLANK = {
   valueType: 'percent', value: '', percentCap: '',
   scope: 'all', targetCategory: '', targetProductId: '', thresholdQty: '', minAmount: '',
   appliesTo: 'order', stackable: false,
-  startsAt: '', endsAt: '',
+  startsAt: '', endsAt: '', code: '',
 };
 
 // ISO/Date → "YYYY-MM-DDTHH:MM" for a datetime-local input (blank when unset).
@@ -44,6 +43,7 @@ function fromDiscount(d) {
     stackable: !!d.stackable,
     startsAt: toLocalInput(d.startsAt),
     endsAt: toLocalInput(d.endsAt),
+    code: d.code || '',
   };
 }
 
@@ -60,6 +60,7 @@ export default function DiscountsPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // BLANK-shaped (+ optional id) or null
   const [busy, setBusy] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState(null);
 
   useEffect(() => {
     if (activeId == null) {
@@ -95,18 +96,6 @@ export default function DiscountsPage() {
   const startEdit = (d) => isAdmin && setEditing(fromDiscount(d));
   const cancel = () => setEditing(null);
 
-  const valueBadge = (d) => (d.valueType === 'percent' ? `${d.value}%` : formatPrice(d.value, currency));
-
-  const toggleActive = async (d) => {
-    if (!isAdmin || busy) return;
-    try {
-      const updated = await discountsApi.update(d.id, { active: !d.active });
-      setDiscounts((cur) => cur.map((x) => (x.id === updated.id ? updated : x)));
-    } catch (e) {
-      toast.error(apiError(e));
-    }
-  };
-
   const commit = async () => {
     if (!isAdmin) return toast.error('Only admins can change discounts.');
     const name = editing.name.trim();
@@ -135,6 +124,7 @@ export default function DiscountsPage() {
       stackable: editing.stackable,
       starts_at: editing.startsAt || null,
       ends_at: editing.endsAt || null,
+      code: editing.code.trim().toUpperCase() || null,
     };
 
     setBusy(true);
@@ -181,7 +171,7 @@ export default function DiscountsPage() {
           </p>
         </div>
         {isAdmin && activeId != null && (
-          <Button size="sm" onClick={startAdd}>Add discount</Button>
+          <Button size="sm" className="btn--flat" onClick={startAdd}>Add discount</Button>
         )}
       </div>
 
@@ -200,24 +190,69 @@ export default function DiscountsPage() {
       ) : (
         <div className="discounts-grid">
           {discounts.map((d) => (
-            <Card key={d.id} className={`discount-card${d.active ? '' : ' is-inactive'}`}>
-              <div className="discount-card__top">
-                <span className="discount-card__badge">{valueBadge(d)}</span>
-                <span className="discount-card__scope">{scopeLabel(d.scope)}</span>
-                {d.stackable && <span className="discount-card__flag">Stackable</span>}
-                {!d.active && <span className="discount-card__flag discount-card__flag--off">Inactive</span>}
-              </div>
+            <Card key={d.id} className={`discount-card${d.active ? '' : ' is-inactive'}${isAdmin ? ' has-menu' : ''}`}>
+              {isAdmin && (
+                <div
+                  className="discount-card__menu"
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget)) setOpenMenuId((cur) => (cur === d.id ? null : cur));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setOpenMenuId(null);
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="discount-card__menu-btn"
+                    aria-label={`Actions for ${d.name}`}
+                    aria-haspopup="menu"
+                    aria-expanded={openMenuId === d.id}
+                    onClick={() => setOpenMenuId((cur) => (cur === d.id ? null : d.id))}
+                  >
+                    <span className="discount-card__menu-dots" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </button>
+                  {openMenuId === d.id && (
+                    <div className="discount-card__menu-list" role="menu">
+                      <button
+                        type="button"
+                        className="discount-card__menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          startEdit(d);
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="discount-card__menu-item discount-card__menu-item--danger"
+                        role="menuitem"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          del(d);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {(d.code || d.stackable || !d.active) && (
+                <div className="discount-card__top">
+                  {d.code && <span className="discount-card__flag discount-card__flag--code">Code: {d.code}</span>}
+                  {d.stackable && <span className="discount-card__flag">Stackable</span>}
+                  {!d.active && <span className="discount-card__flag discount-card__flag--off">Inactive</span>}
+                </div>
+              )}
               <div className="discount-card__name" title={d.name}>{d.name}</div>
               <div className="discount-card__rule">{summarizeRule(d, { products, currency })}</div>
               {d.description && <p className="discount-card__desc">{d.description}</p>}
-              {isAdmin && (
-                <div className="discount-card__actions">
-                  <Toggle checked={d.active} onChange={() => toggleActive(d)} label={d.active ? 'On' : 'Off'} />
-                  <span className="discount-card__spacer" />
-                  <Button variant="ghost" size="sm" onClick={() => startEdit(d)}>Edit</Button>
-                  <Button variant="ghost" size="sm" onClick={() => del(d)}>Delete</Button>
-                </div>
-              )}
             </Card>
           ))}
         </div>
@@ -241,6 +276,16 @@ export default function DiscountsPage() {
             </Field>
             <Field label="Description" hint="optional">
               <input className="input" value={editing.description} onChange={setField('description')} placeholder="Shown on the discount card" />
+            </Field>
+            <Field label="Discount code" hint="optional — blank = applies automatically to every cart">
+              <input
+                className="input"
+                value={editing.code}
+                onChange={setField('code')}
+                placeholder="e.g. SUMMER15 — shoppers enter/select this in the cart"
+                maxLength={60}
+                style={{ textTransform: 'uppercase' }}
+              />
             </Field>
 
             <div className="row gap-sm" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
