@@ -14,8 +14,21 @@ export const register = asyncHandler(async (req, res) => {
   sendSuccess(res, result, 201);
 });
 
+// Step 1: password. Returns { user, token } (trusted device) OR { otpRequired, … }.
 export const login = asyncHandler(async (req, res) => {
   const result = await authService.login(req.body || {}, { ip: clientIp(req), userAgent: req.headers['user-agent'] });
+  sendSuccess(res, result);
+});
+
+// Step 2 (new device): verify the emailed code (+ optionally trust this device).
+export const verifyLogin = asyncHandler(async (req, res) => {
+  const result = await authService.verifyLogin(req.body || {}, { ip: clientIp(req), userAgent: req.headers['user-agent'] });
+  sendSuccess(res, result);
+});
+
+// Re-send the login code for an in-flight challenge.
+export const resendLoginCode = asyncHandler(async (req, res) => {
+  const result = await authService.resendLogin(req.body || {});
   sendSuccess(res, result);
 });
 
@@ -80,4 +93,16 @@ export const verifyPasswordCode = asyncHandler(async (req, res) => {
 export const completePasswordChange = asyncHandler(async (req, res) => {
   const result = await authService.completePasswordChange(req.user.id, (req.body || {}).newPassword);
   sendSuccess(res, result);
+});
+
+// Email-verified email change (authenticated). 2 steps: request (code to the CURRENT
+// address) → verify the code to apply the new address.
+export const startEmailChange = asyncHandler(async (req, res) => {
+  const result = await authService.startEmailChange(req.user.id, (req.body || {}).newEmail);
+  sendSuccess(res, result);
+});
+
+export const completeEmailChange = asyncHandler(async (req, res) => {
+  const user = await authService.completeEmailChange(req.user.id, (req.body || {}).code);
+  sendSuccess(res, { user });
 });

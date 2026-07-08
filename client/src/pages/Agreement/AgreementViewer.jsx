@@ -35,7 +35,7 @@ export default function AgreementViewer() {
 
   useEffect(() => {
     mounted.current = true;
-    document.title = 'Order agreement';
+    document.title = 'Order Confirmation';
     (async () => {
       try {
         const r = await getPublicAgreement(tok);
@@ -144,7 +144,7 @@ export default function AgreementViewer() {
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} disabled={expired} />
             <span>{t.agreeCheckbox}</span>
           </label>
-          <Button type="button" variant="primary" size="lg" className="btn--block" onClick={confirm} disabled={!agreed || confirming || expired}>
+          <Button type="button" variant="primary" size="lg" className="btn--block btn--flat" onClick={confirm} disabled={!agreed || confirming || expired}>
             {confirming ? t.confirming : t.confirmOrder}
           </Button>
         </div>

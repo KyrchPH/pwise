@@ -63,6 +63,21 @@ export async function replyToComment(id, commentId, message) {
   return data.data;
 }
 
+// Comments inbox: a flat, newest-first feed of live Facebook comments across the active
+// page's posts. filter: 'all' | 'open' | 'done'. Returns { comments, posts, truncated,
+// scannedPosts } — each comment carries a postId that keys into the posts map.
+export async function commentFeed({ filter = 'all' } = {}) {
+  const { data } = await api.get('/post-pool/comments/feed', { params: filter && filter !== 'all' ? { filter } : {} });
+  return data.data;
+}
+
+// Mark a comment handled ('done') or reopen it ('open') — shared across the team on the
+// active page. Returns { commentId, status, handled }.
+export async function setCommentStatus(commentId, { postId, status = 'done' } = {}) {
+  const { data } = await api.post(`/post-pool/comments/${commentId}/status`, { postId, status });
+  return data.data;
+}
+
 // Message the person who left a comment via a Messenger private reply, opening the
 // conversation. Returns { conversationId, created }.
 export async function messageCommenter(id, commentId, message) {

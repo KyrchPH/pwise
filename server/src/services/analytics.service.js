@@ -147,3 +147,125 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
     ranking,
   };
 }
+
+// ── Insights ("Performance") tab ──────────────────────────────────────────────
+const DAY_MS = 86400 * 1000;
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+// % change vs the previous window. null = "no prior baseline" (client shows no delta).
+function changePct(cur, prev) {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return Math.round(((cur - prev) / prev) * 1000) / 10;
+}
+
+// Current-window total, % change vs the previous window, and the current-window daily series
+// for one warehoused metric. Metrics never served by Meta have no rows → available:false.
+function metricStat(byMetric, metric, midDate) {
+  const pts = byMetric[metric];
+  if (!pts || pts.length === 0) return { total: 0, changePct: null, series: [], available: false };
+  const cur = pts.filter((p) => p.period >= midDate);
+  const prev = pts.filter((p) => p.period < midDate);
+  const sum = (a) => a.reduce((s, p) => s + p.value, 0);
+  const c = sum(cur);
+  return { total: c, changePct: changePct(c, sum(prev)), series: cur, available: true };
+}
+
+// Net follows = follows − unfollows, per day (for the trend) and summed per window (for the delta).
+function netFollowsStat(byMetric, midDate) {
+  const f = byMetric.page_daily_follows_unique;
+  const u = byMetric.page_daily_unfollows_unique;
+  if ((!f || !f.length) && (!u || !u.length)) return { total: 0, changePct: null, series: [], available: false };
+  const fMap = new Map((f || []).map((p) => [p.period, p.value]));
+  const uMap = new Map((u || []).map((p) => [p.period, p.value]));
+  const dates = [...new Set([...(f || []), ...(u || [])].map((p) => p.period))].sort();
+  const net = (d) => (fMap.get(d) || 0) - (uMap.get(d) || 0);
+  const series = dates.filter((d) => d >= midDate).map((d) => ({ period: d, value: net(d) }));
+  const winSum = (cur) => dates.filter((d) => (cur ? d >= midDate : d < midDate)).reduce((s, d) => s + net(d), 0);
+  const c = winSum(true);
+  return { total: c, changePct: changePct(c, winSum(false)), series, available: true };
+}
+
+// App-side Conversations metrics (our own data — always reliable, range-scoped): started,
+// new contacts, and a response-rate proxy. Each returned as its own card with a daily trend.
+async function conversationCards(accountId, midDate, sinceDate) {
+  if (accountId == null) return [];
+
+  const grouped = await query(
+    `SELECT (created_at >= ?) AS cur, COUNT(*) AS started, COUNT(DISTINCT customer_handle) AS contacts
+       FROM conversations WHERE account_id = ? AND created_at >= ? GROUP BY (created_at >= ?)`,
+    [midDate, accountId, sinceDate, midDate],
+  );
+  let cS = 0; let pS = 0; let cC = 0; let pC = 0;
+  for (const r of grouped) {
+    if (Number(r.cur)) { cS = Number(r.started); cC = Number(r.contacts); }
+    else { pS = Number(r.started); pC = Number(r.contacts); }
+  }
+
+  const daily = await query(
+    `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS period, COUNT(*) AS started, COUNT(DISTINCT customer_handle) AS contacts
+       FROM conversations WHERE account_id = ? AND created_at >= ? GROUP BY period ORDER BY period ASC`,
+    [accountId, midDate],
+  );
+  const startedSeries = daily.map((r) => ({ period: r.period, value: Number(r.started) }));
+  const contactsSeries = daily.map((r) => ({ period: r.period, value: Number(r.contacts) }));
+
+  let responseRate = null;
+  try {
+    const rr = await query(
+      `SELECT COUNT(DISTINCT CASE WHEN m.side = 'incoming' THEN m.conversation_id END) AS asked,
+              COUNT(DISTINCT CASE WHEN m.side = 'outgoing' THEN m.conversation_id END) AS answered
+         FROM messages m JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.account_id = ? AND m.created_at >= ?`,
+      [accountId, midDate],
+    );
+    const asked = Number(rr[0]?.asked || 0);
+    const answered = Number(rr[0]?.answered || 0);
+    responseRate = asked > 0 ? Math.round((answered / asked) * 1000) / 10 : null;
+  } catch {
+    responseRate = null;
+  }
+
+  return [
+    { key: 'conversations_started', title: 'Conversations started', info: 'New message threads customers started in this period.', total: cS, changePct: changePct(cS, pS), series: startedSeries, available: true },
+    { key: 'new_contacts', title: 'New contacts', info: 'Distinct customers who messaged your Page in this period.', total: cC, changePct: changePct(cC, pC), series: contactsSeries, available: true },
+    { key: 'response_rate', title: 'Response rate', info: 'Share of active conversations that received a reply.', total: responseRate, changePct: null, series: [], available: responseRate != null, format: 'percent' },
+  ];
+}
+
+// Card model for the Insights tab: ONE card per metric — its current-window total, % change vs
+// the preceding equal window, and the current-window daily series (for a full chart). Reads the
+// same warehouse as overview() over 2× the range, split at the midpoint. Metrics Meta didn't
+// serve come back available:false so the client shows "n/a".
+export async function insightsOverview({ rangeDays = 28, accountId = null, token = null, fbPageId = null } = {}) {
+  const now = Date.now();
+  const midDate = isoDay(now - rangeDays * DAY_MS); // start of the current window (inclusive)
+  const sinceDate = isoDay(now - 2 * rangeDays * DAY_MS); // start of the previous window
+
+  const byMetric = {}; // metric -> [{ period, value }]
+  let profile = null;
+  if (accountId != null) {
+    profile = await fb.fetchPageProfile({ token, fbPageId }).catch(() => null);
+    if (await warehouseEmpty(accountId)) await refreshPageInsights(90, { accountId, token, fbPageId });
+    const rows = await query(
+      `SELECT DATE_FORMAT(captured_on, '%Y-%m-%d') AS date, metric, value
+         FROM page_insight_daily WHERE account_id = ? AND captured_on >= ? ORDER BY captured_on ASC`,
+      [accountId, sinceDate],
+    );
+    for (const r of rows) (byMetric[r.metric] ||= []).push({ period: r.date, value: Number(r.value) });
+  }
+
+  const card = (key, title, metric, info, extra = {}) => ({ key, title, info, ...metricStat(byMetric, metric, midDate), ...extra });
+
+  const metricCards = [
+    card('views', 'Views', 'page_posts_impressions', 'Times your content was on screen.'),
+    card('viewers', 'Viewers', 'page_impressions_unique', 'People who saw your content at least once.'),
+    card('interactions', 'Content interactions', 'page_post_engagements', 'Reactions, comments, shares and clicks on your content.'),
+    card('visits', 'Visits', 'page_views_total', 'Times your Page profile was visited.'),
+    card('follows', 'Follows', 'page_daily_follows_unique', 'New follows in this period.'),
+    card('unfollows', 'Unfollows', 'page_daily_unfollows_unique', 'Follows lost in this period.'),
+    { key: 'net_follows', title: 'Net follows', info: 'Follows minus unfollows.', ...netFollowsStat(byMetric, midDate) },
+  ];
+
+  const convCards = await conversationCards(accountId, midDate, sinceDate);
+
+  return { rangeDays, pageName: profile?.name ?? null, sinceDate, untilDate: isoDay(now), cards: [...metricCards, ...convCards] };
+}

@@ -59,7 +59,7 @@ function initialState(goal, defaultAccountId) {
   };
 }
 
-export default function GoalFormModal({ open, onClose, onSubmit, pages = [], defaultAccountId, goal = null, saving = false }) {
+export default function GoalFormModal({ open, onClose, onSubmit, onDelete, pages = [], defaultAccountId, goal = null, saving = false }) {
   const [form, setForm] = useState(() => initialState(goal, defaultAccountId));
 
   // Reset the form each time the dialog opens (for a fresh create or a specific edit).
@@ -96,6 +96,11 @@ export default function GoalFormModal({ open, onClose, onSubmit, pages = [], def
 
   const footer = (
     <>
+      {goal && onDelete && (
+        <Button variant="danger" type="button" className="goal-modal__delete" onClick={() => onDelete(goal)} disabled={saving}>
+          Delete
+        </Button>
+      )}
       <Button variant="ghost" type="button" onClick={onClose} disabled={saving}>Cancel</Button>
       <Button type="submit" form="goal-form" className="btn--flat" disabled={!valid || saving}>
         {saving ? 'Saving…' : goal ? 'Save goal' : 'Create goal'}

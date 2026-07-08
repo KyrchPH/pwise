@@ -39,12 +39,27 @@ function normalizeColor(value) {
   return c.toLowerCase();
 }
 
+// The connected page a note belongs to (drives its calendar logo). Empty / null =
+// untagged; otherwise it must reference a real platform_accounts row.
+async function normalizePageId(value) {
+  if (value == null || value === '') return null;
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw ApiError.badRequest('invalid page_id');
+  const rows = await query('SELECT id FROM platform_accounts WHERE id = ?', [id]);
+  if (!rows.length) throw ApiError.badRequest('page not found');
+  return id;
+}
+
 // Common projection — note_date formatted as a string so mysql2 can't shift the
-// DATE across timezones.
-const SELECT_COLS = `id, DATE_FORMAT(note_date, '%Y-%m-%d') AS note_date, content, status, position, text_color, note_color, user_id, user_name, created_at, updated_at`;
+// DATE across timezones. LEFT JOINs the owning page so each note carries the name /
+// fb_page_id needed to render its logo on the (page-independent) calendar.
+const SELECT_COLS = `cn.id, DATE_FORMAT(cn.note_date, '%Y-%m-%d') AS note_date, cn.content, cn.status, cn.position,
+  cn.text_color, cn.note_color, cn.page_id, a.account_name AS page_name, a.fb_page_id AS page_fb_id,
+  cn.user_id, cn.user_name, cn.created_at, cn.updated_at`;
+const NOTE_FROM = 'FROM content_notes cn LEFT JOIN platform_accounts a ON a.id = cn.page_id';
 
 export async function getById(id) {
-  const rows = await query(`SELECT ${SELECT_COLS} FROM content_notes WHERE id = ?`, [id]);
+  const rows = await query(`SELECT ${SELECT_COLS} ${NOTE_FROM} WHERE cn.id = ?`, [id]);
   if (!rows.length) throw ApiError.notFound('note not found');
   return rows[0];
 }
@@ -54,7 +69,7 @@ export async function getById(id) {
 export async function listByDate(date) {
   const d = normalizeDate(date);
   return query(
-    `SELECT ${SELECT_COLS} FROM content_notes WHERE note_date = ? ORDER BY position ASC, created_at ASC, id ASC`,
+    `SELECT ${SELECT_COLS} ${NOTE_FROM} WHERE cn.note_date = ? ORDER BY cn.position ASC, cn.created_at ASC, cn.id ASC`,
     [d],
   );
 }
@@ -69,17 +84,29 @@ export async function monthCounts(year, month) {
   if (!Number.isInteger(m) || m < 1 || m > 12) throw ApiError.badRequest('invalid month (1-12)');
   const CHIPS_PER_DAY = 3;
   const rows = await query(
-    `SELECT DATE_FORMAT(note_date, '%Y-%m-%d') AS d, LEFT(content, 80) AS text, status, note_color
-       FROM content_notes
-      WHERE YEAR(note_date) = ? AND MONTH(note_date) = ?
-      ORDER BY note_date ASC, position ASC, created_at ASC, id ASC`,
+    `SELECT DATE_FORMAT(cn.note_date, '%Y-%m-%d') AS d, LEFT(cn.content, 80) AS text, cn.status,
+            cn.note_color, cn.text_color, cn.page_id, a.account_name AS page_name, a.fb_page_id AS page_fb_id
+       FROM content_notes cn
+       LEFT JOIN platform_accounts a ON a.id = cn.page_id
+      WHERE YEAR(cn.note_date) = ? AND MONTH(cn.note_date) = ?
+      ORDER BY cn.note_date ASC, cn.position ASC, cn.created_at ASC, cn.id ASC`,
     [y, m],
   );
   const counts = {};
   for (const r of rows) {
     const e = counts[r.d] || (counts[r.d] = { count: 0, notes: [] });
     e.count += 1;
-    if (e.notes.length < CHIPS_PER_DAY) e.notes.push({ text: r.text, status: r.status, color: r.note_color });
+    if (e.notes.length < CHIPS_PER_DAY) {
+      e.notes.push({
+        text: r.text,
+        status: r.status,
+        color: r.note_color,
+        text_color: r.text_color,
+        page_id: r.page_id,
+        page_name: r.page_name,
+        page_fb_id: r.page_fb_id,
+      });
+    }
   }
   return counts;
 }
@@ -90,15 +117,17 @@ async function nextPosition(date) {
   return row?.next ?? 0;
 }
 
-// `actor` = { id, name } of the signed-in user (recorded as the author).
-export async function create(actor = {}, { note_date, content, status } = {}) {
+// `actor` = { id, name } of the signed-in user (recorded as the author). `page_id`
+// tags the owning page (defaults to the active page on the client) — optional.
+export async function create(actor = {}, { note_date, content, status, page_id } = {}) {
   const d = normalizeDate(note_date);
   const c = normalizeContent(content);
   const s = status == null || status === '' ? 'pending' : normalizeStatus(status);
+  const pageId = await normalizePageId(page_id);
   const position = await nextPosition(d); // new notes land at the bottom of the day
   const result = await query(
-    'INSERT INTO content_notes (note_date, content, status, position, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?)',
-    [d, c, s, position, actor.id ?? null, actor.name ?? null],
+    'INSERT INTO content_notes (note_date, content, status, position, page_id, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [d, c, s, position, pageId, actor.id ?? null, actor.name ?? null],
   );
   const note = await getById(result.insertId);
   await activity.log({
@@ -157,6 +186,23 @@ export async function setDate(id, { note_date } = {}, actor = {}) {
     userName: actor.name,
     action: 'edited',
     details: `moved ${existing.note_date} → ${d}`,
+  });
+  return getById(id);
+}
+
+// Re-tag the note's owning page (the page-picker override). null clears the tag.
+// Logged as an 'edited' action. No-op when the page is unchanged.
+export async function setPage(id, { page_id } = {}, actor = {}) {
+  const existing = await getById(id);
+  const pageId = await normalizePageId(page_id);
+  if (pageId === existing.page_id) return existing;
+  await query('UPDATE content_notes SET page_id = ? WHERE id = ?', [pageId, id]);
+  await activity.log({
+    noteId: Number(id),
+    userId: actor.id,
+    userName: actor.name,
+    action: 'edited',
+    details: `${existing.note_date} — page → ${pageId ?? 'none'}`,
   });
   return getById(id);
 }

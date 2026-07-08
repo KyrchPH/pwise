@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
-import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
+import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, Dropdown, PageAvatar, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
 
 const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired', 'deleted'];
@@ -39,10 +39,64 @@ function fmtSched(iso) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+// Relative "time ago" for when a post went out — mirrors the Instagram-style
+// "21 hours ago". Falls back to an absolute date once it's older than a month.
+function timeAgo(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const secs = Math.round((Date.now() - then) / 1000);
+  if (secs < 45) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  if (days < 30) {
+    const weeks = Math.round(days / 7);
+    return `${weeks} week${weeks === 1 ? '' : 's'} ago`;
+  }
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Total watch time (seconds) → compact human duration: "3h 12m", "45m", "3m 20s", "48s".
+function fmtWatch(s) {
+  const t = Math.max(0, Math.round(Number(s) || 0));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = t % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return sec ? `${m}m ${sec}s` : `${m}m`;
+  return `${sec}s`;
+}
+
+// Average play time (seconds) → a clock: "0:08", "1:23".
+function fmtClock(s) {
+  const t = Math.max(0, Math.round(Number(s) || 0));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+}
+
+// "1,234 reactions" / "1 reaction" — count + singular/plural label.
+const countLabel = (n, word) => `${fmtNum(n)} ${word}${Number(n) === 1 ? '' : 's'}`;
+
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  );
+}
+
 export default function PostPoolPage() {
   const toast = useToast();
   const { activePage } = usePages();
   const [filter, setFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState(''); // posted-date range (YYYY-MM-DD, inclusive)
+  const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
   const [viewing, setViewing] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -52,6 +106,8 @@ export default function PostPoolPage() {
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(null); // id of the post currently being retried
   const [menuPostId, setMenuPostId] = useState(null);
+  const [dateMenuOpen, setDateMenuOpen] = useState(false);
+  const dateMenuRef = useRef(null);
   // "Export Analytics Data" dialog — a PDF of posts in a chosen date range.
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -65,14 +121,21 @@ export default function PostPoolPage() {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   });
 
+  // Local day boundaries → UTC ISO, so the server compares against posted_at (UTC)
+  // without timezone skew. `from` = start of that day, `to` = end of that day.
+  const fromIso = dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : '';
+  const toIso = dateTo ? new Date(`${dateTo}T23:59:59.999`).toISOString() : '';
+
   const {
     data,
     loading,
     error,
     refresh,
-  } = useCachedResource(`post-pool:list:${filter}:p${page}`, () =>
+  } = useCachedResource(`post-pool:list:${filter}:${fromIso}:${toIso}:p${page}`, () =>
     postPool.list({
       ...(filter !== 'all' ? { status: filter } : {}),
+      ...(fromIso ? { from: fromIso } : {}),
+      ...(toIso ? { to: toIso } : {}),
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
       refresh: 1, // re-read this page's engagement from Facebook on load
@@ -107,6 +170,21 @@ export default function PostPoolPage() {
       document.removeEventListener('keydown', close);
     };
   }, [menuPostId]);
+
+  useEffect(() => {
+    if (!dateMenuOpen) return undefined;
+    const close = (e) => {
+      if (e.type === 'keydown' && e.key !== 'Escape') return;
+      if (e.type === 'pointerdown' && dateMenuRef.current?.contains(e.target)) return;
+      setDateMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [dateMenuOpen]);
 
   // After a change: drop sibling caches (other filters + dashboard counts) so
   // they refetch when next visited, and refetch the current view now.
@@ -233,37 +311,97 @@ export default function PostPoolPage() {
     }
   };
 
+  // Identity shown in each card's Instagram-style header.
+  const pageName = activePage?.account_name || 'Your Page';
+
   return (
     <>
-      <div className="page-head">
+      <div className="page-head contents-head">
         <div>
-          <h1 className="page-head__title">Post Pool</h1>
+          <h1 className="page-head__title">Contents</h1>
           <div className="page-head__sub">All uploaded content the agent can publish.</div>
         </div>
-        <div className="row">
+        <div className="row contents-head__actions">
+          <div className="contents-head__filters">
+            <Dropdown
+              ariaLabel="Filter by status"
+              value={filter}
+              onChange={(v) => {
+                setFilter(v);
+                setPage(1);
+              }}
+              options={FILTERS.map((f) => ({
+                value: f,
+                label: f === 'all' ? 'All statuses' : f.charAt(0).toUpperCase() + f.slice(1),
+              }))}
+            />
+            <div className="toolbar__dates contents-toolbar__dates" ref={dateMenuRef}>
+              <button
+                type="button"
+                className={`contents-toolbar__calendar${dateFrom || dateTo ? ' is-active' : ''}`}
+                onClick={() => setDateMenuOpen((open) => !open)}
+                aria-label="Filter by date range"
+                aria-haspopup="menu"
+                aria-expanded={dateMenuOpen}
+                title="Filter by date range"
+              >
+                <CalendarIcon />
+              </button>
+              {dateMenuOpen && (
+                <div className="contents-toolbar__menu" role="menu" aria-label="Date range filter">
+                  <div className="contents-toolbar__range" aria-label="Date range">
+                    <label className={`toolbar__date contents-toolbar__date${dateFrom ? ' has-value' : ''}`} data-placeholder="From">
+                      <input
+                        className="input"
+                        type="date"
+                        aria-label="From date"
+                        placeholder="From"
+                        value={dateFrom}
+                        max={dateTo || undefined}
+                        onChange={(e) => {
+                          setDateFrom(e.target.value);
+                          setPage(1);
+                        }}
+                      />
+                    </label>
+                    <label className={`toolbar__date contents-toolbar__date${dateTo ? ' has-value' : ''}`} data-placeholder="To">
+                      <input
+                        className="input"
+                        type="date"
+                        aria-label="To date"
+                        placeholder="To"
+                        value={dateTo}
+                        min={dateFrom || undefined}
+                        onChange={(e) => {
+                          setDateTo(e.target.value);
+                          setPage(1);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {(dateFrom || dateTo) && (
+                    <button
+                      type="button"
+                      className="contents-toolbar__clear"
+                      onClick={() => {
+                        setDateFrom('');
+                        setDateTo('');
+                        setPage(1);
+                      }}
+                    >
+                      Clear dates
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
           <Button variant="ghost" onClick={() => setExportOpen(true)}>
             Export Analytics Data
           </Button>
           <Button as={Link} to="/upload">
             + Upload post
           </Button>
-        </div>
-      </div>
-
-      <div className="toolbar">
-        <div className="chips">
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              className={`chip ${filter === f ? 'active' : ''}`}
-              onClick={() => {
-                setFilter(f);
-                setPage(1);
-              }}
-            >
-              {f}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -274,7 +412,13 @@ export default function PostPoolPage() {
           <EmptyState
             icon="🗂️"
             title="No posts here"
-            message={filter === 'all' ? 'Upload your first post to get started.' : `No posts with status "${filter}".`}
+            message={
+              dateFrom || dateTo
+                ? 'No posts published in that date range. Try widening or clearing the dates.'
+                : filter === 'all'
+                  ? 'Upload your first post to get started.'
+                  : `No posts with status "${filter}".`
+            }
             action={
               <Button as={Link} to="/upload">
                 Upload a post
@@ -287,7 +431,7 @@ export default function PostPoolPage() {
           {posts.map((post) => (
             <Card
               key={post.id}
-              className="post-card post-card--clickable"
+              className="post-card post-card--ig post-card--clickable"
               role="button"
               tabIndex={0}
               onClick={() => setViewing(post)}
@@ -298,64 +442,121 @@ export default function PostPoolPage() {
                 }
               }}
             >
-              <MediaThumb mediaUrl={post.media_preview_url} mediaType={post.media_type} thumbnailUrl={post.thumbnail_preview_url}>
-                <div className="post-card__status">
+              {/* Instagram-style header: avatar + page name on the left, status + ⋮ on the right */}
+              <div className="post-card__head">
+                <span className="post-card__avatar" aria-hidden="true">
+                  {/* Real page picture inside the IG-style ring (letter fallback). */}
+                  <PageAvatar page={activePage} className="post-card__avatar-img" />
+                </span>
+                <span className="post-card__name">{pageName}</span>
+                <div className="post-card__head-right" onClick={(e) => e.stopPropagation()}>
                   <StatusBadge status={post.status} />
+                  <div className="post-card__menu">
+                    <button
+                      type="button"
+                      className="post-card__menu-trigger"
+                      aria-label="Post options"
+                      title="Post options"
+                      aria-expanded={menuPostId === post.id}
+                      onClick={() => setMenuPostId((id) => (id === post.id ? null : post.id))}
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                        <circle cx="5" cy="12" r="2" />
+                        <circle cx="12" cy="12" r="2" />
+                        <circle cx="19" cy="12" r="2" />
+                      </svg>
+                    </button>
+                    {menuPostId === post.id && (
+                      <div className="card-menu post-card__dropdown" role="menu">
+                        <button
+                          type="button"
+                          className="card-menu__item"
+                          role="menuitem"
+                          onClick={() => {
+                            setMenuPostId(null);
+                            openEdit(post);
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="card-menu__item card-menu__item--danger"
+                          role="menuitem"
+                          onClick={() => {
+                            setMenuPostId(null);
+                            setDeleting(post);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="post-card__menu" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="post-card__menu-trigger"
-                    aria-label="Post options"
-                    title="Post options"
-                    aria-expanded={menuPostId === post.id}
-                    onClick={() => setMenuPostId((id) => (id === post.id ? null : post.id))}
-                  >
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
-                      <circle cx="5" cy="12" r="2" />
-                      <circle cx="12" cy="12" r="2" />
-                      <circle cx="19" cy="12" r="2" />
-                    </svg>
-                  </button>
-                  {menuPostId === post.id && (
-                    <div className="card-menu post-card__dropdown" role="menu">
-                      <button
-                        type="button"
-                        className="card-menu__item"
-                        role="menuitem"
-                        onClick={() => {
-                          setMenuPostId(null);
-                          openEdit(post);
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="card-menu__item card-menu__item--danger"
-                        role="menuitem"
-                        onClick={() => {
-                          setMenuPostId(null);
-                          setDeleting(post);
-                        }}
-                      >
-                        Delete
-                      </button>
+              </div>
+
+              <MediaThumb mediaUrl={post.media_preview_url} mediaType={post.media_type} thumbnailUrl={post.thumbnail_preview_url} />
+
+              <div className="post-card__body">
+                {/* Engagement icons + counts (published, synced posts only) */}
+                {post.engagement_synced_at && (
+                  <>
+                    <div className="post-card__actions">
+                      <span className="post-card__act" title="Reactions"><HeartIcon size={22} /></span>
+                      <span className="post-card__act" title="Comments"><CommentIcon size={22} /></span>
+                      <span className="post-card__act" title="Shares"><ShareIcon size={22} /></span>
                     </div>
+                    <div className="post-card__likes">{countLabel(post.reactions_count, 'reaction')}</div>
+                  </>
+                )}
+
+                {/* Caption — prefixed with the page name, Instagram-style */}
+                <div className="post-card__caption">
+                  {post.caption ? (
+                    <>
+                      <span className="post-card__cap-name">{pageName}</span> {post.caption}
+                    </>
+                  ) : (
+                    <em className="text-muted">No caption</em>
                   )}
                 </div>
-              </MediaThumb>
-              <div className="post-card__body">
-                <div className="post-card__caption">{post.caption || <em className="text-muted">No caption</em>}</div>
-                {post.scheduled_at && <div className="post-card__sched">📅 {fmtSched(post.scheduled_at)}</div>}
+
+                {/* Secondary counts (replaces IG's "View all N comments") */}
                 {post.engagement_synced_at && (
-                  <div className="post-card__stats">
-                    <span title="Reactions"><HeartIcon size={14} />{fmtNum(post.reactions_count)}</span>
-                    <span title="Comments"><CommentIcon size={14} />{fmtNum(post.comments_count)}</span>
-                    <span title="Shares"><ShareIcon size={14} />{fmtNum(post.shares_count)}</span>
-                    {post.media_type === 'video' && <span title="Views"><EyeIcon size={14} />{fmtNum(post.views_count)}</span>}
+                  <div className="post-card__meta-counts">
+                    <span>{countLabel(post.comments_count, 'comment')}</span>
+                    <span>·</span>
+                    <span>{countLabel(post.shares_count, 'share')}</span>
+                    {post.media_type === 'video' && post.views_count != null && (
+                      <>
+                        <span>·</span>
+                        <span>{countLabel(post.views_count, 'view')}</span>
+                      </>
+                    )}
                   </div>
                 )}
+
+                {/* Video watch metrics — only when Facebook returned them */}
+                {post.media_type === 'video' && (post.video_watch_time_s != null || post.video_avg_watch_s != null) && (
+                  <div className="post-card__vstats">
+                    {post.video_watch_time_s != null && (
+                      <span title="Total watch time across all views">
+                        <EyeIcon size={14} /> {fmtWatch(post.video_watch_time_s)} watched
+                      </span>
+                    )}
+                    {post.video_avg_watch_s != null && (
+                      <span title="Average time watched per view">avg {fmtClock(post.video_avg_watch_s)}</span>
+                    )}
+                  </div>
+                )}
+
+                {/* Bottom timestamp — "21 hours ago" when posted, else the scheduled slot */}
+                {post.posted_at ? (
+                  <div className="post-card__time" title={fmtSched(post.posted_at)}>{timeAgo(post.posted_at)}</div>
+                ) : post.scheduled_at ? (
+                  <div className="post-card__time">📅 {fmtSched(post.scheduled_at)}</div>
+                ) : null}
               </div>
             </Card>
           ))}

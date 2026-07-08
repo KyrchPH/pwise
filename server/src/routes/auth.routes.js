@@ -5,7 +5,9 @@ import * as ctrl from '../controllers/auth.controller.js';
 const router = Router();
 
 router.post('/register', ctrl.register); // requires a valid invite token in the body
-router.post('/login', ctrl.login);
+router.post('/login', ctrl.login); // step 1: password → { user, token } or { otpRequired, … }
+router.post('/login/verify', ctrl.verifyLogin); // step 2: emailed code (+ optional trust); carries the challenge token
+router.post('/login/resend', ctrl.resendLoginCode); // re-send the code for an in-flight challenge
 router.get('/invite/:token', ctrl.validateInvite); // public: check an invite link
 router.get('/me', requireAuth, ctrl.me);
 router.patch('/me', requireAuth, ctrl.updateMe);
@@ -20,5 +22,10 @@ router.delete('/sessions/:id', requireAuth, ctrl.revokeSession); // log out a sp
 router.post('/password/start', requireAuth, ctrl.startPasswordChange);
 router.post('/password/verify', requireAuth, ctrl.verifyPasswordCode);
 router.post('/password/complete', requireAuth, ctrl.completePasswordChange);
+
+// Email-verified email change (signed-in user). 2 steps: request a code (sent to the
+// current address) → verify the code to apply the new address.
+router.post('/email/start', requireAuth, ctrl.startEmailChange);
+router.post('/email/verify', requireAuth, ctrl.completeEmailChange);
 
 export default router;

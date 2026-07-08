@@ -7,6 +7,7 @@ import { moduleAccessForUser, serializeModuleAccess } from '../config/modules.js
 import ApiError from '../utils/ApiError.js';
 import * as invitesService from './invites.service.js';
 import * as mail from './mail.service.js';
+import * as otp from './otp.service.js';
 import * as s3 from './s3.service.js';
 
 let jwtSecret = env.jwtSecret;
@@ -23,6 +24,92 @@ export function signToken(user, sessionId) {
 
 export function verifyToken(token) {
   return jwt.verify(token, jwtSecret);
+}
+
+// ── Brute-force lockout + device trust ───────────────────────────────────────
+const LOCK_MAX_ATTEMPTS = 5; // wrong passwords before the account locks
+const LOCK_MINUTES = 30; // how long it stays locked (lazy auto-unlock)
+const TRUST_DAYS = 30; // sliding lifetime of a "trusted device"
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+// 423 with structured details so the client can show a precise "try again in N minutes".
+function lockError(lockedUntil) {
+  const minutesRemaining = Math.max(1, Math.ceil((lockedUntil.getTime() - Date.now()) / 60000));
+  const plural = minutesRemaining === 1 ? '' : 's';
+  return new ApiError(
+    423,
+    `Too many failed attempts — this account is locked. Try again in ${minutesRemaining} minute${plural}, or ask an admin to unlock it.`,
+    { locked: true, unlockAt: lockedUntil.toISOString(), minutesRemaining },
+  );
+}
+
+// Count a wrong password; lock the account once it reaches the limit. locked_until is
+// computed in JS (the pool stores DATETIME as UTC) to match the rest of the auth code.
+async function registerFailedLogin(row) {
+  const attempts = (row.failed_login_attempts || 0) + 1;
+  if (attempts >= LOCK_MAX_ATTEMPTS) {
+    const lockedUntil = new Date(Date.now() + LOCK_MINUTES * 60 * 1000);
+    await query('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?', [attempts, lockedUntil, row.id]);
+  } else {
+    await query('UPDATE users SET failed_login_attempts = ? WHERE id = ?', [attempts, row.id]);
+  }
+}
+
+// A short-lived, session-less JWT proving "this user just passed the password step" —
+// carried by the client between /auth/login and /auth/login/verify. It has no `sid`, so
+// resolveSession rejects it on protected routes (it can't be used as a real token).
+export function signLoginChallenge(userId) {
+  return jwt.sign({ sub: Number(userId), purpose: 'login_challenge' }, jwtSecret, { expiresIn: '10m' });
+}
+
+export function verifyLoginChallenge(token) {
+  let payload;
+  try {
+    payload = jwt.verify(token, jwtSecret);
+  } catch {
+    throw new ApiError(410, 'your login attempt expired — please sign in again');
+  }
+  if (payload.purpose !== 'login_challenge' || !payload.sub) throw ApiError.unauthorized('invalid login challenge');
+  return Number(payload.sub);
+}
+
+// True if `deviceToken` matches a live trusted device for this user; also slides its
+// 30-day expiry forward. Never bypasses the password — only the OTP.
+async function touchTrustedDevice(userId, deviceToken, ctx = {}) {
+  if (!deviceToken) return false;
+  const rows = await query(
+    'SELECT id FROM trusted_devices WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL AND expires_at > NOW()',
+    [userId, sha256(deviceToken)],
+  );
+  if (!rows.length) return false;
+  const expiresAt = new Date(Date.now() + TRUST_DAYS * 24 * 60 * 60 * 1000);
+  await query('UPDATE trusted_devices SET last_used_at = NOW(), expires_at = ?, ip = ? WHERE id = ?', [
+    expiresAt,
+    String(ctx.ip || '').slice(0, 64) || null,
+    rows[0].id,
+  ]).catch(() => {});
+  return true;
+}
+
+// Issue a new trusted-device secret: store only its SHA-256, hand the raw secret back
+// for the client to keep in localStorage.
+async function mintTrustedDevice(userId, ctx = {}) {
+  const secret = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + TRUST_DAYS * 24 * 60 * 60 * 1000);
+  await query(
+    'INSERT INTO trusted_devices (user_id, token_hash, label, ip, last_used_at, expires_at) VALUES (?, ?, ?, ?, NOW(), ?)',
+    [userId, sha256(secret), String(ctx.userAgent || '').slice(0, 255) || null, String(ctx.ip || '').slice(0, 64) || null, expiresAt],
+  );
+  return secret;
+}
+
+// Revoke every trusted device for a user (they'll need the OTP again next login). Used
+// by "log out of all other devices" and after a password change.
+async function revokeTrustedDevices(userId) {
+  await query('UPDATE trusted_devices SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL', [userId]);
 }
 
 async function publicUser(row) {
@@ -100,19 +187,82 @@ export async function register({ name, email, password, token } = {}, ctx = {}) 
   }
 }
 
-export async function login({ email, password } = {}, ctx = {}) {
+// Step 1 of login. Returns EITHER a finished session `{ user, token }` (trusted device)
+// OR an OTP challenge `{ otpRequired, email, expiresInMinutes, challengeToken }` (new
+// device). Wrong password / unknown email both return the same generic 401 (no
+// enumeration); a locked account returns 423 with details.
+export async function login({ email, password, deviceToken } = {}, ctx = {}) {
   if (!email || !password) throw ApiError.badRequest('email and password are required');
   const rows = await query('SELECT * FROM users WHERE email = ?', [email]);
   const row = rows[0];
   if (!row) throw ApiError.unauthorized('invalid credentials');
 
+  // 1) Lock check BEFORE the password compare. A future lock refuses the login; an
+  //    elapsed lock auto-unlocks (clearing the counter so the user gets a fresh 5 tries).
+  if (row.locked_until) {
+    const lockedUntil = new Date(row.locked_until);
+    if (lockedUntil.getTime() > Date.now()) throw lockError(lockedUntil);
+    await query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [row.id]);
+    row.failed_login_attempts = 0;
+    row.locked_until = null;
+  }
+
+  // 2) Verify the password; a miss counts toward the lockout.
   const ok = await bcrypt.compare(password, row.password_hash);
-  if (!ok) throw ApiError.unauthorized('invalid credentials');
+  if (!ok) {
+    await registerFailedLogin(row);
+    throw ApiError.unauthorized('invalid credentials');
+  }
+
+  // 3) Deactivated/deleted accounts can't log in (checked after the password so account
+  //    state isn't leaked to someone who doesn't know it).
   if (row.deleted_at || !row.is_active) throw ApiError.forbidden('this account has been deactivated');
+
+  // 4) Correct password → clear any lingering failed-attempt state.
+  if (row.failed_login_attempts) {
+    await query('UPDATE users SET failed_login_attempts = 0 WHERE id = ?', [row.id]);
+  }
+
+  // 5) A trusted device skips the OTP — issue the session straight away.
+  if (await touchTrustedDevice(row.id, deviceToken, ctx)) {
+    const user = await publicUser(row);
+    const sessionId = await createSession(user.id, ctx);
+    return { user, token: signToken(user, sessionId) };
+  }
+
+  // 6) Otherwise email a one-time code and hand back a short-lived challenge.
+  const { email: masked, expiresInMinutes } = await otp.issue(row.id, 'login');
+  return { otpRequired: true, email: masked, expiresInMinutes, challengeToken: signLoginChallenge(row.id) };
+}
+
+// Step 2 of login (new device): verify the emailed code carried by the challenge, then
+// issue the real session. Optionally remembers this device so future logins skip the OTP.
+export async function verifyLogin({ challengeToken, code, trustDevice } = {}, ctx = {}) {
+  const userId = verifyLoginChallenge(challengeToken);
+  await otp.verify(userId, 'login', code); // throws (410/429/400) on bad/expired/too-many
+
+  const rows = await query('SELECT * FROM users WHERE id = ?', [userId]);
+  const row = rows[0];
+  if (!row || row.deleted_at || !row.is_active) throw ApiError.forbidden('this account has been deactivated');
+
+  // Mint the trusted device BEFORE creating the session so a failure here doesn't leave a
+  // dangling session; the raw secret is returned once for the client to store.
+  const newDeviceToken = trustDevice ? await mintTrustedDevice(userId, ctx) : undefined;
+  await otp.consume(userId, 'login');
 
   const user = await publicUser(row);
   const sessionId = await createSession(user.id, ctx);
-  return { user, token: signToken(user, sessionId) };
+  const result = { user, token: signToken(user, sessionId) };
+  if (newDeviceToken) result.deviceToken = newDeviceToken;
+  return result;
+}
+
+// Re-send the login code without touching the password/lockout path (the challenge
+// already proves the password step passed). Respects the OTP resend cooldown.
+export async function resendLogin({ challengeToken } = {}) {
+  const userId = verifyLoginChallenge(challengeToken);
+  const { email, expiresInMinutes } = await otp.issue(userId, 'login');
+  return { sent: true, email, expiresInMinutes };
 }
 
 export async function getById(id) {
@@ -120,19 +270,80 @@ export async function getById(id) {
   return publicUser(rows[0]);
 }
 
-export async function updateProfile(userId, { name, email } = {}) {
+// Name-only. Email is intentionally NOT editable here — changing it requires the
+// OTP flow below, so this endpoint can't be used to bypass that verification.
+export async function updateProfile(userId, { name } = {}) {
   const nextName = String(name ?? '').trim();
-  const nextEmail = String(email ?? '').trim().toLowerCase();
   if (!nextName) throw ApiError.badRequest('name is required');
   if (nextName.length > 255) throw ApiError.badRequest('name is too long (max 255 characters)');
-  if (!nextEmail) throw ApiError.badRequest('email is required');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw ApiError.badRequest('enter a valid email address');
 
-  const existing = await query('SELECT id FROM users WHERE email = ? AND id <> ?', [nextEmail, userId]);
-  if (existing.length) throw ApiError.conflict('email already registered');
-
-  await query('UPDATE users SET name = ?, email = ? WHERE id = ?', [nextName, nextEmail, userId]);
+  await query('UPDATE users SET name = ? WHERE id = ?', [nextName, userId]);
   return getById(userId);
+}
+
+// ── Email-verified email change ──────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Step 1 — validate the requested new email, then email a code to the CURRENT address
+// (so a hijacked session can't silently move the account to an attacker's inbox). The
+// pending new email rides along in the code row's payload.
+export async function startEmailChange(userId, newEmail) {
+  const nextEmail = String(newEmail ?? '').trim().toLowerCase();
+  if (!nextEmail) throw ApiError.badRequest('enter the new email address');
+  if (!EMAIL_RE.test(nextEmail)) throw ApiError.badRequest('enter a valid email address');
+
+  const users = await query('SELECT email FROM users WHERE id = ?', [userId]);
+  const current = users[0];
+  if (!current) throw ApiError.unauthorized('not authenticated');
+  if (nextEmail === String(current.email).toLowerCase()) throw ApiError.badRequest('that is already your email address');
+
+  const taken = await query('SELECT id FROM users WHERE email = ? AND id <> ?', [nextEmail, userId]);
+  if (taken.length) throw ApiError.conflict('email already registered');
+
+  const res = await otp.issue(userId, 'email_change', { payload: { newEmail: nextEmail } });
+  return { sent: true, email: res.email, newEmail: nextEmail, expiresInMinutes: res.expiresInMinutes };
+}
+
+// Step 2 — verify the code and apply the change, re-checking uniqueness inside a
+// transaction (the target email could get taken during the 10-minute window).
+export async function completeEmailChange(userId, code) {
+  const { payload } = await otp.verify(userId, 'email_change', code);
+  const newEmail = String(payload?.newEmail ?? '').trim().toLowerCase();
+  if (!newEmail || !EMAIL_RE.test(newEmail)) throw ApiError.badRequest('no pending email change — start again');
+
+  const conn = await getConnection();
+  try {
+    await conn.beginTransaction();
+    const [taken] = await conn.query('SELECT id FROM users WHERE email = ? AND id <> ?', [newEmail, userId]);
+    if (taken.length) throw ApiError.conflict('email already registered');
+    const [rows] = await conn.query('SELECT email FROM users WHERE id = ?', [userId]);
+    const oldEmail = rows[0]?.email;
+    await conn.query('UPDATE users SET email = ? WHERE id = ?', [newEmail, userId]);
+    await conn.query('DELETE FROM auth_otp_codes WHERE user_id = ? AND purpose = ?', [userId, 'email_change']);
+    await conn.commit();
+    notifyEmailChanged(oldEmail, newEmail); // best-effort, fire-and-forget
+    return getById(userId);
+  } catch (err) {
+    await conn.rollback();
+    if (err && err.code === 'ER_DUP_ENTRY') throw ApiError.conflict('email already registered');
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// Courtesy "your email was changed" notice to the OLD address (best-effort — never
+// blocks the change, and stays quiet in dev where SMTP may be unconfigured).
+async function notifyEmailChanged(oldEmail, newEmail) {
+  if (!oldEmail) return;
+  const subject = 'Your pwise email address was changed';
+  const text = `The email address on your pwise account was just changed to ${newEmail}.\n\nIf this was you, no action is needed. If not, contact an administrator immediately.`;
+  const html = `<p>The email address on your pwise account was just changed to <strong>${newEmail}</strong>.</p><p>If this was you, no action is needed. If not, contact an administrator immediately.</p>`;
+  try {
+    await mail.sendMail({ to: oldEmail, subject, text, html });
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function updateAvatar(userId, { s3Key } = {}) {
@@ -213,12 +424,15 @@ export async function revokeSession(userId, sessionId) {
   return { revoked: res.affectedRows > 0 };
 }
 
-// Revoke every session EXCEPT the current one (log out of all other devices).
+// Revoke every session EXCEPT the current one (log out of all other devices). Also
+// clears device trust, so any lost/other device must pass the email OTP again next
+// login (the current session's token stays valid).
 export async function logoutOtherSessions(userId, currentSessionId) {
   await query(
     'UPDATE login_history SET revoked_at = NOW() WHERE user_id = ? AND id <> ? AND revoked_at IS NULL',
     [userId, Number(currentSessionId) || 0],
   );
+  await revokeTrustedDevices(userId);
   return { ok: true };
 }
 
@@ -247,17 +461,8 @@ export async function listSessions(userId, limit = 100) {
 const CODE_TTL_MIN = 10;
 const MAX_CODE_ATTEMPTS = 5;
 
-function generateCode() {
-  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'); // 6 digits
-}
-
-// "demo@example.com" -> "de***@example.com" (for a reassuring "sent to …" message).
-function maskEmail(email) {
-  const [user, domain] = String(email || '').split('@');
-  if (!domain) return email || '';
-  const head = user.length <= 2 ? user.slice(0, 1) : user.slice(0, 2);
-  return `${head}${'*'.repeat(3)}@${domain}`;
-}
+// Code generation + email masking are shared with the login/email-change OTP flows.
+const { generateCode, maskEmail } = otp;
 
 // Step 1 — verify the current password, then generate + email a one-time code.
 export async function startPasswordChange(userId, currentPassword) {
@@ -328,5 +533,7 @@ export async function completePasswordChange(userId, newPassword) {
   const hash = await bcrypt.hash(pw, 10);
   await query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId]);
   await query('DELETE FROM password_change_codes WHERE user_id = ?', [userId]);
+  // A new password invalidates device trust everywhere — every device must re-OTP.
+  await revokeTrustedDevices(userId);
   return { changed: true };
 }

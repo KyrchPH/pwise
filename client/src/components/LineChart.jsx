@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useId, useState } from 'react';
 
 // Dependency-free SVG line chart, styled like a fintech growth chart. Takes
 // points [{ period, value }] (period is 'YYYY-MM-DD', 'YYYY-MM', or an ISO
@@ -90,8 +90,9 @@ function smoothPath(pts) {
   return d;
 }
 
-export default function LineChart({ points = [], color = '#7c3aed' }) {
+export default function LineChart({ points = [], color = '#7c3aed', label = '' }) {
   const gradId = useId();
+  const [hover, setHover] = useState(null);
   if (!points.length) return null;
 
   const n = points.length;
@@ -176,7 +177,7 @@ export default function LineChart({ points = [], color = '#7c3aed' }) {
   const startY = y(points[0].value);
 
   return (
-    <svg className="linechart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Insights over time">
+    <svg className="linechart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Insights over time" onMouseLeave={() => setHover(null)}>
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.24" />
@@ -209,14 +210,49 @@ export default function LineChart({ points = [], color = '#7c3aed' }) {
 
       {n === 1 && <circle className="linechart__dot" cx={coords[0].x} cy={coords[0].y} r="4" style={{ fill: color }} />}
 
-      {n <= 90 &&
-        coords.map((c, i) => (
-          // Invisible hover targets standing in for the old dots: the line stays
-          // clean (like a fintech chart) but per-point tooltips still work.
-          <circle key={`h${i}`} className="linechart__hit" cx={c.x} cy={c.y} r="8">
-            <title>{`${tipLabel(i)}: ${points[i].value}`}</title>
-          </circle>
-        ))}
+      {/* Custom hover: a crosshair + highlighted dot + a floating tooltip at the point. */}
+      {hover != null && n > 1 && (() => {
+        const c = coords[hover];
+        const v = points[hover].value;
+        const dateLabel =
+          times[hover] != null
+            ? new Date(times[hover]).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+            : String(points[hover].period);
+        const valLabel = `${label ? `${label}: ` : ''}${Number(v).toLocaleString()}`;
+        const boxW = Math.min(240, Math.max(dateLabel.length, valLabel.length) * 6.4 + 22);
+        const boxH = 40;
+        let bx = Math.max(PAD_L, Math.min(c.x - boxW / 2, W - PAD_R - boxW));
+        let by = c.y - boxH - 12;
+        if (by < PAD_T) by = c.y + 12; // flip below when there's no room above
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            <line className="linechart__cross" x1={c.x} y1={PAD_T} x2={c.x} y2={PAD_T + INNER_H} />
+            <circle className="linechart__hover-dot" cx={c.x} cy={c.y} r="4.5" style={{ fill: color }} />
+            <rect className="linechart__tip" x={bx} y={by} width={boxW} height={boxH} rx="8" ry="8" />
+            <text className="linechart__tip-date" x={bx + 11} y={by + 16} fontSize="10.5">{dateLabel}</text>
+            <text className="linechart__tip-val" x={bx + 11} y={by + 31} fontSize="12">{valLabel}</text>
+          </g>
+        );
+      })()}
+
+      {/* Invisible full-height hover bands (one per point) so hovering anywhere in a
+          column selects that point. */}
+      {n > 1 &&
+        coords.map((c, i) => {
+          const left = i === 0 ? PAD_L : (coords[i - 1].x + c.x) / 2;
+          const right = i === n - 1 ? W - PAD_R : (c.x + coords[i + 1].x) / 2;
+          return (
+            <rect
+              key={`band${i}`}
+              x={left}
+              y={PAD_T}
+              width={Math.max(0, right - left)}
+              height={INNER_H}
+              fill="transparent"
+              onMouseEnter={() => setHover(i)}
+            />
+          );
+        })}
 
       {xTicks.map((tk, i) => {
         // Anchor the edge labels inward so they don't overflow the chart and clip.

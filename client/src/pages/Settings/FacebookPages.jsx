@@ -36,6 +36,55 @@ const RefreshIcon = () => (
   </svg>
 );
 
+// Monochrome line icons used in the settings-accordion headers (config sections,
+// as opposed to the coloured brand badges used for messaging channels).
+const iconProps = {
+  viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor',
+  strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+};
+const SparkleIcon = () => (
+  <svg {...iconProps}>
+    <path d="M12 3l1.9 4.9L19 9.8l-4.1 1.9L13 17l-1.9-5.3L6 9.8l4.1-1.9L12 3z" />
+    <path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8z" />
+  </svg>
+);
+const ChatIcon = () => (
+  <svg {...iconProps}>
+    <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+  </svg>
+);
+const HandoffIcon = () => (
+  <svg {...iconProps}>
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M2 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
+  </svg>
+);
+const DocIcon = () => (
+  <svg {...iconProps}>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="8" y1="13" x2="16" y2="13" />
+    <line x1="8" y1="17" x2="13" y2="17" />
+  </svg>
+);
+const StoreIcon = () => (
+  <svg {...iconProps}>
+    <path d="M3 9l1.5-5h15L21 9" />
+    <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
+    <path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+  </svg>
+);
+const ChartIcon = () => (
+  <svg {...iconProps}>
+    <line x1="4" y1="20" x2="20" y2="20" />
+    <rect x="6" y="12" width="3" height="6" rx="1" />
+    <rect x="11" y="8" width="3" height="10" rx="1" />
+    <rect x="16" y="4" width="3" height="14" rx="1" />
+  </svg>
+);
+
 // Small brand marks for the platforms a page is connected to.
 function FacebookLogo({ title = 'Facebook' }) {
   return (
@@ -126,6 +175,7 @@ const BLANK = {
   ai_prompt_general: '',
   comment_dm_default_message: '',
   live_agent_transfer_message: '',
+  order_terms: '',
   ai_defaults: null,
   // Business profile (contact / location / hours + per-channel links) the AI reads via get_page_info.
   business_profile: {
@@ -333,6 +383,7 @@ export default function FacebookPages({ embedded = false }) {
       currency: p.currency || 'PHP',
       comment_dm_default_message: p.comment_dm_default_message || '',
       live_agent_transfer_message: p.live_agent_transfer_message || '',
+      order_terms: p.order_terms || '',
       // Merge stored profile over the blank shape so every field is a controlled input
       // (links are merged separately so missing channels stay '' rather than undefined).
       business_profile: {
@@ -479,6 +530,7 @@ export default function FacebookPages({ embedded = false }) {
         // Default first message prefilled when messaging a commenter (Comment → DM).
         payload.comment_dm_default_message = editing.comment_dm_default_message ?? '';
         payload.live_agent_transfer_message = editing.live_agent_transfer_message ?? '';
+        payload.order_terms = editing.order_terms ?? '';
       }
       // Messaging-analytics thresholds (admin-only; existing pages). Minutes → seconds;
       // the server clamps to sane ranges.
@@ -581,10 +633,13 @@ export default function FacebookPages({ embedded = false }) {
             </div>
           )}
 
+          <div className="set-group">
+            <div className="set-group__label">Messaging channels</div>
           {/* Optional Telegram bot attached to this page. */}
           <details className="set-acc">
             <summary className="set-acc__head">
-              <span className="set-acc__title">Telegram bot <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__icon"><TelegramLogo /></span>
+              <span className="set-acc__title"><span className="set-acc__label">Telegram bot</span> <span className="set-acc__opt">optional</span></span>
               <span className="set-acc__status">
                 {editing.telegram_remove ? 'Will be removed' : editing.telegram_has ? `@${editing.telegram_username || 'connected'}` : 'Not set'}
               </span>
@@ -629,7 +684,8 @@ export default function FacebookPages({ embedded = false }) {
           {/* Optional Instagram channel — replies reuse this page's access token. */}
           <details className="set-acc">
             <summary className="set-acc__head">
-              <span className="set-acc__title">Instagram <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__icon"><InstagramLogo /></span>
+              <span className="set-acc__title"><span className="set-acc__label">Instagram</span> <span className="set-acc__opt">optional</span></span>
               <span className="set-acc__status">
                 {editing.instagram_remove ? 'Will be removed' : editing.instagram_account_id ? 'Linked' : 'Not set'}
               </span>
@@ -667,7 +723,8 @@ export default function FacebookPages({ embedded = false }) {
           {/* Optional WhatsApp channel — its own Cloud-API token. */}
           <details className="set-acc">
             <summary className="set-acc__head">
-              <span className="set-acc__title">WhatsApp <span className="set-acc__opt">optional</span></span>
+              <span className="set-acc__icon"><WhatsappLogo /></span>
+              <span className="set-acc__title"><span className="set-acc__label">WhatsApp</span> <span className="set-acc__opt">optional</span></span>
               <span className="set-acc__status">
                 {editing.whatsapp_remove ? 'Will be removed' : editing.whatsapp_has || editing.wa_phone_number_id ? 'Connected' : 'Not set'}
               </span>
@@ -714,223 +771,259 @@ export default function FacebookPages({ embedded = false }) {
               )}
             </div>
           </details>
+          </div>
 
-          {/* Per-page AI assistant prompts — admin only; all three required to connect/save. */}
+          {/* AI assistant — reply prompts, business knowledge, and automatic messages. Admin only. */}
           {isAdmin && (
-            <details className="set-acc" open>
-              <summary className="set-acc__head">
-                <span className="set-acc__title">AI Assistant prompts</span>
-                <span className="set-acc__status">required</span>
-              </summary>
-              <div className="set-acc__body">
-              <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
-                How this page&apos;s AI replies for each intent. Pre-filled with sensible defaults — edit them for this
-                business. All three are required. The tool-grounding, human-handoff, and formatting rules are always
-                enforced on top and can&apos;t be removed here.
-              </div>
-              {[
-                { role: 'sales', label: 'Sales agent' },
-                { role: 'support', label: 'Support agent' },
-                { role: 'general', label: 'General inquiry agent' },
-              ].map(({ role, label }) => {
-                const key = `ai_prompt_${role}`;
-                const def = editing.ai_defaults?.[role] || '';
-                const isDefault = !!def && editing[key]?.trim() === def.trim();
-                return (
-                  <Field key={role} label={label} hint={isDefault ? 'default' : 'custom'}>
+            <div className="set-group">
+              <div className="set-group__label">AI assistant</div>
+
+              {/* Per-page AI assistant prompts — all three required to connect/save. */}
+              <details className="set-acc" open>
+                <summary className="set-acc__head">
+                  <span className="set-acc__icon set-acc__icon--mono"><SparkleIcon /></span>
+                  <span className="set-acc__title"><span className="set-acc__label">Reply prompts</span></span>
+                  <span className="set-acc__req">required</span>
+                </summary>
+                <div className="set-acc__body">
+                  <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                    How this page&apos;s AI replies for each intent. Pre-filled with sensible defaults — edit them for this
+                    business. All three are required. The tool-grounding, human-handoff, and formatting rules are always
+                    enforced on top and can&apos;t be removed here.
+                  </div>
+                  {[
+                    { role: 'sales', label: 'Sales agent' },
+                    { role: 'support', label: 'Support agent' },
+                    { role: 'general', label: 'General inquiry agent' },
+                  ].map(({ role, label }) => {
+                    const key = `ai_prompt_${role}`;
+                    const def = editing.ai_defaults?.[role] || '';
+                    const isDefault = !!def && editing[key]?.trim() === def.trim();
+                    return (
+                      <Field key={role} label={label} hint={isDefault ? 'default' : 'custom'}>
+                        <textarea
+                          className="input"
+                          rows={7}
+                          value={editing[key]}
+                          onChange={setAiField(key)}
+                          placeholder="Describe how this agent should behave…"
+                        />
+                        {def && !isDefault && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            style={{ marginTop: 4 }}
+                            onClick={() => setEditing((ed) => ({ ...ed, [key]: def }))}
+                          >
+                            Reset to default
+                          </Button>
+                        )}
+                      </Field>
+                    );
+                  })}
+                </div>
+              </details>
+
+              {/* Business profile + channel links — the knowledge the AI reads via get_page_info. */}
+              <details className="set-acc">
+                <summary className="set-acc__head">
+                  <span className="set-acc__icon set-acc__icon--mono"><StoreIcon /></span>
+                  <span className="set-acc__title"><span className="set-acc__label">Business info</span> <span className="set-acc__opt">for the AI</span></span>
+                </summary>
+                <div className="set-acc__body">
+                  <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                    Contact, location, and hours for this page. The AI assistant reads these to answer &ldquo;where are
+                    you?&rdquo;, &ldquo;what are your hours?&rdquo;, and &ldquo;how do I contact you?&rdquo; — so it never
+                    guesses. All optional; leave a field blank to skip it.
+                  </div>
+                  <Field label="Address / Location">
                     <textarea
                       className="input"
-                      rows={7}
-                      value={editing[key]}
-                      onChange={setAiField(key)}
-                      placeholder="Describe how this agent should behave…"
+                      rows={2}
+                      value={editing.business_profile?.address || ''}
+                      onChange={setBpField('address')}
+                      placeholder="Blk 30 Lot 2 Rosal Street, TS Cruz subd., Almanza Dos, Las Piñas City"
                     />
-                    {def && !isDefault && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        style={{ marginTop: 4 }}
-                        onClick={() => setEditing((ed) => ({ ...ed, [key]: def }))}
-                      >
-                        Reset to default
-                      </Button>
-                    )}
                   </Field>
-                );
-              })}
-              </div>
-            </details>
-          )}
-
-          {/* Comment → DM default message — admin only. */}
-          {isAdmin && (
-            <details className="set-acc">
-              <summary className="set-acc__head">
-                <span className="set-acc__title">Comment → DM default message <span className="set-acc__opt">optional</span></span>
-              </summary>
-              <div className="set-acc__body">
-                <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
-                  When an agent clicks Message on someone who commented on a post, the chat composer opens prefilled with
-                  this message. Leave it blank to open an empty composer.
-                </div>
-                <Field label="Default first message" hint="optional">
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={editing.comment_dm_default_message}
-                    onChange={(e) => setEditing((ed) => ({ ...ed, comment_dm_default_message: e.target.value }))}
-                    placeholder="Hi! Thanks for your comment 😊 How can we help?"
-                  />
-                </Field>
-              </div>
-            </details>
-          )}
-
-          {/* Live-agent transfer message — admin only. */}
-          {isAdmin && (
-            <details className="set-acc">
-              <summary className="set-acc__head">
-                <span className="set-acc__title">Live-agent transfer message <span className="set-acc__opt">optional</span></span>
-              </summary>
-              <div className="set-acc__body">
-                <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
-                  When the AI hands a conversation to a live agent, the app automatically sends the customer this
-                  message, then the AI stops replying. Leave it blank to use the default.
-                </div>
-                <Field label="Message sent on transfer" hint="optional">
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={editing.live_agent_transfer_message}
-                    onChange={(e) => setEditing((ed) => ({ ...ed, live_agent_transfer_message: e.target.value }))}
-                    placeholder="Let me connect you with a live agent who can better assist you. 🙌 Please hold on."
-                  />
-                </Field>
-              </div>
-            </details>
-          )}
-
-          {/* Business profile + channel links — admin only. */}
-          {isAdmin && (
-            <details className="set-acc">
-              <summary className="set-acc__head">
-                <span className="set-acc__title">Business info <span className="set-acc__opt">for the AI assistant</span></span>
-              </summary>
-              <div className="set-acc__body">
-              <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
-                Contact, location, and hours for this page. The AI assistant reads these to answer &ldquo;where are
-                you?&rdquo;, &ldquo;what are your hours?&rdquo;, and &ldquo;how do I contact you?&rdquo; — so it never
-                guesses. All optional; leave a field blank to skip it.
-              </div>
-              <Field label="Address / Location">
-                <textarea
-                  className="input"
-                  rows={2}
-                  value={editing.business_profile?.address || ''}
-                  onChange={setBpField('address')}
-                  placeholder="Blk 30 Lot 2 Rosal Street, TS Cruz subd., Almanza Dos, Las Piñas City"
-                />
-              </Field>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <Field label="Phone">
-                  <input className="input" value={editing.business_profile?.phone || ''} onChange={setBpField('phone')} placeholder="(+63) 939-263-6354" />
-                </Field>
-                <Field label="Viber / WhatsApp">
-                  <input className="input" value={editing.business_profile?.viber || ''} onChange={setBpField('viber')} placeholder="09392636354" />
-                </Field>
-                <Field label="Email">
-                  <input className="input" value={editing.business_profile?.email || ''} onChange={setBpField('email')} placeholder="hello@example.com" />
-                </Field>
-                <Field label="Website">
-                  <input className="input" value={editing.business_profile?.website || ''} onChange={setBpField('website')} placeholder="https://example.com" />
-                </Field>
-              </div>
-              <Field label="Operating hours">
-                <input className="input" value={editing.business_profile?.hours || ''} onChange={setBpField('hours')} placeholder="Monday to Sunday — 7:00 am to 5:00 pm" />
-              </Field>
-              <Field label="Other details" hint="anything else the AI should know about the business">
-                <textarea
-                  className="input"
-                  rows={2}
-                  value={editing.business_profile?.notes || ''}
-                  onChange={setBpField('notes')}
-                  placeholder="Landmarks, parking, branches, payment methods…"
-                />
-              </Field>
-
-              {/* Per-channel links — optional store / social URLs the AI shares on request. */}
-              <div className="text-sm" style={{ fontWeight: 600, margin: '10px 0 2px' }}>Channel &amp; store links</div>
-              <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
-                Optional. The AI shares these when a customer asks for your page or store (e.g. &ldquo;send me your
-                Shopee&rdquo;). Paste the full URL; leave blank to skip.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {[
-                  { ch: 'facebook', label: 'Facebook / Messenger', ph: 'https://facebook.com/yourpage' },
-                  { ch: 'telegram', label: 'Telegram', ph: 'https://t.me/yourhandle' },
-                  { ch: 'instagram', label: 'Instagram', ph: 'https://instagram.com/yourhandle' },
-                  { ch: 'shopee', label: 'Shopee', ph: 'https://shopee.ph/yourshop' },
-                  { ch: 'tiktok', label: 'TikTok', ph: 'https://tiktok.com/@yourhandle' },
-                  { ch: 'lazada', label: 'Lazada', ph: 'https://lazada.com.ph/shop/yourshop' },
-                ].map(({ ch, label, ph }) => (
-                  <Field key={ch} label={label}>
-                    <input
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <Field label="Phone">
+                      <input className="input" value={editing.business_profile?.phone || ''} onChange={setBpField('phone')} placeholder="(+63) 939-263-6354" />
+                    </Field>
+                    <Field label="Viber / WhatsApp">
+                      <input className="input" value={editing.business_profile?.viber || ''} onChange={setBpField('viber')} placeholder="09392636354" />
+                    </Field>
+                    <Field label="Email">
+                      <input className="input" value={editing.business_profile?.email || ''} onChange={setBpField('email')} placeholder="hello@example.com" />
+                    </Field>
+                    <Field label="Website">
+                      <input className="input" value={editing.business_profile?.website || ''} onChange={setBpField('website')} placeholder="https://example.com" />
+                    </Field>
+                  </div>
+                  <Field label="Operating hours">
+                    <input className="input" value={editing.business_profile?.hours || ''} onChange={setBpField('hours')} placeholder="Monday to Sunday — 7:00 am to 5:00 pm" />
+                  </Field>
+                  <Field label="Other details" hint="anything else the AI should know about the business">
+                    <textarea
                       className="input"
-                      value={editing.business_profile?.links?.[ch] || ''}
-                      onChange={setLinkField(ch)}
-                      placeholder={ph}
+                      rows={2}
+                      value={editing.business_profile?.notes || ''}
+                      onChange={setBpField('notes')}
+                      placeholder="Landmarks, parking, branches, payment methods…"
                     />
                   </Field>
-                ))}
-              </div>
-              </div>
-            </details>
+
+                  {/* Per-channel links — optional store / social URLs the AI shares on request. */}
+                  <div className="text-sm" style={{ fontWeight: 600, margin: '10px 0 2px' }}>Channel &amp; store links</div>
+                  <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                    Optional. The AI shares these when a customer asks for your page or store (e.g. &ldquo;send me your
+                    Shopee&rdquo;). Paste the full URL; leave blank to skip.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {[
+                      { ch: 'facebook', label: 'Facebook / Messenger', ph: 'https://facebook.com/yourpage' },
+                      { ch: 'telegram', label: 'Telegram', ph: 'https://t.me/yourhandle' },
+                      { ch: 'instagram', label: 'Instagram', ph: 'https://instagram.com/yourhandle' },
+                      { ch: 'shopee', label: 'Shopee', ph: 'https://shopee.ph/yourshop' },
+                      { ch: 'tiktok', label: 'TikTok', ph: 'https://tiktok.com/@yourhandle' },
+                      { ch: 'lazada', label: 'Lazada', ph: 'https://lazada.com.ph/shop/yourshop' },
+                    ].map(({ ch, label, ph }) => (
+                      <Field key={ch} label={label}>
+                        <input
+                          className="input"
+                          value={editing.business_profile?.links?.[ch] || ''}
+                          onChange={setLinkField(ch)}
+                          placeholder={ph}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+                </div>
+              </details>
+
+              {/* Comment → DM default message. */}
+              <details className="set-acc">
+                <summary className="set-acc__head">
+                  <span className="set-acc__icon set-acc__icon--mono"><ChatIcon /></span>
+                  <span className="set-acc__title"><span className="set-acc__label">Comment → DM message</span> <span className="set-acc__opt">optional</span></span>
+                </summary>
+                <div className="set-acc__body">
+                  <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                    When an agent clicks Message on someone who commented on a post, the chat composer opens prefilled with
+                    this message. Leave it blank to open an empty composer.
+                  </div>
+                  <Field label="Default first message" hint="optional">
+                    <textarea
+                      className="input"
+                      rows={3}
+                      value={editing.comment_dm_default_message}
+                      onChange={(e) => setEditing((ed) => ({ ...ed, comment_dm_default_message: e.target.value }))}
+                      placeholder="Hi! Thanks for your comment 😊 How can we help?"
+                    />
+                  </Field>
+                </div>
+              </details>
+
+              {/* Live-agent transfer message. */}
+              <details className="set-acc">
+                <summary className="set-acc__head">
+                  <span className="set-acc__icon set-acc__icon--mono"><HandoffIcon /></span>
+                  <span className="set-acc__title"><span className="set-acc__label">Live-agent transfer message</span> <span className="set-acc__opt">optional</span></span>
+                </summary>
+                <div className="set-acc__body">
+                  <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                    When the AI hands a conversation to a live agent, the app automatically sends the customer this
+                    message, then the AI stops replying. Leave it blank to use the default.
+                  </div>
+                  <Field label="Message sent on transfer" hint="optional">
+                    <textarea
+                      className="input"
+                      rows={3}
+                      value={editing.live_agent_transfer_message}
+                      onChange={(e) => setEditing((ed) => ({ ...ed, live_agent_transfer_message: e.target.value }))}
+                      placeholder="Let me connect you with a live agent who can better assist you. 🙌 Please hold on."
+                    />
+                  </Field>
+                </div>
+              </details>
+            </div>
           )}
 
-          {/* Currency + messaging analytics — admin only, existing pages. */}
-          {isAdmin && editing.id && (
-            <details className="set-acc">
-              <summary className="set-acc__head">
-                <span className="set-acc__title">Currency &amp; messaging analytics</span>
-                <span className="set-acc__status">{editing.currency || 'PHP'}</span>
-              </summary>
-              <div className="set-acc__body">
-              <Field label="Currency" hint="used to format product prices">
-                <select
-                  className="input"
-                  value={editing.currency}
-                  onChange={(e) => setEditing((ed) => ({ ...ed, currency: e.target.value }))}
-                >
-                  {CURRENCIES.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <div className="text-sm text-muted" style={{ margin: '14px 0 8px' }}>
-                Thresholds for this page&apos;s live-agent response metrics (CRR / FRT / ART) in the inbox rail. CRR counts
-                customer chats answered within the window; FRT/ART score the average reply time against the target.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <Field label="Measurement period (days)">
-                  <input className="input" type="number" min="1" max="365" value={editing.an_periodDays} onChange={setAiField('an_periodDays')} />
-                </Field>
-                <Field label="CRR window (hours)">
-                  <input className="input" type="number" min="1" max="720" value={editing.an_crrHours} onChange={setAiField('an_crrHours')} />
-                </Field>
-                <Field label="FRT target (minutes)">
-                  <input className="input" type="number" min="1" max="1440" value={editing.an_frtMin} onChange={setAiField('an_frtMin')} />
-                </Field>
-                <Field label="ART target (minutes)">
-                  <input className="input" type="number" min="1" max="1440" value={editing.an_artMin} onChange={setAiField('an_artMin')} />
-                </Field>
-              </div>
-              </div>
-            </details>
+          {/* Store & orders — order paperwork and currency / inbox metrics. Admin only. */}
+          {isAdmin && (
+            <div className="set-group">
+              <div className="set-group__label">Store &amp; orders</div>
+
+              {/* Shop order terms & conditions. */}
+              <details className="set-acc">
+                <summary className="set-acc__head">
+                  <span className="set-acc__icon set-acc__icon--mono"><DocIcon /></span>
+                  <span className="set-acc__title"><span className="set-acc__label">Order terms &amp; conditions</span> <span className="set-acc__opt">optional</span></span>
+                </summary>
+                <div className="set-acc__body">
+                  <div className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                    Shown to the customer on every order confirmation for this page, above the sworn statement. A copy is
+                    snapshotted onto each confirmation when it's generated, so later edits don't change already-sent orders.
+                    Leave it blank to show no terms.
+                  </div>
+                  <Field label="Terms &amp; conditions" hint="optional">
+                    <textarea
+                      className="input"
+                      rows={5}
+                      value={editing.order_terms}
+                      onChange={(e) => setEditing((ed) => ({ ...ed, order_terms: e.target.value }))}
+                      placeholder={'e.g. All sales are final. Delivery within 3–5 business days. Items must be inspected on receipt.'}
+                    />
+                  </Field>
+                </div>
+              </details>
+
+              {/* Currency + messaging analytics — existing pages only. */}
+              {editing.id && (
+                <details className="set-acc">
+                  <summary className="set-acc__head">
+                    <span className="set-acc__icon set-acc__icon--mono"><ChartIcon /></span>
+                    <span className="set-acc__title"><span className="set-acc__label">Currency &amp; messaging analytics</span></span>
+                    <span className="set-acc__status">{editing.currency || 'PHP'}</span>
+                  </summary>
+                  <div className="set-acc__body">
+                    <Field label="Currency" hint="used to format product prices">
+                      <select
+                        className="input"
+                        value={editing.currency}
+                        onChange={(e) => setEditing((ed) => ({ ...ed, currency: e.target.value }))}
+                      >
+                        {CURRENCIES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <div className="text-sm text-muted" style={{ margin: '14px 0 8px' }}>
+                      Thresholds for this page&apos;s live-agent response metrics (CRR / FRT / ART) in the inbox rail. CRR counts
+                      customer chats answered within the window; FRT/ART score the average reply time against the target.
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <Field label="Measurement period (days)">
+                        <input className="input" type="number" min="1" max="365" value={editing.an_periodDays} onChange={setAiField('an_periodDays')} />
+                      </Field>
+                      <Field label="CRR window (hours)">
+                        <input className="input" type="number" min="1" max="720" value={editing.an_crrHours} onChange={setAiField('an_crrHours')} />
+                      </Field>
+                      <Field label="FRT target (minutes)">
+                        <input className="input" type="number" min="1" max="1440" value={editing.an_frtMin} onChange={setAiField('an_frtMin')} />
+                      </Field>
+                      <Field label="ART target (minutes)">
+                        <input className="input" type="number" min="1" max="1440" value={editing.an_artMin} onChange={setAiField('an_artMin')} />
+                      </Field>
+                    </div>
+                  </div>
+                </details>
+              )}
+            </div>
           )}
 
-          <div className="row gap-sm" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="ct-form__foot row gap-sm">
             <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
               Cancel
             </Button>
@@ -1040,7 +1133,7 @@ export default function FacebookPages({ embedded = false }) {
       )}
 
       {!editing && (
-        <div className="row gap-sm" style={{ flexWrap: 'wrap', marginTop: 16, justifyContent: 'flex-start' }}>
+        <div className="row gap-sm" style={{ flexWrap: 'wrap', marginTop: 16, justifyContent: 'flex-end' }}>
           {isAdmin && (
             <Button size="sm" className="btn--flat" onClick={startFacebookConnect} disabled={fbBusy}>
               {fbBusy ? 'Connecting…' : 'Connect with Facebook'}

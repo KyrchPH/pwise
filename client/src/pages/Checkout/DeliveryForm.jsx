@@ -65,7 +65,7 @@ export default function DeliveryForm({ onSubmit, onBack, submitting = false }) {
 
       <div className="checkout-details__actions">
         <Button type="button" variant="subtle" onClick={onBack} disabled={submitting}>Back</Button>
-        <Button type="submit" variant="primary" disabled={submitting}>{submitting ? 'Generating…' : 'Generate agreement'}</Button>
+        <Button type="submit" variant="primary" className="btn--flat" disabled={submitting}>{submitting ? 'Generating…' : 'Generate Order Request'}</Button>
       </div>
     </form>
   );

@@ -41,6 +41,11 @@ export const softDelete = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+export const unlockAccount = asyncHandler(async (req, res) => {
+  const result = await admin.unlockAccount(req.params.id);
+  sendSuccess(res, result);
+});
+
 export const setModuleAccess = asyncHandler(async (req, res) => {
   if (Number(req.params.id) === req.user.id) throw ApiError.badRequest("you can't change your own access");
   const result = await admin.setModuleAccess(req.params.id, req.body?.modules);

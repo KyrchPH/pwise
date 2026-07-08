@@ -2,14 +2,26 @@ import { query } from '../config/db.js';
 import { APP_MODULES, moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
-// All accounts for the admin Accounts tab (password hash never exposed).
+// All accounts for the admin Accounts tab (password hash never exposed). locked_until +
+// failed_login_attempts drive the "Locked" badge and the Unlock action.
 export async function listUsers() {
   const rows = await query(
-    `SELECT id, name, email, role, is_active, deleted_at, created_at, module_access
+    `SELECT id, name, email, role, is_active, deleted_at, created_at, module_access,
+            locked_until, failed_login_attempts
      FROM users
      ORDER BY created_at DESC`,
   );
   return rows.map((row) => ({ ...row, module_access: moduleAccessForUser(row) }));
+}
+
+// Clear a brute-force lockout (and its counter) so the account can log in again.
+export async function unlockAccount(id) {
+  const res = await query(
+    'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ? AND deleted_at IS NULL',
+    [id],
+  );
+  if (!res.affectedRows) throw ApiError.notFound('user not found (or already deleted)');
+  return { id: Number(id), unlocked: true };
 }
 
 export async function setActive(id, active) {

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import asyncHandler from '../utils/asyncHandler.js';
 import { env } from '../config/env.js';
 import * as gateway from '../services/inbound_gateway.service.js';
+import { handleFeedEvent } from '../services/comment_realtime.service.js';
 
 // Public inbound webhooks from messaging platforms (no JWT — each platform verifies
 // itself). The page is identified by the ?accountId tag we registered per bot.
@@ -73,8 +74,11 @@ export const messenger = asyncHandler(async (req, res) => {
   // hit. One-line summary always prints; full payload is dev-only.
   const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
   const events = entries.reduce((n, e) => n + (Array.isArray(e.messaging) ? e.messaging.length : 0), 0);
+  // `feed` comment events arrive under entry[].changes[] (not messaging[]) — count them
+  // too so their arrival is visible in production logs (where full payloads aren't printed).
+  const changes = entries.reduce((n, e) => n + (Array.isArray(e.changes) ? e.changes.length : 0), 0);
   console.log(
-    `[webhooks:messenger] update received object=${req.body?.object ?? '?'} entries=${entries.length} events=${events}`,
+    `[webhooks:messenger] update received object=${req.body?.object ?? '?'} entries=${entries.length} events=${events} changes=${changes}`,
   );
   if (env.nodeEnv === 'development') {
     console.log(`[webhooks:messenger] payload\n${JSON.stringify(req.body ?? {}, null, 2)}`);
@@ -88,6 +92,9 @@ export const messenger = asyncHandler(async (req, res) => {
   gateway
     .handleMessengerEvent(req.body || {})
     .catch((e) => console.warn(`[webhooks] messenger handler error: ${e?.message || e}`));
+  // The same page webhook also carries `feed` changes (comments) under entry[].changes[];
+  // push new/removed comments to the live Comments inbox over SSE.
+  handleFeedEvent(req.body || {}).catch((e) => console.warn(`[webhooks] feed handler error: ${e?.message || e}`));
 });
 
 // Instagram messaging inbound (POST). Same envelope as Messenger (object:"instagram",

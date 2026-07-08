@@ -35,6 +35,12 @@ export async function setDate(id, note_date) {
   return data.data.note;
 }
 
+// Re-tag a note's owning page (the page-picker override). null/'' clears the tag.
+export async function setPage(id, page_id) {
+  const { data } = await api.patch(`/content-notes/${id}/page`, { page_id });
+  return data.data.note;
+}
+
 // Persist a day's note order. `ids` is the note ids top-to-bottom. Returns the
 // day's notes in the saved order.
 export async function reorder(date, ids) {

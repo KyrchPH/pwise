@@ -6,5 +6,6 @@ const router = Router();
 
 router.use(requireAuth);
 router.get('/overview', ctrl.overview); // ?range=<days>
+router.get('/insights', ctrl.insights); // ?range=<days> — Performance card model
 
 export default router;

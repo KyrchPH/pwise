@@ -49,6 +49,8 @@ function toSafe(r) {
     comment_dm_default_message: r.comment_dm_default_message || '',
     // Message the app sends the customer when the AI hands the chat to a live agent. '' = default used.
     live_agent_transfer_message: r.live_agent_transfer_message || '',
+    // Shop terms & conditions snapshotted onto each order agreement. '' = none shown.
+    order_terms: r.order_terms || '',
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -415,6 +417,11 @@ export async function update(id, data = {}) {
   // Message the app sends when the AI transfers a chat to a live agent. Empty → NULL (default used).
   if (data.live_agent_transfer_message !== undefined) {
     set('live_agent_transfer_message', String(data.live_agent_transfer_message ?? '').trim() || null);
+  }
+
+  // Shop terms & conditions snapshotted onto each order agreement. Empty → NULL (none shown).
+  if (data.order_terms !== undefined) {
+    set('order_terms', String(data.order_terms ?? '').trim().slice(0, 8000) || null);
   }
 
   // Display currency (ISO 4217, 3 letters). Anything else → Peso.

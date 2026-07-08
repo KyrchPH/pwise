@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
@@ -12,6 +12,23 @@ const fmtDate = (d) =>
   d ? new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
 
 const STATUS_OPTIONS = [{ value: 'all', label: 'All statuses' }, ...ORDER_STATUSES.map((s) => ({ value: s, label: ORDER_STATUS_LABELS[s] }))];
+
+const PAGE_SIZE = 10;
+
+// Page numbers to show, collapsing long runs to an ellipsis (e.g. 1 … 4 5 6 … 20).
+function pageWindow(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const wanted = [1, total, current, current - 1, current + 1].filter((p) => p >= 1 && p <= total);
+  const sorted = [...new Set(wanted)].sort((a, b) => a - b);
+  const out = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) out.push('…');
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
 
 function StatusBadge({ status }) {
   return <span className={`order-badge order-badge--${status}`}>{ORDER_STATUS_LABELS[status] || status}</span>;
@@ -46,6 +63,15 @@ export default function OrdersPage() {
   const filtered = orders.filter(
     (o) => (statusFilter === 'all' || o.status === statusFilter) && (ownerFilter === 'all' || String(o.createdBy) === ownerFilter),
   );
+
+  // Client-side pagination. Reset to page 1 whenever the filters or the active page change.
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [statusFilter, ownerFilter, activeId]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const rangeStart = filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(safePage * PAGE_SIZE, filtered.length);
 
   const changeStatus = async (id, status) => {
     setSavingId(id);
@@ -91,12 +117,12 @@ export default function OrdersPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <Card className="card--pad mt-lg">
+        <Card className="orders-panel orders-panel--empty card--pad mt-lg">
           <EmptyState icon="🧾" title="No orders yet" message="Confirmed order agreements will appear here." />
         </Card>
       ) : (
-        <Card className="card--pad mt-lg">
-          <div className="table-wrap">
+        <Card className="orders-panel card--pad mt-lg">
+          <div className="table-wrap table-wrap--menu orders-panel__body">
             <table className="table table--stack orders-table">
               <thead>
                 <tr>
@@ -111,7 +137,7 @@ export default function OrdersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((o) => (
+                {pageItems.map((o) => (
                   <tr key={o.id}>
                     <td data-label="Order"><strong>#{o.id}</strong></td>
                     <td data-label="Customer" className="cell-truncate">{o.customerName}</td>
@@ -138,6 +164,30 @@ export default function OrdersPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="orders-pager">
+            <span className="orders-pager__info">
+              {rangeStart}–{rangeEnd} of {filtered.length} {filtered.length === 1 ? 'order' : 'orders'}
+            </span>
+            <div className="orders-pager__controls">
+              <button type="button" className="orders-pager__btn" onClick={() => setPage(safePage - 1)} disabled={safePage <= 1} aria-label="Previous page">‹</button>
+              {pageWindow(safePage, totalPages).map((p, i) =>
+                p === '…' ? (
+                  <span key={`gap-${i}`} className="orders-pager__ellipsis">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`orders-pager__btn${p === safePage ? ' is-active' : ''}`}
+                    onClick={() => setPage(p)}
+                    aria-current={p === safePage ? 'page' : undefined}
+                  >
+                    {p}
+                  </button>
+                ),
+              )}
+              <button type="button" className="orders-pager__btn" onClick={() => setPage(safePage + 1)} disabled={safePage >= totalPages} aria-label="Next page">›</button>
+            </div>
           </div>
         </Card>
       )}

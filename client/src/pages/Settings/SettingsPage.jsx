@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import * as settingsService from '../../services/settings.service.js';
 import { apiError } from '../../services/api.js';
 import env from '../../config/env.js';
@@ -24,51 +24,14 @@ const TIMEZONES = [
   'Australia/Sydney',
 ];
 
-function NavIco({ children }) {
-  return (
-    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {children}
-    </svg>
-  );
-}
-const NAV_ICONS = {
-  posting: (
-    <NavIco>
-      <circle cx="12" cy="12" r="9" />
-      <polyline points="12 7 12 12 15 14" />
-    </NavIco>
-  ),
-  pages: (
-    <NavIco>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </NavIco>
-  ),
-  templates: (
-    <NavIco>
-      <rect x="2" y="3" width="20" height="18" rx="2" />
-      <line x1="7" y1="3" x2="7" y2="21" />
-      <line x1="17" y1="3" x2="17" y2="21" />
-      <line x1="2" y1="9" x2="22" y2="9" />
-      <line x1="2" y1="15" x2="22" y2="15" />
-    </NavIco>
-  ),
-  automation: (
-    <NavIco>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </NavIco>
-  ),
-};
-
 export default function SettingsPage() {
   const toast = useToast();
   const { isAdmin } = useAuth();
   const { hash } = useLocation();
+  const [searchParams] = useSearchParams();
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [active, setActive] = useState('posting'); // selected settings section
 
   useEffect(() => {
     settingsService
@@ -85,12 +48,6 @@ export default function SettingsPage() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Deep-link from the page switcher's "Update"/"Add page" → open the Pages tab
-  // (FacebookPages then scrolls/highlights itself via the same hash).
-  useEffect(() => {
-    if (hash === '#facebook-pages' && isAdmin) setActive('pages');
-  }, [hash, isAdmin]);
 
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
 
@@ -118,13 +75,14 @@ export default function SettingsPage() {
 
   const tzOptions = TIMEZONES.includes(form.timezone) ? TIMEZONES : [form.timezone, ...TIMEZONES];
 
-  // Nav sections (some are conditional on role / feature flags).
-  const navItems = [
-    { id: 'posting', label: 'Posting' },
-    ...(isAdmin ? [{ id: 'pages', label: 'Pages' }] : []),
-    ...(env.templatesEnabled ? [{ id: 'templates', label: 'Templates' }] : []),
-    ...(isAdmin ? [{ id: 'automation', label: 'Automation' }] : []),
+  const requestedSection = hash === '#facebook-pages' ? 'pages' : searchParams.get('section') || 'posting';
+  const availableSections = [
+    'posting',
+    ...(isAdmin ? ['pages'] : []),
+    ...(env.templatesEnabled ? ['templates'] : []),
+    ...(isAdmin ? ['automation'] : []),
   ];
+  const active = availableSections.includes(requestedSection) ? requestedSection : 'posting';
 
   return (
     <>
@@ -135,26 +93,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <div className="settings-layout">
-        {/* Container 1 — section navigation. */}
-        <Card className="settings-nav">
-          <nav className="settings-nav__list" aria-label="Settings sections">
-            {navItems.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className={`settings-nav__item${active === it.id ? ' is-active' : ''}`}
-                aria-current={active === it.id ? 'page' : undefined}
-                onClick={() => setActive(it.id)}
-              >
-                <span className="settings-nav__icon">{NAV_ICONS[it.id]}</span>
-                <span>{it.label}</span>
-              </button>
-            ))}
-          </nav>
-        </Card>
-
-        {/* Container 2 — the active section's options. */}
+      <div className="settings-layout settings-layout--single">
         <Card className="card--pad settings-content">
           {active === 'posting' && (
             <form onSubmit={save}>

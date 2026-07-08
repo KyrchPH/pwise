@@ -40,6 +40,16 @@ const fmtDateShort = (d) => new Date(d).toLocaleDateString(undefined, { month: '
 const fmtDateTime = (d) =>
   new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// jsPDF's standard fonts (Helvetica) only render WinAnsi/Latin-1, so emoji and fancy
+// Unicode letters come out as garbage. Fold compatible forms to plain text (𝐋 → L,
+// fullwidth → ASCII, é stays é) and drop anything outside Latin-1 (emoji, CJK, …).
+const pdfSafe = (s) =>
+  String(s ?? '')
+    .normalize('NFKC')
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
 // A period string ('YYYY-MM-DD' | 'YYYY-MM' | ISO hour) → short axis label.
 function labelForPeriod(period) {
   const s = String(period);
@@ -47,11 +57,12 @@ function labelForPeriod(period) {
   return Number.isNaN(d.getTime()) ? s : fmtDateShort(d);
 }
 
-// Load /logo.png as a data URL (+ its natural size) for the header. Best-effort —
-// returns null on any failure so the report still renders with a text wordmark.
-export async function loadLogo() {
+// Load any image URL as a data URL (+ natural size). Best-effort — returns null on
+// any failure (including CORS on a cross-origin/S3 URL), so the report still renders.
+export async function loadImageData(url) {
+  if (!url) return null;
   try {
-    const res = await fetch('/logo.png');
+    const res = await fetch(url, { mode: 'cors' });
     if (!res.ok) return null;
     const blob = await res.blob();
     const dataUrl = await new Promise((resolve, reject) => {
@@ -66,10 +77,59 @@ export async function loadLogo() {
       img.onerror = () => resolve(null);
       img.src = dataUrl;
     });
-    return dims && dims.h ? { dataUrl, ...dims } : null;
+    return dims && dims.h ? { dataUrl, fmt: blob.type === 'image/png' ? 'PNG' : 'JPEG', ...dims } : null;
   } catch {
     return null;
   }
+}
+
+// Header logo (client/public/logo.png). Best-effort → null so the header falls back
+// to the text wordmark.
+export async function loadLogo() {
+  return loadImageData('/logo.png');
+}
+
+// Render wrapped text to a PNG data URL using the BROWSER's fonts — so emoji and any
+// Unicode the PDF's Latin-1 font can't draw appear (in colour) as an image instead.
+// Returns { dataUrl, wPt, hPt } or null. Used only for captions that contain
+// non-Latin-1 characters; plain text stays crisp vector text.
+function textImage(text, { widthPt, fontPt = 9.5, lineHeightPt = 13, maxLines = 6, color = '#1c2733' }) {
+  const t = String(text || '').replace(/\r/g, '').trim();
+  if (!t || typeof document === 'undefined') return null;
+  const SCALE = 3; // supersample for a crisp result at print resolution
+  const font = `${Math.round(fontPt * SCALE)}px Arial, "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", sans-serif`;
+  const measure = document.createElement('canvas').getContext('2d');
+  measure.font = font;
+  const maxW = widthPt * SCALE;
+
+  const lines = [];
+  let truncated = false;
+  for (const para of t.split('\n')) {
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const test = line ? `${line} ${word}` : word;
+      if (measure.measureText(test).width <= maxW || !line) line = test;
+      else {
+        lines.push(line);
+        line = word;
+      }
+      if (lines.length >= maxLines) { truncated = true; break; }
+    }
+    if (lines.length >= maxLines) { truncated = true; break; }
+    if (line) lines.push(line);
+  }
+  if (!lines.length) return null;
+  if (truncated) lines[lines.length - 1] = `${lines[lines.length - 1]} …`;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(maxW);
+  canvas.height = Math.ceil(lines.length * lineHeightPt * SCALE);
+  const cx = canvas.getContext('2d');
+  cx.font = font;
+  cx.textBaseline = 'top';
+  cx.fillStyle = color;
+  lines.forEach((ln, i) => cx.fillText(ln, 0, Math.round(i * lineHeightPt * SCALE)));
+  return { dataUrl: canvas.toDataURL('image/png'), wPt: widthPt, hPt: lines.length * lineHeightPt };
 }
 
 const pageW = (doc) => doc.internal.pageSize.getWidth();
@@ -106,7 +166,7 @@ function drawHeader(doc, ctx) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(...COLORS.dark);
-    doc.text(ctx.pageName, rx, topY + 4, { align: 'right' });
+    doc.text(pdfSafe(ctx.pageName), rx, topY + 4, { align: 'right' });
   }
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
@@ -256,39 +316,77 @@ function drawLineChart(doc, ctx, { points, color, title }) {
   ctx.y = boxTop + boxH + 18;
 }
 
-// Rounded info box holding the post caption + a muted meta line.
+// Rounded info box holding the post caption + a muted meta line. A caption with
+// emoji / non-Latin-1 characters is drawn as a browser-rendered image (so emoji show
+// in colour); a plain caption stays crisp vector text.
 function drawPostMeta(doc, ctx, post) {
   const W = pageW(doc);
   const boxW = W - 2 * M;
-  const caption = (post.caption || '').trim();
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  const allLines = caption ? doc.splitTextToSize(caption, boxW - 24) : ['No caption'];
-  const lines = allLines.slice(0, 5);
-  if (allLines.length > 5) lines[4] = `${lines[4].slice(0, -1)}…`;
+  const raw = String(post.caption || '').trim();
+  const needsImage = /[^\x00-\xFF]/.test(raw);
+  const capImg = needsImage ? textImage(raw, { widthPt: boxW - 24, maxLines: 6 }) : null;
+
+  let lines = null;
+  let capH;
+  if (capImg) {
+    capH = capImg.hPt;
+  } else {
+    const caption = pdfSafe(raw);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    const allLines = caption ? doc.splitTextToSize(caption, boxW - 24) : ['No caption'];
+    lines = allLines.slice(0, 5);
+    if (allLines.length > 5) lines[4] = `${lines[4].slice(0, -1)}…`;
+    capH = lines.length * 12;
+  }
+
   const meta = [
     `Status: ${post.status || '—'}`,
     post.posted_at ? `Posted: ${fmtDateTime(post.posted_at)}` : post.scheduled_at ? `Scheduled: ${fmtDateTime(post.scheduled_at)}` : null,
     `Type: ${post.media_type || '—'}`,
   ].filter(Boolean);
-  const boxH = 16 + lines.length * 12 + 16;
+
+  const boxH = 14 + capH + 4 + 16;
   ensureSpace(doc, ctx, boxH + 12);
   doc.setFillColor(...COLORS.zebra);
   doc.setDrawColor(...COLORS.border);
   doc.setLineWidth(0.5);
   doc.roundedRect(M, ctx.y, boxW, boxH, 5, 5, 'FD');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.setTextColor(...COLORS.dark);
-  let ty = ctx.y + 17;
-  lines.forEach((ln) => {
-    doc.text(ln, M + 12, ty);
-    ty += 12;
-  });
+
+  if (capImg) {
+    doc.addImage(capImg.dataUrl, 'PNG', M + 12, ctx.y + 13, capImg.wPt, capImg.hPt);
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...COLORS.dark);
+    let ty = ctx.y + 17;
+    lines.forEach((ln) => {
+      doc.text(ln, M + 12, ty);
+      ty += 12;
+    });
+  }
+
   doc.setFontSize(8);
   doc.setTextColor(...COLORS.muted);
   doc.text(doc.splitTextToSize(meta.join('    ·    '), boxW - 24)[0], M + 12, ctx.y + boxH - 8);
   ctx.y += boxH + 16;
+}
+
+// The post's media thumbnail, scaled into a bordered box (max ~150×150 pt).
+function drawThumbnail(doc, ctx, img) {
+  const ratio = Math.min(150 / img.w, 150 / img.h, 1);
+  const iw = img.w * ratio;
+  const ih = img.h * ratio;
+  ensureSpace(doc, ctx, ih + 16);
+  doc.setDrawColor(...COLORS.border);
+  doc.setLineWidth(0.5);
+  doc.roundedRect(M - 2, ctx.y - 2, iw + 4, ih + 4, 4, 4, 'S');
+  try {
+    doc.addImage(img.dataUrl, img.fmt || 'JPEG', M, ctx.y, iw, ih);
+  } catch {
+    /* jsPDF couldn't decode this image — skip it */
+  }
+  ctx.y += ih + 16;
 }
 
 /**
@@ -346,6 +444,65 @@ export function buildPostInsightsPdf({ post, seriesByMetric, pageName, logo }) {
 }
 
 /**
+ * Per-post insights report scoped to a DATE RANGE: post meta, headline cards, a
+ * summary table (each metric's value within the range + its running total), a
+ * day-by-day breakdown table, and any video watch stats. The caller (the insights
+ * tab) precomputes the rows so this stays pure formatting.
+ */
+export function buildPostRangeReportPdf({ post, pageName, logo, thumbnail = null, from, to, cards = [], summaryTable, dailyTable = null, videoTable = null }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const ctx = {
+    title: 'Post insights report',
+    subtitle: `${fmtDateLong(from)} – ${fmtDateLong(to)}    ·    Post #${post.id}`,
+    pageName,
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+  if (thumbnail) drawThumbnail(doc, ctx, thumbnail);
+  drawPostMeta(doc, ctx, post);
+  if (cards.length) drawStatCards(doc, ctx, cards);
+
+  if (summaryTable) {
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [summaryTable.head],
+      body: summaryTable.body.length ? summaryTable.body : [['—', '—', '—']],
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+    });
+    ctx.y = doc.lastAutoTable.finalY + 22;
+  }
+
+  if (dailyTable && dailyTable.body.length) {
+    const numeric = {};
+    for (let i = 1; i < dailyTable.head.length; i += 1) numeric[i] = { halign: 'right' };
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [dailyTable.head],
+      body: dailyTable.body,
+      columnStyles: numeric,
+    });
+    ctx.y = doc.lastAutoTable.finalY + 22;
+  }
+
+  if (videoTable && videoTable.body.length) {
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [videoTable.head],
+      body: videoTable.body,
+      columnStyles: { 1: { halign: 'right' } },
+    });
+    ctx.y = doc.lastAutoTable.finalY + 22;
+  }
+
+  drawFooters(doc);
+  return doc;
+}
+
+/**
  * Date-range report: summary cards + a table of every posted item in the window
  * with its engagement, plus a totals footer row.
  * `posts`: already filtered to the [start, end] window.
@@ -381,7 +538,7 @@ export function buildRangeAnalyticsPdf({ start, end, posts, pageName, logo }) {
   ]);
 
   if (top) {
-    const cap = (top.caption || '').replace(/\s+/g, ' ').trim().slice(0, 70);
+    const cap = pdfSafe(top.caption).replace(/\s+/g, ' ').trim().slice(0, 70);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...COLORS.muted);
@@ -395,7 +552,7 @@ export function buildRangeAnalyticsPdf({ start, end, posts, pageName, logo }) {
     .map((p) => [
       p.posted_at ? fmtDateShort(p.posted_at) : '—',
       `#${p.id}`,
-      (p.caption || '').replace(/\s+/g, ' ').trim().slice(0, 64) || '—',
+      pdfSafe(p.caption).replace(/\s+/g, ' ').trim().slice(0, 64) || '—',
       p.status || '—',
       fmtInt(p.reactions_count),
       fmtInt(p.comments_count),
@@ -479,7 +636,7 @@ export function buildPageAnalyticsPdf({ start, end, pageName, logo, followers, s
       head: [['#', 'Post', 'React', 'Cmt', 'Shr', 'Engagement']],
       body: ranking.map((p) => [
         `#${p.id}`,
-        (p.caption || '').replace(/\s+/g, ' ').trim().slice(0, 70) || '—',
+        pdfSafe(p.caption).replace(/\s+/g, ' ').trim().slice(0, 70) || '—',
         fmtInt(p.reactions_count),
         fmtInt(p.comments_count),
         fmtInt(p.shares_count),

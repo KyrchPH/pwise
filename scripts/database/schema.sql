@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS users (
   module_access JSON NULL,
   avatar_s3_key TEXT NULL,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Brute-force lockout: incremented on each wrong password, reset on success.
+  -- When it reaches the limit, locked_until is set (UTC) and new logins are refused
+  -- until it passes (lazy auto-unlock) or an admin clears it from Accounts.
+  failed_login_attempts INT NOT NULL DEFAULT 0,
+  locked_until  DATETIME NULL,
   deleted_at    DATETIME NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -59,6 +64,46 @@ CREATE TABLE IF NOT EXISTS password_change_codes (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_pcc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- auth_otp_codes — generic one-time email codes for sensitive auth actions
+-- (purpose='login' for the new-device login OTP, 'email_change' for changing the
+-- account email). One pending code per (user_id, purpose); a fresh request replaces
+-- the previous one. Mirrors password_change_codes (bcrypt-hashed code, TTL, attempt
+-- cap). payload carries action data (e.g. the pending new email for 'email_change').
+CREATE TABLE IF NOT EXISTS auth_otp_codes (
+  user_id    INT NOT NULL,
+  purpose    VARCHAR(20) NOT NULL,
+  code_hash  VARCHAR(255) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  verified   BOOLEAN NOT NULL DEFAULT FALSE,
+  attempts   INT NOT NULL DEFAULT 0,
+  payload    JSON NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, purpose),
+  CONSTRAINT fk_otp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- trusted_devices — a browser the user chose to trust ("Trust this device"), so
+-- future logins from it skip the email OTP. The server issues a high-entropy secret
+-- and stores only its SHA-256 (token_hash); the raw secret lives in the client's
+-- localStorage. A trusted device only bypasses the OTP — it NEVER bypasses the
+-- password — so a stolen token alone can't log in. Sliding 30-day expiry; revoked
+-- on "log out all other devices" and on password change.
+CREATE TABLE IF NOT EXISTS trusted_devices (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT NOT NULL,
+  token_hash   CHAR(64) NOT NULL,
+  label        VARCHAR(255) NULL,
+  ip           VARCHAR(64) NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME NULL,
+  expires_at   DATETIME NOT NULL,
+  revoked_at   DATETIME NULL,
+  UNIQUE KEY uq_trusted_devices_token (token_hash),
+  CONSTRAINT fk_trusted_devices_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_trusted_devices_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- login_history — login sessions: one row per successful login = a revocable
@@ -100,6 +145,8 @@ CREATE TABLE IF NOT EXISTS post_pool (
   comments_count       INT NULL,
   shares_count         INT NULL,
   views_count          INT NULL,            -- video/reel views (NULL for image/text)
+  video_watch_time_s   INT NULL,            -- total watch time across all views, in seconds (video only)
+  video_avg_watch_s    INT NULL,            -- average time watched per view, in seconds (video only)
   engagement_synced_at DATETIME NULL,       -- last time engagement was refreshed
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -212,6 +259,8 @@ CREATE TABLE IF NOT EXISTS post_activity_log (
 -- content_notes — per-day content planning behind the calendar -----------------
 -- Each row is one planning note attached to a calendar day. Shared pool (every
 -- signed-in user sees/edits all notes); user_id/user_name record the author.
+-- The calendar is a GENERAL (page-independent) view, so page_id records which
+-- connected page owns the note (drives the page logo on each calendar note row).
 CREATE TABLE IF NOT EXISTS content_notes (
   id         INT AUTO_INCREMENT PRIMARY KEY,
   note_date  DATE NOT NULL,
@@ -220,14 +269,17 @@ CREATE TABLE IF NOT EXISTS content_notes (
   position   INT NOT NULL DEFAULT 0,                   -- rank within the day (drag-to-reorder)
   text_color VARCHAR(9) NULL,                          -- optional hex (#RRGGBB[AA]) text override
   note_color VARCHAR(9) NULL,                          -- optional hex (#RRGGBB[AA]) background override
+  page_id    INT NULL,                                 -- owning page (NULL = untagged); logo on the calendar row
   user_id    INT NULL,
   user_name  VARCHAR(255),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_content_notes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_content_notes_page FOREIGN KEY (page_id) REFERENCES platform_accounts(id) ON DELETE SET NULL,
   CONSTRAINT chk_content_notes_status CHECK (status IN ('pending','ongoing','completed','cancelled')),
   INDEX idx_content_notes_date (note_date),
-  INDEX idx_content_notes_date_pos (note_date, position)
+  INDEX idx_content_notes_date_pos (note_date, position),
+  INDEX idx_content_notes_page (page_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- post_insight_history — one engagement snapshot per post per HOUR ------------
@@ -246,6 +298,25 @@ CREATE TABLE IF NOT EXISTS post_insight_history (
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_insight_post_hour (post_id, captured_at),
   CONSTRAINT fk_insight_post FOREIGN KEY (post_id) REFERENCES post_pool(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- post_comment_status — team-shared "handled" state for the Comments inbox ------
+-- The Comments view (Contents → Comments) aggregates live Facebook comments across
+-- a page's posts. Comment CONTENT is never stored (always read live from Graph); this
+-- table stores ONLY the tracking state so every teammate on a page sees the same
+-- handled/unhandled list. A row present with status='done' = handled; un-marking a
+-- comment deletes its row (absence = open). Enum kept for future states (follow-up).
+CREATE TABLE IF NOT EXISTS post_comment_status (
+  account_id      INT NOT NULL,                    -- connected page the comment belongs to
+  comment_id      VARCHAR(255) NOT NULL,           -- Facebook comment id (globally unique)
+  post_id         INT NULL,                        -- post_pool.id the comment is on (for context)
+  status          ENUM('open','done') NOT NULL DEFAULT 'done',
+  handled_by_id   INT NULL,
+  handled_by_name VARCHAR(255) NULL,
+  handled_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, comment_id),
+  KEY idx_pcs_status (account_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- page_insight_daily — daily page-level metrics (Analytics dashboard) ----------

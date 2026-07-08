@@ -51,12 +51,31 @@ export function AuthProvider({ children }) {
     setRetrying(false);
   }, [restoreSession]);
 
-  const login = async (email, password) => {
-    const { user: u, token } = await authService.login(email, password);
+  // Store the session token + user once a login is fully complete (trusted device, or
+  // after the OTP step).
+  const finalizeLogin = ({ user: u, token }) => {
     localStorage.setItem('token', token);
     setUser(u);
     return u;
   };
+
+  // Step 1. Returns { done: true, user } when a trusted device logged straight in, or
+  // { done: false, otpRequired, email, expiresInMinutes, challengeToken } when the caller
+  // must collect the emailed code next. A locked account rejects with a 423 (details on err).
+  const login = async (email, password) => {
+    const result = await authService.login(email, password);
+    if (result?.token) return { done: true, user: finalizeLogin(result) };
+    return { done: false, ...result };
+  };
+
+  // Step 2. Verify the emailed code (+ optional device trust) and finish the login.
+  const verifyLogin = async ({ email, challengeToken, code, trustDevice }) => {
+    const result = await authService.verifyLogin({ challengeToken, code, trustDevice });
+    if (trustDevice && result.deviceToken) authService.setDeviceToken(email, result.deviceToken);
+    return finalizeLogin(result);
+  };
+
+  const resendLoginCode = (challengeToken) => authService.resendLoginCode(challengeToken);
 
   const register = async (payload) => {
     const { user: u, token } = await authService.register(payload);
@@ -88,6 +107,14 @@ export function AuthProvider({ children }) {
     return updated;
   };
 
+  // Email change (OTP to the current address). start → verify; verify updates the user.
+  const startEmailChange = (newEmail) => authService.startEmailChange(newEmail);
+  const verifyEmailChange = async (code) => {
+    const updated = await authService.verifyEmailChange(code);
+    setUser(updated);
+    return updated;
+  };
+
   const updateAvatar = async (payload) => {
     const updated = await authService.updateAvatar(payload);
     setUser(updated);
@@ -101,10 +128,14 @@ export function AuthProvider({ children }) {
     retrying,
     retryBootstrap,
     login,
+    verifyLogin,
+    resendLoginCode,
     register,
     logout,
     logoutOtherDevices,
     updateProfile,
+    startEmailChange,
+    verifyEmailChange,
     updateAvatar,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'admin',

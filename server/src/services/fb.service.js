@@ -141,12 +141,21 @@ export async function editCaption(platformPostId, mediaType, caption, token) {
 // withholds the commenter's identity (`from`) for ordinary users — surface
 // message + time only.
 export async function listComments(platformPostId, { after = null, limit = 25 } = {}, token) {
-  const fields = { fields: 'message,created_time', order: 'chronological', limit: String(limit) };
+  // `from{name,id}` is best-effort: on a Page's OWN posts Facebook often returns the
+  // commenter's name/id, but it's withheld for some users/privacy settings — callers
+  // fall back to "Facebook user" when authorName is null.
+  const fields = { fields: 'from{name,id},message,created_time', order: 'chronological', limit: String(limit) };
   if (after) fields.after = after;
   const { ok, error, data } = await graph(`${platformPostId}/comments`, { fields, token });
   if (!ok) throw new ApiError(502, `Couldn't load comments from Facebook: ${error?.message || 'unknown error'}`);
   return {
-    comments: (data.data || []).map((c) => ({ id: c.id, message: c.message || '', created_time: c.created_time })),
+    comments: (data.data || []).map((c) => ({
+      id: c.id,
+      message: c.message || '',
+      created_time: c.created_time,
+      authorName: c.from?.name || null,
+      authorId: c.from?.id || null,
+    })),
     nextCursor: data.paging?.next ? data.paging.cursors?.after ?? null : null,
   };
 }
@@ -213,6 +222,13 @@ export async function fetchEngagementBatch(posts = [], token) {
     if (p.media_type === 'video' && p.platform_post_id) {
       subs.push({ postId: p.id, kind: 'views' });
       ops.push({ method: 'GET', relative_url: `${p.platform_post_id}?fields=views` });
+      // Watch-time insights on the video object (needs read_insights). Lifetime
+      // metrics come back in MILLISECONDS; we convert to seconds when parsing.
+      subs.push({ postId: p.id, kind: 'video_insights' });
+      ops.push({
+        method: 'GET',
+        relative_url: `${p.platform_post_id}/video_insights?metric=total_video_view_time,total_video_avg_time_watched`,
+      });
     }
   }
   if (!ops.length) return new Map();
@@ -240,6 +256,17 @@ export async function fetchEngagementBatch(posts = [], token) {
       if (sub.isFeed) b.shares = payload.shares?.count ?? 0; // `shares` is omitted when zero
     } else if (sub.kind === 'views' && payload.views != null) {
       b.views = Number(payload.views);
+    } else if (sub.kind === 'video_insights' && Array.isArray(payload.data)) {
+      // Each entry: { name, values: [{ value }] } — value is in milliseconds.
+      const ms = (name) => {
+        const m = payload.data.find((d) => d.name === name);
+        const v = m?.values?.[0]?.value;
+        return v == null ? null : Number(v);
+      };
+      const total = ms('total_video_view_time');
+      const avg = ms('total_video_avg_time_watched');
+      if (total != null) b.watchTime = Math.round(total / 1000);
+      if (avg != null) b.avgWatch = Math.round(avg / 1000);
     }
   });
   return out;
@@ -255,11 +282,24 @@ export async function fetchPageInsights(metrics = [], since, until, { token, fbP
   const { ok, error, data } = await graph(`${pageId}/insights`, { fields, token });
   if (!ok) throw new ApiError(502, `Couldn't read page insights: ${error?.message || 'unknown error'}`);
   const out = {};
+  const push = (key, date, value) => {
+    (out[key] ||= []).push({ date, value: Number(value) || 0 });
+  };
   for (const m of data.data || []) {
-    out[m.name] = (m.values || []).map((v) => ({
-      date: String(v.end_time || '').slice(0, 10),
-      value: typeof v.value === 'number' ? v.value : 0,
-    }));
+    for (const v of m.values || []) {
+      const date = String(v.end_time || '').slice(0, 10);
+      const val = v.value;
+      if (val != null && typeof val === 'object') {
+        // Breakdown metric (e.g. page_impressions_by_follow_type → { follower, non_follower }).
+        // Flatten each numeric key into its own "name:key" sub-metric so it can be warehoused
+        // and charted like a plain metric.
+        for (const [k, num] of Object.entries(val)) {
+          if (typeof num === 'number') push(`${m.name}:${k}`, date, num);
+        }
+      } else {
+        push(m.name, date, typeof val === 'number' ? val : 0);
+      }
+    }
   }
   return out;
 }
@@ -396,7 +436,7 @@ export async function subscribeMessaging(token, pageId) {
     const { ok, error } = await graph(`${pageId}/subscribed_apps`, {
       method: 'POST',
       token,
-      fields: { subscribed_fields: 'messages,messaging_postbacks' },
+      fields: { subscribed_fields: 'messages,messaging_postbacks,feed' },
     });
     if (!ok) return { ok: false, error: error?.message || 'subscribe failed' };
     return { ok: true };

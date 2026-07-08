@@ -218,7 +218,7 @@ function AvatarCropDialog({ draft, saving, progress, onClose, onSave }) {
 
 export default function ProfilePage() {
   const toast = useToast();
-  const { user, updateProfile, updateAvatar } = useAuth();
+  const { user, updateProfile, updateAvatar, startEmailChange, verifyEmailChange } = useAuth();
   const fileInputRef = useRef(null);
   const [form, setForm] = useState({ name: '', email: '' });
   const [saving, setSaving] = useState(false);
@@ -226,6 +226,14 @@ export default function ProfilePage() {
   const [avatarDraft, setAvatarDraft] = useState(null);
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [avatarProgress, setAvatarProgress] = useState(0);
+
+  // Email change (OTP to the current address). 'new' → enter new email; 'code' → verify.
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailStage, setEmailStage] = useState('new');
+  const [newEmail, setNewEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [emailSentTo, setEmailSentTo] = useState('');
+  const [emailBusy, setEmailBusy] = useState(false);
 
   useEffect(() => {
     setForm({
@@ -251,7 +259,7 @@ export default function ProfilePage() {
     setError('');
     setSaving(true);
     try {
-      await updateProfile(form);
+      await updateProfile({ name: form.name });
       toast.success('Profile updated');
     } catch (err) {
       setError(apiError(err));
@@ -260,7 +268,47 @@ export default function ProfilePage() {
     }
   };
 
-  const unchanged = form.name.trim() === (user?.name || '') && form.email.trim() === (user?.email || '');
+  // Email is changed through its own OTP flow, so only the name gates "Save changes".
+  const unchanged = form.name.trim() === (user?.name || '');
+
+  const openEmailModal = () => {
+    setNewEmail('');
+    setEmailCode('');
+    setEmailStage('new');
+    setEmailOpen(true);
+  };
+
+  // Step 1: request a code (server emails it to the current address).
+  const sendEmailCode = async (event) => {
+    event?.preventDefault();
+    if (!newEmail.trim()) return toast.error('Enter the new email address.');
+    setEmailBusy(true);
+    try {
+      const res = await startEmailChange(newEmail.trim());
+      setEmailSentTo(res.email || 'your current email');
+      setEmailStage('code');
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setEmailBusy(false);
+    }
+  };
+
+  // Step 2: verify the code and apply the new address.
+  const verifyEmail = async (event) => {
+    event?.preventDefault();
+    if (!emailCode.trim()) return toast.error('Enter the code from your email.');
+    setEmailBusy(true);
+    try {
+      await verifyEmailChange(emailCode.trim());
+      toast.success('Email updated');
+      setEmailOpen(false);
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setEmailBusy(false);
+    }
+  };
 
   const openAvatarPicker = () => {
     if (!avatarSaving) fileInputRef.current?.click();
@@ -335,8 +383,13 @@ export default function ProfilePage() {
               <Field label="Name">
                 <input className="input" value={form.name} onChange={set('name')} maxLength={255} required />
               </Field>
-              <Field label="Email">
-                <input className="input" type="email" value={form.email} onChange={set('email')} required />
+              <Field label="Email" hint="Changing your email requires a verification code">
+                <div className="row gap-sm">
+                  <input className="input" type="email" value={form.email} readOnly disabled />
+                  <Button type="button" variant="subtle" onClick={openEmailModal}>
+                    Change
+                  </Button>
+                </div>
               </Field>
             </div>
             {error && <div className="error-text">{error}</div>}
@@ -375,6 +428,76 @@ export default function ProfilePage() {
 
         <SecurityCard />
       </div>
+
+      <Modal
+        open={emailOpen}
+        title="Change email"
+        onClose={() => (!emailBusy ? setEmailOpen(false) : undefined)}
+        dismissable={!emailBusy}
+        footer={
+          emailStage === 'new' ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setEmailOpen(false)} disabled={emailBusy}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={sendEmailCode} disabled={emailBusy}>
+                {emailBusy ? 'Sending…' : 'Send code'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setEmailStage('new')} disabled={emailBusy}>
+                Back
+              </Button>
+              <Button size="sm" onClick={verifyEmail} disabled={emailBusy}>
+                {emailBusy ? 'Verifying…' : 'Verify & update'}
+              </Button>
+            </>
+          )
+        }
+      >
+        {emailStage === 'new' ? (
+          <form onSubmit={sendEmailCode} className="col gap-sm">
+            <div className="text-sm text-muted">
+              Enter your new email address. We&rsquo;ll send a verification code to your{' '}
+              <strong>current</strong> address to confirm it&rsquo;s you.
+            </div>
+            <Field label="New email">
+              <input
+                className="input"
+                type="email"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="you@example.com"
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+              />
+            </Field>
+          </form>
+        ) : (
+          <form onSubmit={verifyEmail} className="col gap-sm">
+            <div className="text-sm text-muted">
+              Enter the 6-digit code sent to <strong>{emailSentTo}</strong>. Once verified, your email becomes{' '}
+              <strong>{newEmail}</strong>.
+            </div>
+            <Field label="Verification code">
+              <input
+                className="input pwcode__input"
+                value={emailCode}
+                onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="123456"
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+              />
+            </Field>
+            <button type="button" className="link pwresend" onClick={sendEmailCode} disabled={emailBusy}>
+              Resend code
+            </button>
+          </form>
+        )}
+      </Modal>
 
       <AvatarCropDialog
         draft={avatarDraft}

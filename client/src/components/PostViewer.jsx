@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Linkify, HeartIcon, CommentIcon, ShareIcon, EyeIcon, Button } from './ui.jsx';
-import InsightsDrawer from './InsightsDrawer.jsx';
 import DockedChat from './DockedChat.jsx';
 import * as postPool from '../services/post_pool.service.js';
 import { usePages } from '../context/PageContext.jsx';
@@ -142,12 +141,26 @@ function CommentsSection({ post, onDeleted, onMessageComment, onOpenConversation
 
   return (
     <div className="post-comments">
-      <div className="post-comments__head">Comments</div>
+      <div className="post-comments__head">
+        <span>Comments</span>
+        {post.comments_count != null && Number(post.comments_count) > 0 && (
+          <span className="post-comments__count">{fmtNum(post.comments_count)}</span>
+        )}
+      </div>
       <div className="post-comments__list" ref={scrollerRef} onScroll={onScroll}>
         {comments.map((c) => (
           <div className="comment" key={c.id}>
+            <div className="comment__head">
+              <span className="comment__avatar" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="8" r="3.5" />
+                  <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+                </svg>
+              </span>
+              <span className="comment__author">Facebook user</span>
+              <span className="comment__time">{fmt(c.created_time)}</span>
+            </div>
             <div className="comment__body">{c.message || <em className="text-muted">(no text)</em>}</div>
-            <div className="comment__time">{fmt(c.created_time)}</div>
 
             {(sentReplies[c.id] || []).map((r) => (
               <div className="comment__reply" key={r.id}>
@@ -234,7 +247,6 @@ function CommentsSection({ post, onDeleted, onMessageComment, onOpenConversation
 export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, onDeletedOnFacebook }) {
   const { activePage } = usePages();
   const navigate = useNavigate();
-  const [showInsights, setShowInsights] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [deletedDialog, setDeletedDialog] = useState(false); // post was removed on Facebook
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -280,7 +292,6 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
   // Reset transient UI when switching posts. Open the "deleted on Facebook" dialog
   // up front if the post is already marked deleted (detected on a prior view).
   useEffect(() => {
-    setShowInsights(false);
     setRetryBusy(false);
     setDeleteBusy(false);
     setDockedChat(null);
@@ -322,11 +333,9 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
 
   if (!post) return null;
 
-  const when = post.posted_at
-    ? `Posted ${fmt(post.posted_at)}`
-    : post.scheduled_at
-      ? `Scheduled ${fmt(post.scheduled_at)}`
-      : 'Not scheduled';
+  // A coloured status pill + the raw timestamp — the pill already says "Posted"/"Scheduled",
+  // so the time no longer repeats the verb (was "Posted · Posted Jul 8…").
+  const postedTime = fmt(post.posted_at || post.scheduled_at);
 
   const retryable = post.status === 'failed' || post.status === 'expired';
   const onRetryClick = async () => {
@@ -372,7 +381,11 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
         ✕
       </button>
       {post.status === 'posted' && post.platform_post_id && (
-        <button className="post-viewer__insights" onClick={() => setShowInsights(true)} title="View insights">
+        <button
+          className="post-viewer__insights"
+          onClick={() => window.open(`/post/${post.id}/insights`, '_blank', 'noopener,noreferrer')}
+          title="Open insights in a new tab"
+        >
           <ChartIcon />
           <span>Insights</span>
         </button>
@@ -431,9 +444,13 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
               </svg>
             </div>
             <div className="post-author__meta">
-              <span style={{ textTransform: 'capitalize' }}>{post.status}</span>
-              <span>·</span>
-              <span>{when}</span>
+              <span className={`post-author__status post-author__status--${post.status}`}>{post.status}</span>
+              {postedTime && (
+                <>
+                  <span className="post-author__dot" aria-hidden="true">·</span>
+                  <span>{postedTime}</span>
+                </>
+              )}
             </div>
           </div>
           <button className="post-author__edit" onClick={() => onEdit(post)} aria-label="Edit post" title="Edit post">
@@ -477,20 +494,20 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
         {stats.engagement_synced_at && (
           <div className="post-stats">
             <div className="post-stats__row">
-              <span className="post-stats__item" title="Reactions">
+              <span className="post-stats__item post-stats__item--reactions" title="Reactions">
                 <HeartIcon size={16} />{fmtNum(stats.reactions_count)}
                 <span className="post-stats__label">{plural(stats.reactions_count, 'Reaction')}</span>
               </span>
-              <span className="post-stats__item" title="Comments">
+              <span className="post-stats__item post-stats__item--comments" title="Comments">
                 <CommentIcon size={16} />{fmtNum(stats.comments_count)}
                 <span className="post-stats__label">{plural(stats.comments_count, 'Comment')}</span>
               </span>
-              <span className="post-stats__item" title="Shares">
+              <span className="post-stats__item post-stats__item--shares" title="Shares">
                 <ShareIcon size={16} />{fmtNum(stats.shares_count)}
                 <span className="post-stats__label">{plural(stats.shares_count, 'Share')}</span>
               </span>
               {post.media_type === 'video' && (
-                <span className="post-stats__item" title="Views">
+                <span className="post-stats__item post-stats__item--views" title="Views">
                   <EyeIcon size={16} />{fmtNum(stats.views_count)}
                   <span className="post-stats__label">{plural(stats.views_count, 'View')}</span>
                 </span>
@@ -509,8 +526,6 @@ export default function PostViewer({ post, onClose, onEdit, onRetry, onDelete, o
           sessionMessaged={sessionMessaged}
         />
       </aside>
-
-      <InsightsDrawer post={post} open={showInsights} onClose={() => setShowInsights(false)} />
 
       <DockedChat
         chat={dockedChat}

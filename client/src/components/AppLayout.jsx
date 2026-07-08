@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { usePages } from '../context/PageContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
+import env from '../config/env.js';
 import { canAccessModule } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
 import * as connections from '../services/connections.service.js';
@@ -102,31 +103,6 @@ const PRIMARY_NAV = [
     ),
   },
   {
-    to: '/content-calendar',
-    label: 'Content Calendar',
-    moduleId: 'content-calendar',
-    icon: (
-      <Ico>
-        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-        <line x1="16" y1="2" x2="16" y2="6" />
-        <line x1="8" y1="2" x2="8" y2="6" />
-        <line x1="3" y1="10" x2="21" y2="10" />
-      </Ico>
-    ),
-  },
-  {
-    to: '/planner',
-    label: 'Planner',
-    moduleId: 'planner',
-    icon: (
-      <Ico>
-        <circle cx="12" cy="12" r="9" />
-        <circle cx="12" cy="12" r="5" />
-        <circle cx="12" cy="12" r="1.5" />
-      </Ico>
-    ),
-  },
-  {
     to: '/analytics',
     label: 'Analytics',
     moduleId: 'analytics',
@@ -139,9 +115,29 @@ const PRIMARY_NAV = [
     ),
   },
   {
+    to: '/insights',
+    label: 'Insights',
+    moduleId: 'analytics',
+    children: [
+      { to: '/insights?view=overview', label: 'Overview', view: 'overview' },
+      { to: '/insights', label: 'Performance', view: 'performance' },
+      { to: '/insights?view=messaging', label: 'Messaging', view: 'messaging' },
+      { to: '/insights?view=contents', label: 'Contents', view: 'contents' },
+    ],
+    icon: (
+      <Ico>
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </Ico>
+    ),
+  },
+  {
     to: '/post-pool',
-    label: 'Post Pool',
+    label: 'Contents',
     moduleId: 'post-pool',
+    children: [
+      { to: '/post-pool', label: 'Posts & reels', postPoolView: 'contents' },
+      { to: '/post-pool?view=comments', label: 'Comments', postPoolView: 'comments' },
+    ],
     icon: (
       <Ico>
         <path d="M12 2 2 7l10 5 10-5-10-5z" />
@@ -178,6 +174,31 @@ const PRIMARY_NAV = [
 
 // Page-independent tools — bottom group (with Messaging + the page switcher).
 const SECONDARY_NAV = [
+  {
+    to: '/content-calendar',
+    label: 'Content Calendar',
+    moduleId: 'content-calendar',
+    icon: (
+      <Ico>
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </Ico>
+    ),
+  },
+  {
+    to: '/planner',
+    label: 'Planner',
+    moduleId: 'planner',
+    icon: (
+      <Ico>
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="5" />
+        <circle cx="12" cy="12" r="1.5" />
+      </Ico>
+    ),
+  },
   {
     to: '/vault',
     label: 'Vault',
@@ -233,6 +254,12 @@ const SECONDARY_NAV = [
     to: '/settings',
     label: 'Settings',
     moduleId: 'settings',
+    children: [
+      { to: '/settings?section=posting', label: 'Posting', section: 'posting' },
+      { to: '/settings?section=pages#facebook-pages', label: 'Pages', section: 'pages', admin: true },
+      { to: '/settings?section=templates', label: 'Templates', section: 'templates', enabled: env.templatesEnabled },
+      { to: '/settings?section=automation', label: 'Automation', section: 'automation', admin: true },
+    ],
     icon: (
       <Ico>
         <circle cx="12" cy="12" r="3" />
@@ -255,7 +282,7 @@ function formatCount(n) {
 // posting, messaging, products, analytics). When the active page's Facebook
 // connection is broken, these are gated behind a reconnect prompt; page-independent
 // routes (Vault, Logs, Settings, Profile…) stay usable so the page can be fixed.
-const PAGE_SCOPED_PATHS = ['/dashboard', '/content-calendar', '/analytics', '/post-pool', '/upload', '/shop', '/messages'];
+const PAGE_SCOPED_PATHS = ['/dashboard', '/analytics', '/post-pool', '/upload', '/shop', '/messages'];
 
 // Full-screen block shown in place of a page-scoped view when the active page's
 // Facebook token has been revoked/expired. Admins get a Reconnect shortcut; everyone
@@ -310,7 +337,7 @@ export default function AppLayout() {
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const { pages, activeId, activePage, activeFollowers, switching, switchPage, refresh: refreshPages, activePageHealthy, brokenPageIds, refreshHealth } = usePages();
-  const { pathname } = useLocation();
+  const { pathname, search, hash } = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
   const isAdmin = user?.role === 'admin';
@@ -324,6 +351,10 @@ export default function AppLayout() {
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
   const isAccountsPage = pathname === '/accounts';
+  const isPostPoolPage = pathname === '/post-pool';
+  // The Comments sub-view (/post-pool?view=comments) is a full-height inbox like Messaging.
+  const isCommentsView = isPostPoolPage && new URLSearchParams(search).get('view') === 'comments';
+  const isSettingsPage = pathname === '/settings';
   // Active page's Facebook connection is broken → gate its page-scoped tools and
   // surface a reconnect prompt (a banner elsewhere, a full block on scoped routes).
   const isPageScoped = PAGE_SCOPED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -493,6 +524,16 @@ export default function AppLayout() {
     const label = locked ? `${n.label} locked` : n.label;
     const className = ['nav__link', n.extraClass, locked && 'is-locked'].filter(Boolean).join(' ');
     const isPinned = pinnedSet.has(n.to);
+    const query = new URLSearchParams(search);
+    const insightsView = pathname === '/insights' ? query.get('view') || 'performance' : '';
+    const postPoolView = pathname === '/post-pool' ? query.get('view') || 'contents' : '';
+    const settingsSection = pathname === '/settings' ? (hash === '#facebook-pages' ? 'pages' : query.get('section') || 'posting') : '';
+    const children = (n.children || []).filter((child) => child.enabled !== false && !(child.admin && !isAdmin));
+    const showSubnav = !keyPrefix && !collapsed && !locked && pathname === n.to && children.length > 0;
+    const childActive = (child) =>
+      (child.view && insightsView === child.view) ||
+      (child.postPoolView && postPoolView === child.postPoolView) ||
+      (child.section && settingsSection === child.section);
     const content = (
       <>
         <span className="nav__icon">{n.icon}</span>
@@ -517,23 +558,39 @@ export default function AppLayout() {
     );
 
     return (
-      <div key={`${keyPrefix}${n.to}`} className="nav__item">
-        {link}
-        {!locked && (
-          <button
-            type="button"
-            className={`nav__pin${isPinned ? ' is-pinned' : ''}`}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              togglePin(n.to);
-            }}
-            title={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
-            aria-label={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
-            aria-pressed={isPinned}
-          >
-            <PinIcon />
-          </button>
+      <div key={`${keyPrefix}${n.to}`} className={`nav__item${showSubnav ? ' nav__item--has-subnav' : ''}`}>
+        <div className="nav__row">
+          {link}
+          {!locked && (
+            <button
+              type="button"
+              className={`nav__pin${isPinned ? ' is-pinned' : ''}`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                togglePin(n.to);
+              }}
+              title={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
+              aria-label={isPinned ? `Unpin ${n.label} from Quick Access` : `Pin ${n.label} to Quick Access`}
+              aria-pressed={isPinned}
+            >
+              <PinIcon />
+            </button>
+          )}
+        </div>
+        {showSubnav && (
+          <nav className="nav-sublist" aria-label={`${n.label} sections`}>
+            {children.map((child) => (
+              <Link
+                key={child.view || child.section || child.to}
+                to={child.to}
+                className={`nav-sublist__link${childActive(child) ? ' is-active' : ''}`}
+                aria-current={childActive(child) ? 'page' : undefined}
+              >
+                {child.label}
+              </Link>
+            ))}
+          </nav>
         )}
       </div>
     );
@@ -810,7 +867,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage ? ' content__inner--fill' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage || isSettingsPage ? ' content__inner--fill' : ''}${isCommentsView ? ' content__inner--comments' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage || isPostPoolPage || isSettingsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             {gated ? (

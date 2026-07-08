@@ -8,8 +8,11 @@ import CalendarMonth from '../../components/CalendarMonth.jsx';
 
 export default function ContentCalendarPage() {
   const toast = useToast();
+  // General (page-independent) calendar: pull scheduled posts across every page,
+  // each tagged with its owning page (for the per-post logo). all_pages bypasses
+  // the active-page scope; the high limit covers a busy month across many pages.
   const { data, loading, error, refresh } = useCachedResource('content-calendar', () =>
-    postPool.list({ scheduled: 1 }).then((r) => r.posts),
+    postPool.list({ scheduled: 1, all_pages: 1, limit: 500 }).then((r) => r.posts),
   );
 
   useEffect(() => {

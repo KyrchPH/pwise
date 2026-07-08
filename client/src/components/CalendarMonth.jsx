@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import * as notesService from '../services/content_notes.service.js';
 import { apiError } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { PageAvatar } from './ui.jsx';
 import DayNotesModal from './DayNotesModal.jsx';
 import CreatePostModal from './CreatePostModal.jsx';
 
@@ -12,6 +13,11 @@ const MONTHS = [
 ];
 const pad = (n) => String(n).padStart(2, '0');
 const keyOf = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+
+const STATUS_LABELS = { pending: 'Pending', ongoing: 'Ongoing', completed: 'Completed', cancelled: 'Cancelled' };
+const statusLabel = (s) => STATUS_LABELS[s] || 'Pending';
+// Build the minimal shape PageAvatar reads (name + fb_page_id → page picture).
+const pageOf = (o) => ({ account_name: o?.page_name, fb_page_id: o?.page_fb_id });
 
 /**
  * Month calendar showing how many posts are scheduled on each day.
@@ -210,25 +216,44 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
               <span className="calendar__day">{d}</span>
               {noteChips.length > 0 && (
                 <div className="calendar__notechips">
+                  {/* Each note: page logo (leading) + a two-row column (title, status).
+                      The month feed caps this at 3 (CHIPS_PER_DAY); the rest collapse
+                      into a "+N more notes" row below. */}
                   {noteChips.map((n, idx) => (
-                    <span
+                    <div
                       key={idx}
-                      className={`notechip notechip--${n.status || 'pending'}`}
-                      style={n.color ? { '--c': n.color } : undefined}
-                      title={n.text}
+                      className={`calnote calnote--${n.status || 'pending'}`}
+                      style={n.color ? { background: n.color, borderColor: n.color } : undefined}
+                      title={`${n.text}${n.page_name ? ` · ${n.page_name}` : ''}`}
                     >
-                      {n.text}
-                    </span>
+                      <PageAvatar page={pageOf(n)} className="calnote__logo" />
+                      <span className="calnote__col">
+                        <span className="calnote__title" style={n.text_color ? { color: n.text_color } : undefined}>
+                          {n.text}
+                        </span>
+                        <span className="calnote__status">
+                          <i className={`status-dot status-dot--${n.status || 'pending'}`} />
+                          {statusLabel(n.status)}
+                        </span>
+                      </span>
+                    </div>
                   ))}
                   {noteCount > noteChips.length && (
-                    <span className="notechip notechip--more">+{noteCount - noteChips.length} more</span>
+                    <span className="calnote-more">
+                      +{noteCount - noteChips.length} more {noteCount - noteChips.length === 1 ? 'note' : 'notes'}
+                    </span>
                   )}
                 </div>
               )}
               {count > 0 && (
                 <span className="calendar__thumbs" title={`${count} post${count === 1 ? '' : 's'} scheduled`}>
                   {cellPosts.slice(0, 3).map((p, idx) => (
-                    <span className="calendar__thumb" key={p.id} style={{ zIndex: 5 - idx }}>
+                    <span
+                      className="calendar__thumb"
+                      key={p.id}
+                      style={{ zIndex: 5 - idx }}
+                      title={p.page_name || undefined}
+                    >
                       {p.thumbnail_preview_url ? (
                         // Optimized still — no clip download just to fill a cell.
                         <img src={p.thumbnail_preview_url} alt="" />
@@ -240,6 +265,10 @@ export default function CalendarMonth({ posts = [], onPostsChanged }) {
                         )
                       ) : (
                         <span className="calendar__thumb-ph" aria-hidden="true">📝</span>
+                      )}
+                      {/* Cross-page calendar → tag each post with its owning page. */}
+                      {p.page_fb_id && (
+                        <PageAvatar page={pageOf({ page_name: p.page_name, page_fb_id: p.page_fb_id })} className="calendar__thumb-page" />
                       )}
                     </span>
                   ))}

@@ -64,7 +64,7 @@ function truthy(v) {
 // optimized still generated at upload (a video's first frame / a downscaled
 // image) — used wherever a lightweight preview is enough. Either is null when
 // absent or S3 isn't configured.
-async function withMediaPreview(post) {
+export async function withMediaPreview(post) {
   const out = { ...post, media_preview_url: null, thumbnail_preview_url: null };
   if (post.s3_key) {
     try {
@@ -117,27 +117,58 @@ export async function isSlotFree(scheduledAt, excludeId = null) {
 
 // Shared pool: every user sees every post. A row's `user_id` records its creator
 // (for the audit trail), not access control.
-export async function list({ status, scheduled, accountId = null, limit = 50, offset = 0 } = {}) {
+// An ISO timestamp → a naive UTC 'YYYY-MM-DD HH:MM:SS' literal. Both sides of the
+// posted_at comparison are then UTC, so there's no connection-timezone skew.
+function toUtcDatetime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+export async function list({ status, scheduled, accountId = null, allPages = false, from = null, to = null, limit = 50, offset = 0 } = {}) {
+  const crossPage = truthy(allPages);
   // Page-scoped view: every post belongs to a connected page, so with no active
   // page selected there is nothing in scope. (A null account used to mean "no
   // filter" → a fresh deploy with no connected page still listed every post.)
-  if (accountId == null) return { posts: [], total: 0 };
+  // The Content Calendar is now GENERAL, so it opts into `allPages` to see every
+  // page's posts at once (each row tagged with its page name / fb id for the logo).
+  if (!crossPage && accountId == null) return { posts: [], total: 0 };
 
-  const where = ['account_id = ?'];
-  const params = [accountId];
+  const where = [];
+  const params = [];
+  if (!crossPage) {
+    where.push('p.account_id = ?');
+    params.push(accountId);
+  }
   if (status) {
     if (!ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status filter: ${status}`);
-    where.push('status = ?');
+    where.push('p.status = ?');
     params.push(status);
   }
-  if (truthy(scheduled)) where.push('scheduled_at IS NOT NULL');
-  const whereSql = ' WHERE ' + where.join(' AND ');
+  if (truthy(scheduled)) where.push('p.scheduled_at IS NOT NULL');
+  // Posted-date range. Filtering on posted_at implicitly drops unpublished posts
+  // (NULL posted_at fails the comparison) — intended: a date range shows what went out.
+  const fromUtc = toUtcDatetime(from);
+  const toUtc = toUtcDatetime(to);
+  if (fromUtc) {
+    where.push('p.posted_at >= ?');
+    params.push(fromUtc);
+  }
+  if (toUtc) {
+    where.push('p.posted_at <= ?');
+    params.push(toUtc);
+  }
+  const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+  // Cross-page rows carry the owning page's name + fb id so the calendar can draw
+  // each post's page logo; the page-scoped path is unchanged (SELECT p.*).
+  const joinSql = crossPage ? ' LEFT JOIN platform_accounts a ON a.id = p.account_id' : '';
+  const selectCols = crossPage ? 'p.*, a.account_name AS page_name, a.fb_page_id AS page_fb_id' : 'p.*';
 
   // Total for the same filter, so the client can paginate (page X of Y).
-  const [{ total }] = await query(`SELECT COUNT(*) AS total FROM post_pool${whereSql}`, params);
+  const [{ total }] = await query(`SELECT COUNT(*) AS total FROM post_pool p${whereSql}`, params);
 
   const rows = await query(
-    `SELECT * FROM post_pool${whereSql} ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?`,
+    `SELECT ${selectCols} FROM post_pool p${joinSql}${whereSql} ORDER BY p.priority DESC, p.created_at DESC LIMIT ? OFFSET ?`,
     [...params, Number(limit) || 50, Number(offset) || 0],
   );
   const posts = await Promise.all(rows.map(withMediaPreview));
@@ -150,6 +181,32 @@ export async function getById(id) {
   return rows[0];
 }
 
+// Comments live on the FEED post. A photo's platform_post_id is the bare photo-object
+// id (no usable comments edge → "(#100) nonexisting field (comments)"), so resolve to
+// the composite {page}_{post} id (parent_post_id, resolve if missing). Same id-shape
+// issue as editCaption. Videos/text comment on their own id.
+async function resolveCommentTarget(post, { token, fbPageId } = {}) {
+  if (post.media_type !== 'image') return post.platform_post_id;
+  return (
+    post.parent_post_id ||
+    (await fb.resolveParentPostId(post.platform_post_id, { token, fbPageId })) ||
+    post.platform_post_id
+  );
+}
+
+// Tag each comment with the Messenger conversation id it opened via "message a
+// commenter" (if any), so the UI can show "Messaged" + deep-link to the thread.
+async function attachConversationLinks(comments) {
+  const ids = comments.map((c) => c.id).filter(Boolean);
+  if (!ids.length) return comments;
+  const links = await query(
+    `SELECT comment_id, conversation_id FROM comment_conversations WHERE comment_id IN (${ids.map(() => '?').join(',')})`,
+    ids,
+  );
+  const byComment = new Map(links.map((l) => [String(l.comment_id), Number(l.conversation_id)]));
+  return comments.map((c) => ({ ...c, conversationId: byComment.get(String(c.id)) ?? null }));
+}
+
 // A page of live Facebook comments for a published post (proxied from the Graph
 // API). Non-published posts have nothing on Facebook yet → empty.
 export async function listComments(id, { after = null, limit = 25 } = {}) {
@@ -157,30 +214,12 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
   if (post.status !== 'posted' || !post.platform_post_id) return { comments: [], nextCursor: null };
   const lim = Math.min(Math.max(Number(limit) || 25, 1), 50);
   const { token, fbPageId } = await pageCtx(post);
-  // Comments live on the FEED post. A photo's platform_post_id is the bare photo-object
-  // id (no usable comments edge → "(#100) nonexisting field (comments)"), so use the
-  // composite {page}_{post} id (parent_post_id, resolve if missing). Same id-shape issue
-  // as editCaption above.
-  let commentTarget = post.platform_post_id;
-  if (post.media_type === 'image') {
-    commentTarget =
-      post.parent_post_id ||
-      (await fb.resolveParentPostId(post.platform_post_id, { token, fbPageId })) ||
-      post.platform_post_id;
-  }
+  const commentTarget = await resolveCommentTarget(post, { token, fbPageId });
   try {
     const result = await fb.listComments(commentTarget, { after: after || null, limit: lim }, token);
     // Tag any comment already messaged via "message a commenter" with its conversation id,
     // so the post view can show "Messaged" + deep-link to the thread.
-    const ids = (result.comments || []).map((c) => c.id).filter(Boolean);
-    if (ids.length) {
-      const links = await query(
-        `SELECT comment_id, conversation_id FROM comment_conversations WHERE comment_id IN (${ids.map(() => '?').join(',')})`,
-        ids,
-      );
-      const byComment = new Map(links.map((l) => [String(l.comment_id), Number(l.conversation_id)]));
-      result.comments = result.comments.map((c) => ({ ...c, conversationId: byComment.get(String(c.id)) ?? null }));
-    }
+    result.comments = await attachConversationLinks(result.comments || []);
     return result;
   } catch (err) {
     // The post no longer exists on Facebook (deleted there) → mark it 'deleted'
@@ -191,6 +230,155 @@ export async function listComments(id, { after = null, limit = 25 } = {}) {
     }
     throw err;
   }
+}
+
+// --- Comments inbox (Contents → Comments) -----------------------------------
+// A flat, newest-first feed of live Facebook comments aggregated across a page's
+// published posts, with team-shared "handled" state. Bounded for cost: only posts
+// that already carry cached comments are scanned, capped to the most recent N.
+const FEED_MAX_POSTS = 40; // posts scanned per feed load (newest, with comments)
+const FEED_PER_POST = 50; // comments pulled from each post (one Graph page)
+const FEED_CONCURRENCY = 5; // bounded parallel Graph calls
+const FEED_RETURN_CAP = 200; // max comments returned in one feed response
+
+export async function listCommentFeed({ accountId, filter = 'all' } = {}) {
+  const empty = { comments: [], posts: {}, truncated: false, scannedPosts: 0 };
+  if (accountId == null) return empty;
+
+  // Candidate posts: this page's published posts that have comments, newest first.
+  // One extra row tells us whether older commented posts were left unscanned.
+  const posts = await query(
+    `SELECT * FROM post_pool
+      WHERE account_id = ? AND status = 'posted' AND platform_post_id IS NOT NULL AND comments_count > 0
+      ORDER BY posted_at DESC
+      LIMIT ?`,
+    [accountId, FEED_MAX_POSTS + 1],
+  );
+  let truncated = posts.length > FEED_MAX_POSTS;
+  const scanPosts = posts.slice(0, FEED_MAX_POSTS);
+  if (!scanPosts.length) return empty;
+
+  // The page token is shared across an account's posts — resolve once.
+  const { token, fbPageId } = await pageCtx(scanPosts[0]);
+
+  // Light per-post descriptor for the list rows (thumbnail presigned once each).
+  const postsOut = {};
+  await Promise.all(
+    scanPosts.map(async (p) => {
+      let thumbnailUrl = null;
+      if (p.thumbnail_s3_key) {
+        try {
+          thumbnailUrl = await createDownloadUrl(p.thumbnail_s3_key);
+        } catch {
+          /* S3 not configured / object missing */
+        }
+      }
+      postsOut[p.id] = {
+        id: p.id,
+        caption: p.caption,
+        mediaType: p.media_type,
+        thumbnailUrl,
+        comments_count: p.comments_count,
+        postedAt: p.posted_at,
+      };
+    }),
+  );
+
+  // Pull each post's comments from Graph with bounded concurrency. A post that's gone
+  // on Facebook is marked 'deleted' and dropped; a transient failure just skips that
+  // post — one bad post never fails the whole feed.
+  const all = [];
+  for (let i = 0; i < scanPosts.length; i += FEED_CONCURRENCY) {
+    const batch = scanPosts.slice(i, i + FEED_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (p) => {
+        const commentTarget = await resolveCommentTarget(p, { token, fbPageId });
+        try {
+          const { comments } = await fb.listComments(commentTarget, { limit: FEED_PER_POST }, token);
+          return comments.map((c) => ({ ...c, postId: p.id }));
+        } catch (err) {
+          if (fb.isObjectGoneError(err)) {
+            await query("UPDATE post_pool SET status = 'deleted' WHERE id = ?", [p.id]);
+            delete postsOut[p.id];
+          }
+          return [];
+        }
+      }),
+    );
+    for (const r of results) all.push(...r);
+  }
+  if (!all.length) return { ...empty, posts: postsOut, scannedPosts: scanPosts.length };
+
+  // Newest first across every post.
+  all.sort((a, b) => new Date(b.created_time) - new Date(a.created_time));
+
+  // Attach team-shared handled state + conversation links.
+  const commentIds = all.map((c) => c.id).filter(Boolean);
+  const statusByComment = new Map();
+  if (commentIds.length) {
+    const rows = await query(
+      `SELECT comment_id, status, handled_by_name, handled_at
+         FROM post_comment_status
+        WHERE account_id = ? AND comment_id IN (${commentIds.map(() => '?').join(',')})`,
+      [accountId, ...commentIds],
+    );
+    for (const r of rows) statusByComment.set(String(r.comment_id), r);
+  }
+  const linked = await attachConversationLinks(all);
+
+  const shaped = [];
+  for (const c of linked) {
+    if (!postsOut[c.postId]) continue; // its post was just found deleted
+    const st = statusByComment.get(String(c.id));
+    const handled = !!(st && st.status === 'done');
+    if (filter === 'open' && handled) continue;
+    if (filter === 'done' && !handled) continue;
+    shaped.push({
+      id: c.id,
+      postId: c.postId,
+      message: c.message,
+      created_time: c.created_time,
+      authorName: c.authorName || null,
+      handled,
+      handledBy: handled ? st.handled_by_name || null : null,
+      handledAt: handled ? st.handled_at : null,
+      conversationId: c.conversationId ?? null,
+    });
+    if (shaped.length >= FEED_RETURN_CAP) {
+      truncated = true;
+      break;
+    }
+  }
+
+  return { comments: shaped, posts: postsOut, truncated, scannedPosts: scanPosts.length };
+}
+
+// Set (or clear) the team-shared "handled" flag for a comment. status 'done' upserts a
+// row; 'open' deletes it (absence = open). `postId` is advisory context, validated to
+// belong to the active page. `actor` = { id, name } records who handled it.
+export async function setCommentStatus({ accountId, postId = null, commentId, status = 'done', actor = {} } = {}) {
+  if (accountId == null) throw ApiError.badRequest('no active page selected');
+  if (!commentId) throw ApiError.badRequest('a comment id is required');
+  const st = status === 'open' ? 'open' : 'done';
+
+  let pid = postId != null && postId !== '' ? Number(postId) : null;
+  if (pid != null) {
+    const rows = await query('SELECT account_id FROM post_pool WHERE id = ?', [pid]);
+    if (!rows.length || Number(rows[0].account_id) !== Number(accountId)) pid = null; // ignore mismatched context
+  }
+
+  if (st === 'open') {
+    await query('DELETE FROM post_comment_status WHERE account_id = ? AND comment_id = ?', [accountId, String(commentId)]);
+    return { commentId: String(commentId), status: 'open', handled: false };
+  }
+  await query(
+    `INSERT INTO post_comment_status (account_id, comment_id, post_id, status, handled_by_id, handled_by_name)
+          VALUES (?, ?, ?, 'done', ?, ?)
+     ON DUPLICATE KEY UPDATE post_id = VALUES(post_id), status = 'done',
+          handled_by_id = VALUES(handled_by_id), handled_by_name = VALUES(handled_by_name), updated_at = CURRENT_TIMESTAMP`,
+    [accountId, String(commentId), pid, actor.id ?? null, actor.name || null],
+  );
+  return { commentId: String(commentId), status: 'done', handled: true, handledBy: actor.name || null };
 }
 
 // Post a reply to a Facebook comment AS THE PAGE, from the post view. `commentId` is a
@@ -236,6 +424,23 @@ export async function messageCommenter(id, commentId, { message } = {}, actor = 
     throw new ApiError(409, "This page's Facebook connection has expired. Reconnect it in Settings → Pages, then try again.");
   }
 
+  // If THIS comment was already messaged and its thread is a Live-Agent chat owned by a
+  // DIFFERENT agent, refuse UP FRONT — don't fire a second private reply into a thread the
+  // actor can't see. (This is the only case we can catch pre-send: for a different comment
+  // by the same person, Facebook hides the PSID until privateReplyToComment returns below.)
+  const prior = await query(
+    `SELECT c.handled_by, c.assigned_user_id, c.assigned_user_name
+       FROM comment_conversations cc JOIN conversations c ON c.id = cc.conversation_id
+      WHERE cc.comment_id = ? LIMIT 1`,
+    [String(commentId)],
+  );
+  if (prior.length) {
+    const c = prior[0];
+    if (c.handled_by === 'Live Agent' && c.assigned_user_id != null && Number(c.assigned_user_id) !== Number(actor?.id)) {
+      throw new ApiError(409, `This comment is already handled by ${c.assigned_user_name || 'another agent'}. Request a transfer in Messages to reply.`);
+    }
+  }
+
   const { token } = await pageCtx(post);
   const sent = await fb.privateReplyToComment(token, commentId, body);
   if (!sent.ok || !sent.recipientId) {
@@ -258,8 +463,17 @@ export async function messageCommenter(id, commentId, { message } = {}, actor = 
     createIfMissing: true,
   });
 
-  // A brand-new thread → bind it to the agent who reached out, so it lands in their "For you".
-  if (result.created && actor?.id) {
+  // Resolve ownership of the thread the message landed in. receiveInbound flips ANY reused
+  // thread to 'Live Agent' but never assigns it, so we settle it here: claim the thread for
+  // the agent who reached out (brand-new, or a Live-Agent thread nobody owns yet — including
+  // one just flipped from AI) UNLESS another agent already owns it, which we never steal.
+  const owned = await query(
+    'SELECT assigned_user_id, assigned_user_name FROM conversations WHERE id = ?',
+    [result.conversationId],
+  );
+  const ownerId = owned.length && owned[0].assigned_user_id != null ? Number(owned[0].assigned_user_id) : null;
+  const ownedByOther = ownerId != null && ownerId !== Number(actor?.id);
+  if (actor?.id && !ownedByOther) {
     await query('UPDATE conversations SET assigned_user_id = ?, assigned_user_name = ? WHERE id = ?', [
       actor.id,
       actor.name || '',
@@ -273,7 +487,14 @@ export async function messageCommenter(id, commentId, { message } = {}, actor = 
       'ON DUPLICATE KEY UPDATE conversation_id = VALUES(conversation_id)',
     [String(commentId), result.conversationId, post.account_id],
   );
-  return { conversationId: String(result.conversationId), created: !!result.created };
+  // ownedByOther: the message WAS delivered (into the other agent's thread), but the actor
+  // can't open it — the client shows an informational notice instead of a 403.
+  return {
+    conversationId: String(result.conversationId),
+    created: !!result.created,
+    ownedByOther,
+    ownerName: ownedByOther ? owned[0].assigned_user_name || 'another agent' : null,
+  };
 }
 
 // `actor` = { id, name } of the signed-in user creating the post (recorded as
@@ -622,12 +843,15 @@ export async function refreshEngagement(posts = [], { force = false } = {}) {
     const comments = c.comments ?? p.comments_count ?? null;
     const shares = c.shares ?? p.shares_count ?? null;
     const views = c.views ?? p.views_count ?? null;
+    const watchTime = c.watchTime ?? p.video_watch_time_s ?? null;
+    const avgWatch = c.avgWatch ?? p.video_avg_watch_s ?? null;
     await query(
       `UPDATE post_pool
           SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
+              video_watch_time_s = ?, video_avg_watch_s = ?,
               engagement_synced_at = UTC_TIMESTAMP()
         WHERE id = ?`,
-      [reactions, comments, shares, views, p.id],
+      [reactions, comments, shares, views, watchTime, avgWatch, p.id],
     );
     // Record this hour's snapshot so insights can be plotted over time.
     await recordInsightSnapshot(p.id, { reactions, comments, shares, views });
@@ -636,6 +860,8 @@ export async function refreshEngagement(posts = [], { force = false } = {}) {
       comments_count: comments,
       shares_count: shares,
       views_count: views,
+      video_watch_time_s: watchTime,
+      video_avg_watch_s: avgWatch,
       engagement_synced_at: new Date().toISOString(),
     });
   }
@@ -714,7 +940,8 @@ const FRESH_INSIGHT_DAYS = 7;
 export async function snapshotRecentInsights() {
   const rows = await query(
     `SELECT id, platform_post_id, parent_post_id, media_type, account_id,
-            reactions_count, comments_count, shares_count, views_count
+            reactions_count, comments_count, shares_count, views_count,
+            video_watch_time_s, video_avg_watch_s
        FROM post_pool
       WHERE status = 'posted' AND platform_post_id IS NOT NULL
         AND posted_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? DAY)
@@ -749,12 +976,15 @@ export async function snapshotRecentInsights() {
     const comments = c.comments ?? p.comments_count ?? null;
     const shares = c.shares ?? p.shares_count ?? null;
     const views = c.views ?? p.views_count ?? null;
+    const watchTime = c.watchTime ?? p.video_watch_time_s ?? null;
+    const avgWatch = c.avgWatch ?? p.video_avg_watch_s ?? null;
     await query(
       `UPDATE post_pool
           SET reactions_count = ?, comments_count = ?, shares_count = ?, views_count = ?,
+              video_watch_time_s = ?, video_avg_watch_s = ?,
               engagement_synced_at = UTC_TIMESTAMP()
         WHERE id = ?`,
-      [reactions, comments, shares, views, p.id],
+      [reactions, comments, shares, views, watchTime, avgWatch, p.id],
     );
     await recordInsightSnapshot(p.id, { reactions, comments, shares, views });
     recorded += 1;

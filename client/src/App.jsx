@@ -12,7 +12,8 @@ import DashboardPage from './pages/Dashboard/DashboardPage.jsx';
 import ContentCalendarPage from './pages/ContentCalendar/ContentCalendarPage.jsx';
 import PlannerPage from './pages/Planner/PlannerPage.jsx';
 import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
-import PostPoolPage from './pages/PostPool/PostPoolPage.jsx';
+import InsightsPage from './pages/Insights/InsightsPage.jsx';
+import ContentsView from './pages/PostPool/ContentsView.jsx';
 import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
 import ProductsPage from './pages/Products/ProductsPage.jsx';
 import ShopLayout from './pages/Shop/ShopLayout.jsx';
@@ -30,6 +31,7 @@ import VaultPage from './pages/Vault/VaultPage.jsx';
 import ProfilePage from './pages/Profile/ProfilePage.jsx';
 import CheckoutPage from './pages/Checkout/CheckoutPage.jsx';
 import AgreementViewer from './pages/Agreement/AgreementViewer.jsx';
+import PostInsightsPage from './pages/PostInsights/PostInsightsPage.jsx';
 
 export default function App() {
   const { bootstrapError, retryBootstrap, retrying } = useAuth();
@@ -40,7 +42,7 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/login" element={<LoginPage />} /> 
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
       {/* Standalone checkout tab — self-contained from a localStorage snapshot (see
@@ -49,6 +51,9 @@ export default function App() {
       {/* Public customer-facing order agreement — opened by the customer via a shared
           token link, so it lives outside the auth gate (the token is the capability). */}
       <Route path="/agreement/:token" element={<AgreementViewer />} />
+      {/* Per-post insights — opened in a NEW TAB from the post viewer's Insights button.
+          Authed (JWT) but shell-less, so it's a focused, standalone metrics page. */}
+      <Route path="/post/:id/insights" element={<ProtectedRoute><PostInsightsPage /></ProtectedRoute>} />
 
       <Route
         element={
@@ -62,7 +67,8 @@ export default function App() {
         <Route path="/content-calendar" element={<ModuleRoute moduleId="content-calendar"><ContentCalendarPage /></ModuleRoute>} />
         <Route path="/planner" element={<ModuleRoute moduleId="planner"><PlannerPage /></ModuleRoute>} />
         <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
-        <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><PostPoolPage /></ModuleRoute>} />
+        <Route path="/insights" element={<ModuleRoute moduleId="analytics"><InsightsPage /></ModuleRoute>} />
+        <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><ContentsView /></ModuleRoute>} />
         <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
         <Route path="/shop" element={<ModuleRoute moduleId="products"><ShopLayout /></ModuleRoute>}>
           <Route index element={<Navigate to="/shop/products" replace />} />

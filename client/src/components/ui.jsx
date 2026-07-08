@@ -94,6 +94,14 @@ export function ShareIcon({ size }) {
   );
 }
 
+export function FilterIcon({ size = 18 }) {
+  return (
+    <OutlineIcon size={size}>
+      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+    </OutlineIcon>
+  );
+}
+
 export function EyeIcon({ off = false, size = 18 }) {
   return off ? (
     <OutlineIcon size={size}>

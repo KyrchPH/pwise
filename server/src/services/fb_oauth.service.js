@@ -15,18 +15,35 @@ import ApiError from '../utils/ApiError.js';
 // Scopes: list pages + Messenger (send/receive + webhook subscribe) + the existing
 // post/insight/engagement features. App Review gates these for non-admin users in
 // Live mode, but app admins/testers get them with Standard Access for testing.
-const SCOPES = [
+const BASE_SCOPES = [
   'pages_show_list',
   'pages_messaging',
   'pages_manage_metadata',
   'pages_read_engagement',
   'pages_manage_posts',
+  // Reply to comments on the Page's own posts, as the Page (Post Pool → post view →
+  // Reply). Without this, replyToComment's POST /{comment-id}/comments fails with
+  // Graph error #200 "Permissions error".
+  'pages_manage_engagement',
   'read_insights',
+  // No code calls a Business Manager endpoint directly, BUT Meta attributes the
+  // /me/accounts connect call (reading each Page's access_token) to business_management
+  // when the Page is owned by a Business Manager — so it's exercised by page connect and
+  // dropping it can stop tokens being returned for business-owned Pages. Keep it.
   'business_management',
-  // Instagram messaging on the linked professional account (Messenger Platform).
-  'instagram_basic',
-  'instagram_manage_messages',
-].join(',');
+];
+
+// Instagram messaging on the linked professional account (Messenger Platform). Only
+// valid once the Instagram product is added to the Meta app — otherwise Facebook
+// rejects the ENTIRE OAuth dialog for app admins ("Invalid Scopes"), blocking Page
+// connection. Gated behind FB_ENABLE_INSTAGRAM_SCOPES (off by default).
+const INSTAGRAM_SCOPES = ['instagram_basic', 'instagram_manage_messages'];
+
+function scopeString() {
+  const scopes = [...BASE_SCOPES];
+  if (env.facebook.enableInstagramScopes) scopes.push(...INSTAGRAM_SCOPES);
+  return scopes.join(',');
+}
 
 const graphUrl = (path) => `https://graph.facebook.com/${env.facebook.graphVersion}/${path}`;
 
@@ -51,7 +68,7 @@ export function buildLoginUrl(userId) {
     client_id: env.facebook.appId,
     redirect_uri: redirectUri(),
     state,
-    scope: SCOPES,
+    scope: scopeString(),
     response_type: 'code',
   });
   return `https://www.facebook.com/${env.facebook.graphVersion}/dialog/oauth?${params.toString()}`;
@@ -104,7 +121,10 @@ export async function exchangeCodeForPages(code) {
   const accounts = await graphGet('me/accounts', {
     // Also pull the linked Instagram professional account (if any) so the import can
     // auto-fill the IG channel — best-effort; the field is simply absent when unlinked.
-    fields: 'id,name,access_token,instagram_business_account{id,username}',
+    // Only requested when the IG scopes are enabled, since reading it needs instagram_basic.
+    fields: env.facebook.enableInstagramScopes
+      ? 'id,name,access_token,instagram_business_account{id,username}'
+      : 'id,name,access_token',
     limit: '100',
     access_token: long.access_token,
   });

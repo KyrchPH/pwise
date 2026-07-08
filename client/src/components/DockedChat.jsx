@@ -16,6 +16,8 @@ export default function DockedChat({ chat, onClose, onOpened }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null); // non-error info (e.g. sent into another agent's thread)
+  const [blocked, setBlocked] = useState(false); // terminal: no further sends make sense
   const [minimized, setMinimized] = useState(false);
   const bodyRef = useRef(null);
 
@@ -27,6 +29,8 @@ export default function DockedChat({ chat, onClose, onOpened }) {
     setMessages([]);
     setDraft(chat.prefill || '');
     setError(null);
+    setNotice(null);
+    setBlocked(false);
     setBusy(false);
     setMinimized(false);
   }, [chat?.commentId]);
@@ -60,11 +64,20 @@ export default function DockedChat({ chat, onClose, onOpened }) {
     setError(null);
     try {
       if (phase === 'compose') {
-        const { conversationId: cid } = await postPool.messageCommenter(chat.postId, chat.commentId, text);
-        setConversationId(cid);
+        const res = await postPool.messageCommenter(chat.postId, chat.commentId, text);
         setDraft('');
-        onOpened?.(chat.commentId, cid); // let the comment flip to "Messaged"
-        const conv = await messaging.getConversation(cid);
+        onOpened?.(chat.commentId, res.conversationId); // let the comment flip to "Messaged"
+        if (res.ownedByOther) {
+          // Delivered, but this person already has a chat owned by another agent — we can't
+          // open it here (that thread is private to its owner). Explain instead of switching in.
+          setNotice(
+            `Your message was sent. This person is already handled by ${res.ownerName}, so it went to their inbox. Request a transfer in Messages to continue here.`,
+          );
+          setBlocked(true);
+          return;
+        }
+        setConversationId(res.conversationId);
+        const conv = await messaging.getConversation(res.conversationId);
         setMessages(conv?.messages || []);
         setPhase('open');
       } else {
@@ -141,6 +154,7 @@ export default function DockedChat({ chat, onClose, onOpened }) {
               </div>
             ))}
             {error && <div className="dchat__error">{error}</div>}
+            {notice && <div className="dchat__notice">{notice}</div>}
           </div>
 
           <div className="dchat__composer">
@@ -151,10 +165,10 @@ export default function DockedChat({ chat, onClose, onOpened }) {
               onKeyDown={onKeyDown}
               placeholder={phase === 'compose' ? 'Write your message…' : 'Reply…'}
               rows={2}
-              disabled={busy}
+              disabled={busy || blocked}
               autoFocus
             />
-            <Button type="button" size="sm" className="btn--flat" onClick={send} disabled={busy || !draft.trim()}>
+            <Button type="button" size="sm" className="btn--flat" onClick={send} disabled={busy || blocked || !draft.trim()}>
               {busy ? 'Sending…' : 'Send'}
             </Button>
           </div>

@@ -24,6 +24,9 @@ const DROP_SQL = `
   DROP TABLE IF EXISTS platform_accounts;
   DROP TABLE IF EXISTS content_notes;
   DROP TABLE IF EXISTS login_history;
+  DROP TABLE IF EXISTS trusted_devices;
+  DROP TABLE IF EXISTS auth_otp_codes;
+  DROP TABLE IF EXISTS password_change_codes;
   DROP TABLE IF EXISTS users;
   SET FOREIGN_KEY_CHECKS = 1;
 `;

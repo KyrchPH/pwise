@@ -26,7 +26,8 @@ const { env } = await import('./config/env.js');
 // Each Meta product → its webhook object, our callback path, and the fields to subscribe.
 // messaging_postbacks covers button taps (handled in inbound_gateway.service.js).
 const PRODUCTS = [
-  { path: 'messenger', object: 'page', fields: 'messages,messaging_postbacks' },
+  // `feed` delivers new/edited/removed comments on the page's posts → the live Comments inbox.
+  { path: 'messenger', object: 'page', fields: 'messages,messaging_postbacks,feed' },
   { path: 'instagram', object: 'instagram', fields: 'messages,messaging_postbacks' },
   { path: 'whatsapp', object: 'whatsapp_business_account', fields: 'messages' },
 ];

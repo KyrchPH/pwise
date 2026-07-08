@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as planner from '../../services/planner.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
-import { Button, Spinner } from '../../components/ui.jsx';
+import { Button, Spinner, FilterIcon } from '../../components/ui.jsx';
+import LottiePlayer from '../../components/LottiePlayer.jsx';
+import calendarAnimation from '../../assets/lotties/calendar.json';
 import GoalCard from './GoalCard.jsx';
 import GoalFormModal from './GoalFormModal.jsx';
 
@@ -33,13 +35,48 @@ export default function PlannerPage() {
 
   const [statusFilter, setStatusFilter] = useState('all');
   const [periodFilter, setPeriodFilter] = useState('all');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterRef = useRef(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState('');
 
   useEffect(() => {
     if (error) toast.error(apiError(error));
   }, [error, toast]);
+
+  // Progress is recomputed server-side on every load, so stamp "last updated" when
+  // fresh data arrives (mirrors the reference plan's refresh timestamp).
+  useEffect(() => {
+    if (!data) return;
+    setLastUpdated(
+      new Date().toLocaleString([], {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    );
+  }, [data]);
+
+  // Close the filter popover on outside-click / Esc.
+  useEffect(() => {
+    if (!filtersOpen) return undefined;
+    const onDown = (e) => {
+      if (filterRef.current && !filterRef.current.contains(e.target)) setFiltersOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setFiltersOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [filtersOpen]);
 
   const goals = data?.goals || [];
   const summary = data?.summary || EMPTY_SUMMARY;
@@ -56,6 +93,23 @@ export default function PlannerPage() {
       (statusFilter === 'all' || g.status === statusFilter) &&
       (periodFilter === 'all' || g.period === periodFilter),
   );
+
+  const filtersActive = statusFilter !== 'all' || periodFilter !== 'all';
+
+  // Plan hero: progress toward completing every goal (matches the "X of Y tasks
+  // completed" bar in the reference), plus a motivational headline.
+  const total = summary.total;
+  const completed = summary.counts.completed;
+  const ongoing = summary.counts.ongoing;
+  const completedPct = total ? Math.round((completed / total) * 100) : 0;
+  const headline =
+    total === 0
+      ? 'Create your first goal to start tracking progress.'
+      : ongoing > 0
+        ? `Keep going — ${ongoing} goal${ongoing === 1 ? '' : 's'} still in progress.`
+        : completed === total
+          ? 'Every goal completed — great work! 🎉'
+          : 'No active goals right now.';
 
   const openCreate = () => {
     setEditing(null);
@@ -95,6 +149,7 @@ export default function PlannerPage() {
     try {
       await planner.remove(goal.id);
       toast.success('Goal deleted.');
+      closeModal();
       invalidateCache('planner-goals');
       await refresh();
     } catch (e) {
@@ -115,38 +170,96 @@ export default function PlannerPage() {
       </div>
 
       <div className="card card--pad planner-panel">
-        {/* Overall progress across every goal */}
-        <div className="planner-banner__head">
-          <div>
-            <div className="planner-banner__label">Overall progress</div>
-            <div className="planner-banner__counts">
-              {summary.counts.ongoing} ongoing · {summary.counts.completed} completed · {summary.counts.expired} expired
-            </div>
+        {/* Filter toggle — above the overall progress section, top-right.
+            Pressing it opens a dropdown listing the Status + Cadence options. */}
+        <div className="planner-panel__toolbar">
+          <div className="planner-filter-menu" ref={filterRef}>
+            <button
+              type="button"
+              className={`planner-filter-toggle${filtersOpen ? ' is-open' : ''}${filtersActive ? ' is-active' : ''}`}
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={filtersOpen}
+              aria-label="Toggle filters"
+              title="Filters"
+            >
+              <FilterIcon />
+            </button>
+            {filtersOpen && (
+              <div className="dropdown__menu planner-filter-menu__panel" role="menu">
+                <div className="dropdown__group">
+                  <div className="dropdown__caption">Status</div>
+                  {STATUS_FILTERS.map((f) => {
+                    const selected = statusFilter === f.value;
+                    return (
+                      <button
+                        key={f.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        className={`dropdown__opt${selected ? ' is-selected' : ''}`}
+                        onClick={() => setStatusFilter(f.value)}
+                      >
+                        <span>{f.label}</span>
+                        {selected && <span className="dropdown__check" aria-hidden="true">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="dropdown__sep" aria-hidden="true" />
+                <div className="dropdown__group">
+                  <div className="dropdown__caption">Cadence</div>
+                  {PERIOD_FILTERS.map((f) => {
+                    const selected = periodFilter === f.value;
+                    return (
+                      <button
+                        key={f.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        className={`dropdown__opt${selected ? ' is-selected' : ''}`}
+                        onClick={() => setPeriodFilter(f.value)}
+                      >
+                        <span>{f.label}</span>
+                        {selected && <span className="dropdown__check" aria-hidden="true">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          <div className="planner-banner__pct">{summary.overall_percent}%</div>
-        </div>
-        <div className="planner-progress">
-          <div className="planner-progress__fill" style={{ width: `${Math.min(summary.overall_percent, 100)}%` }} />
         </div>
 
-        {/* Filters */}
-        <div className="planner-filters">
-          <label className="planner-filter">
-            <span className="planner-filter__label">Status</span>
-            <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              {STATUS_FILTERS.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="planner-filter">
-            <span className="planner-filter__label">Cadence</span>
-            <select className="select" value={periodFilter} onChange={(e) => setPeriodFilter(e.target.value)}>
-              {PERIOD_FILTERS.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-            </select>
-          </label>
+        {/* Plan hero — overall progress toward completing every goal. */}
+        <div className="plan-hero">
+          <div className="plan-hero__main">
+            <div className="plan-hero__title">Your goals</div>
+            <p className="plan-hero__sub">Track progress toward every target you’ve set for your pages.</p>
+            <div className="plan-hero__headline">{headline}</div>
+            <div
+              className="plan-bar"
+              role="progressbar"
+              aria-valuenow={completedPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div className="plan-bar__fill" style={{ width: `${completedPct}%` }} />
+              {total > 0 && <span className="plan-bar__marker" aria-hidden="true" />}
+            </div>
+            <div className="plan-hero__foot">
+              <div className="plan-hero__footline">
+                <span className="plan-hero__count">
+                  {total === 0 ? 'No goals yet' : `${completed} of ${total} goals completed`}
+                </span>
+                {total > 0 && <span className="plan-bar__flag">Goal</span>}
+              </div>
+              {lastUpdated && <span className="plan-hero__updated">Last updated {lastUpdated}</span>}
+            </div>
+          </div>
+          <div className="plan-hero__art" aria-hidden="true">
+            <LottiePlayer animationData={calendarAnimation} className="plan-hero__lottie" />
+          </div>
         </div>
 
         {/* Goals */}
@@ -163,7 +276,7 @@ export default function PlannerPage() {
         ) : (
           <div className="planner-list">
             {filtered.map((g) => (
-              <GoalCard key={g.id} goal={g} page={pageById[g.account_id]} onEdit={openEdit} onDelete={handleDelete} />
+              <GoalCard key={g.id} goal={g} page={pageById[g.account_id]} onEdit={openEdit} />
             ))}
           </div>
         )}
@@ -173,6 +286,7 @@ export default function PlannerPage() {
         open={modalOpen}
         onClose={closeModal}
         onSubmit={handleSubmit}
+        onDelete={handleDelete}
         pages={pages}
         defaultAccountId={activeId ?? pages[0]?.id}
         goal={editing}

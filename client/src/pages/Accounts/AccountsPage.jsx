@@ -58,8 +58,14 @@ function GearIcon() {
   );
 }
 
+// True while a brute-force lockout is still in effect (locked_until in the future).
+function isLocked(u) {
+  return !!u.locked_until && new Date(u.locked_until).getTime() > Date.now();
+}
+
 function statusBadge(u) {
   if (u.deleted_at) return <span className="badge badge--failed">deleted</span>;
+  if (isLocked(u)) return <span className="badge badge--failed">locked</span>;
   return u.is_active ? (
     <span className="badge badge--ready">active</span>
   ) : (
@@ -199,6 +205,16 @@ export default function AccountsPage() {
     }
   };
 
+  const unlock = async (u) => {
+    try {
+      await adminService.unlockAccount(u.id);
+      toast.success('Account unlocked');
+      refresh();
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  };
+
   const del = async (u) => {
     if (!window.confirm(`Delete ${u.email}? This soft-deletes the account (it can't log in).`)) return;
     try {
@@ -316,6 +332,19 @@ export default function AccountsPage() {
                                       }}
                                     >
                                       Edit access
+                                    </button>
+                                  )}
+                                  {isLocked(u) && (
+                                    <button
+                                      type="button"
+                                      className="card-menu__item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        unlock(u);
+                                      }}
+                                    >
+                                      Unlock
                                     </button>
                                   )}
                                   <button

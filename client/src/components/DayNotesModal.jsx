@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Button, Spinner, EmptyState } from './ui.jsx';
+import { Modal, Button, Spinner, EmptyState, PageAvatar } from './ui.jsx';
 import * as notesService from '../services/content_notes.service.js';
 import { apiError } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { usePages } from '../context/PageContext.jsx';
 
 const fmtDate = (key) => {
   if (!key) return '';
@@ -108,10 +109,14 @@ export default function DayNotesModal({
   onNoteDragEnd,
 }) {
   const toast = useToast();
+  const { pages, activeId } = usePages();
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState('');
+  // Owning page for the note being composed — defaults to the active page, but the
+  // composer's picker can file the note under any page (the calendar is page-independent).
+  const [draftPageId, setDraftPageId] = useState(null);
   const [addBusy, setAddBusy] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
@@ -212,12 +217,18 @@ export default function DayNotesModal({
     });
   };
 
+  // Open the composer, defaulting its page to the active page.
+  const startCompose = () => {
+    setDraftPageId(activeId ?? null);
+    setComposing(true);
+  };
+
   const addNote = async () => {
     const content = draft.trim();
     if (!content || addBusy) return;
     setAddBusy(true);
     try {
-      const note = await notesService.create({ note_date: dateKey, content });
+      const note = await notesService.create({ note_date: dateKey, content, page_id: draftPageId ?? null });
       setNotes((prev) => [...prev, note]);
       setDraft('');
       setComposing(false);
@@ -226,6 +237,23 @@ export default function DayNotesModal({
       toast.error(apiError(e));
     } finally {
       setAddBusy(false);
+    }
+  };
+
+  // Re-tag an existing note's owning page (the ⋮ → Page picker). Persists immediately
+  // and refreshes the month chips so the calendar logo tracks the change.
+  const changePage = async (note, pageId) => {
+    const next = pageId === '' ? null : Number(pageId);
+    if (next === (note.page_id ?? null)) return;
+    setBusyId(note.id);
+    try {
+      const updated = await notesService.setPage(note.id, next);
+      setNotes((prev) => prev.map((n) => (n.id === note.id ? updated : n)));
+      notifyChanged();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -249,6 +277,7 @@ export default function DayNotesModal({
       const updated = await notesService.update(note.id, { content });
       setNotes((prev) => prev.map((n) => (n.id === note.id ? updated : n)));
       cancelEdit();
+      notifyChanged(); // month chips mirror the note text
     } catch (e) {
       toast.error(apiError(e));
     } finally {
@@ -276,6 +305,7 @@ export default function DayNotesModal({
     try {
       const updated = await notesService.setStatus(note.id, status);
       setNotes((prev) => prev.map((n) => (n.id === note.id ? updated : n)));
+      notifyChanged(); // month chips mirror the note status
     } catch (e) {
       toast.error(apiError(e));
     } finally {
@@ -383,6 +413,23 @@ export default function DayNotesModal({
                     }
                   }}
                 />
+                {pages.length > 0 && (
+                  <label className="day-notes__pagepick">
+                    <span className="day-notes__pagepick-label">Page</span>
+                    <select
+                      className="select day-notes__pageselect"
+                      value={draftPageId ?? ''}
+                      onChange={(e) => setDraftPageId(e.target.value === '' ? null : Number(e.target.value))}
+                    >
+                      <option value="">No page</option>
+                      {pages.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.account_name || `Page ${p.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <div className="day-notes__add-actions">
                   <Button
                     size="sm"
@@ -402,7 +449,7 @@ export default function DayNotesModal({
               </div>
             ) : (
               <div className="day-notes__buttons">
-                <button type="button" className="day-notes__addbtn" onClick={() => setComposing(true)}>
+                <button type="button" className="day-notes__addbtn" onClick={startCompose}>
                   <PlusIcon /> Add note
                 </button>
                 {!isPast && (
@@ -441,6 +488,13 @@ export default function DayNotesModal({
                     <div className="day-post__main">
                       <div className="day-post__caption">{p.caption || '(no caption)'}</div>
                       <div className="day-post__meta">
+                        {p.page_fb_id && (
+                          <PageAvatar
+                            page={{ account_name: p.page_name, fb_page_id: p.page_fb_id }}
+                            className="day-post__page-logo"
+                          />
+                        )}
+                        {p.page_name ? `${p.page_name} · ` : ''}
                         {fmtClock(p.scheduled_at)}
                         {p.status ? ` · ${p.status}` : ''}
                       </div>
@@ -527,6 +581,15 @@ export default function DayNotesModal({
                           <div className="day-note__body" style={note.text_color ? { color: note.text_color } : undefined}>
                             {note.content}
                           </div>
+                          {note.page_id && (
+                            <div className="day-note__page">
+                              <PageAvatar
+                                page={{ account_name: note.page_name, fb_page_id: note.page_fb_id }}
+                                className="day-note__page-logo"
+                              />
+                              <span className="day-note__page-name">{note.page_name || 'Page'}</span>
+                            </div>
+                          )}
                         </div>
                         <div className="day-note__actions">
                           <button
@@ -669,6 +732,30 @@ export default function DayNotesModal({
                   <TrashIcon />
                   <span className="note-menu__label">Delete</span>
                 </button>
+                {pages.length > 0 &&
+                  (() => {
+                    // Read the live note so the picker reflects the current owning page
+                    // even after a change while the menu stays open.
+                    const live = notes.find((n) => n.id === menu.note.id) || menu.note;
+                    return (
+                      <div className="note-menu__pagerow">
+                        <span className="note-menu__label">Page</span>
+                        <select
+                          className="select note-menu__pageselect"
+                          value={live.page_id ?? ''}
+                          disabled={busyId === live.id}
+                          onChange={(e) => changePage(live, e.target.value)}
+                        >
+                          <option value="">No page</option>
+                          {pages.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.account_name || `Page ${p.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })()}
                 <div className="note-menu__sep" />
                 <div className="note-menu__meta">
                   <div>

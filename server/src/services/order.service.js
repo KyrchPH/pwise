@@ -91,6 +91,7 @@ function toOwnerAgreement(row) {
     contactNumber: row.contact_number,
     email: row.email || null,
     notes: row.notes || null,
+    terms: row.terms || null,
     items: parseJson(row.items, []),
     discounts: parseJson(row.discounts, []),
     subtotal: Number(row.subtotal),
@@ -117,6 +118,7 @@ function toPublicAgreement(row) {
     contactNumber: row.contact_number,
     email: row.email || null,
     notes: row.notes || null,
+    terms: row.terms || null,
     items: parseJson(row.items, []),
     discounts: parseJson(row.discounts, []),
     subtotal: Number(row.subtotal),
@@ -162,16 +164,21 @@ export async function createAgreement({ actor = {}, accountId, currency, items, 
   const token = crypto.randomBytes(20).toString('hex'); // 40 hex chars
   const expiresAt = new Date(Date.now() + AGREEMENT_TTL_MS);
 
+  // Snapshot the shop's current terms & conditions so the customer's immutable copy
+  // shows the terms in force at generation time (later edits don't reach it).
+  const paRows = await query('SELECT order_terms FROM platform_accounts WHERE id = ?', [acc]);
+  const terms = paRows[0]?.order_terms || null;
+
   const res = await query(
     `INSERT INTO order_agreements
        (token, account_id, created_by, created_by_name, currency, customer_name, delivery_address,
         contact_number, email, notes, language, items, discounts, subtotal, total_discount, total,
-        status, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+        terms, status, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
     [
       token, acc, actor.id ?? null, actor.name ?? null, cur, customerName, deliveryAddress,
       contactNumber, email, notes, lang, JSON.stringify(normItems), JSON.stringify(result.applied),
-      result.subtotal, result.totalDiscount, result.total, expiresAt,
+      result.subtotal, result.totalDiscount, result.total, terms, expiresAt,
     ],
   );
   const row = await findById(res.insertId);

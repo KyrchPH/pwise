@@ -34,6 +34,11 @@ export const setDate = asyncHandler(async (req, res) => {
   sendSuccess(res, { note });
 });
 
+export const setPage = asyncHandler(async (req, res) => {
+  const note = await service.setPage(req.params.id, req.body || {}, req.user);
+  sendSuccess(res, { note });
+});
+
 export const setColor = asyncHandler(async (req, res) => {
   const note = await service.setColor(req.params.id, req.body || {}, req.user);
   sendSuccess(res, { note });

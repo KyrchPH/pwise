@@ -30,6 +30,12 @@ export async function softDelete(id) {
   return data.data;
 }
 
+// Clear a brute-force lockout so the account can log in again.
+export async function unlockAccount(id) {
+  const { data } = await api.patch(`/admin/users/${id}/unlock`);
+  return data.data; // { id, unlocked }
+}
+
 // Replace a user's module access. modules = array of module ids.
 export async function setModuleAccess(id, modules) {
   const { data } = await api.patch(`/admin/users/${id}/access`, { modules });

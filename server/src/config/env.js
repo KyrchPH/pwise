@@ -70,6 +70,12 @@ export const env = {
     appId: process.env.FACEBOOK_APP_ID || process.env.FB_APP_ID || '',
     verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.FB_WEBHOOK_VERIFY_TOKEN || '', // GET handshake for Meta webhooks (Messenger/IG/WhatsApp); legacy FB_ name still honored
     appSecret: process.env.FB_APP_SECRET || process.env.FACEBOOK_APP_SECRET || '', // OAuth + X-Hub-Signature-256
+    // Request the Instagram messaging scopes (instagram_basic, instagram_manage_messages)
+    // in the "Connect with Facebook" OAuth dialog. OFF by default: those scopes are only
+    // valid once the Instagram product is added to the Meta app — requesting them before
+    // that makes Facebook reject the WHOLE dialog for app admins ("Invalid Scopes"). Turn
+    // on only after Instagram is configured on the app.
+    enableInstagramScopes: bool(process.env.FB_ENABLE_INSTAGRAM_SCOPES, false),
   },
 
   // "Generate with Template" delegates rendering to n8n (the "Post to n8n"

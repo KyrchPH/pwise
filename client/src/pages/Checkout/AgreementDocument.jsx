@@ -64,34 +64,36 @@ export default function AgreementDocument({ agreement, lang = 'en' }) {
       </section>
 
       <section className="agreement-doc__section">
-        <div className="agreement-doc__heading">{t.deliverTo}</div>
-        <dl className="agreement-doc__fields">
-          <div className="agreement-doc__field">
-            <dt>{t.fullName}</dt>
-            <dd>{agreement.customerName}</dd>
-          </div>
-          <div className="agreement-doc__field">
-            <dt>{t.address}</dt>
-            <dd>{agreement.deliveryAddress}</dd>
-          </div>
-          <div className="agreement-doc__field">
-            <dt>{t.contact}</dt>
-            <dd>{agreement.contactNumber}</dd>
+        <p className="agreement-doc__statement">
+          {t.stmtAuthorize} <strong>{agreement.customerName}</strong> {t.atWord} <strong>{agreement.deliveryAddress}</strong>.
+        </p>
+        <p className="agreement-doc__statement">
+          {t.stmtCoordPre} <strong>{agreement.customerName}</strong> {t.stmtCoordPost}
+        </p>
+        <div className="agreement-doc__contact">
+          <div>
+            <strong>{t.stmtContact}</strong> {agreement.contactNumber}
           </div>
           {agreement.email && (
-            <div className="agreement-doc__field">
-              <dt>{t.email}</dt>
-              <dd>{agreement.email}</dd>
+            <div>
+              <strong>{t.stmtEmail}</strong> {agreement.email}
             </div>
           )}
-          {agreement.notes && (
-            <div className="agreement-doc__field">
-              <dt>{t.notes}</dt>
-              <dd>{agreement.notes}</dd>
-            </div>
-          )}
-        </dl>
+        </div>
+        <p className="agreement-doc__statement agreement-doc__statement--issued">{t.stmtIssued}</p>
+        {agreement.notes && (
+          <p className="agreement-doc__statement agreement-doc__statement--notes">
+            {t.notes}: {agreement.notes}
+          </p>
+        )}
       </section>
+
+      {agreement.terms && (
+        <section className="agreement-doc__section">
+          <div className="agreement-doc__heading">{t.terms}</div>
+          <p className="agreement-doc__terms">{agreement.terms}</p>
+        </section>
+      )}
 
       <p className="agreement-doc__sworn">{t.swornStatement}</p>
     </div>

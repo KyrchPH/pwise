@@ -4,7 +4,8 @@ import { evaluateDiscounts, summarizeRule } from '../../config/discounts.js';
 import { formatPrice } from '../../config/currency.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { apiError } from '../../services/api.js';
-import { createAgreement } from '../../services/orders.service.js';
+import { createAgreement, getAgreement } from '../../services/orders.service.js';
+import { Spinner } from '../../components/ui.jsx';
 import DeliveryForm from './DeliveryForm.jsx';
 import AgreementPanel from './AgreementPanel.jsx';
 
@@ -62,6 +63,38 @@ function pruneOldCheckouts() {
   }
 }
 
+// A generated agreement is server-persisted, but the checkout tab only holds it in React
+// state — a reload would drop back to the cart. So we stash the agreement id in localStorage
+// keyed by this tab's `ref` (which survives reload in the URL) and re-fetch it on mount.
+const agreementKey = (ref) => `${STORAGE_PREFIX}${ref}:agreement`;
+
+function saveAgreementRef(ref, id) {
+  if (!ref) return;
+  try {
+    localStorage.setItem(agreementKey(ref), JSON.stringify({ id, createdAt: Date.now() }));
+  } catch {
+    /* storage unavailable — the reload-restore just won't work */
+  }
+}
+
+function readAgreementRef(ref) {
+  if (!ref) return null;
+  try {
+    return JSON.parse(localStorage.getItem(agreementKey(ref)) || 'null')?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function clearAgreementRef(ref) {
+  if (!ref) return;
+  try {
+    localStorage.removeItem(agreementKey(ref));
+  } catch {
+    /* ignore */
+  }
+}
+
 function CartIcon({ size = 26 }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -71,9 +104,9 @@ function CartIcon({ size = 26 }) {
     </svg>
   );
 }
-function TagIcon() {
+function TagIcon({ size = 17 }) {
   return (
-    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10z" />
       <line x1="7" y1="7" x2="7.01" y2="7" />
     </svg>
@@ -98,7 +131,8 @@ function CloseIcon() {
 export default function CheckoutPage() {
   const toast = useToast();
   // Read the snapshot once (the ref is fixed for this tab's lifetime).
-  const [data] = useState(() => readCheckout(new URLSearchParams(window.location.search).get('ref')));
+  const [ref] = useState(() => new URLSearchParams(window.location.search).get('ref'));
+  const [data] = useState(() => readCheckout(ref));
   // Selected discount ids drive the price. Codeless ("automatic") discounts are on by
   // default; coupons start off until picked in the drawer or entered by code.
   const [selectedIds, setSelectedIds] = useState(
@@ -112,11 +146,41 @@ export default function CheckoutPage() {
   // Checkout is a 3-step flow in this tab: review → delivery details → agreement.
   const [step, setStep] = useState('review');
   const [agreement, setAgreement] = useState(null);
+  // True while we re-fetch a previously-generated agreement after a reload (see below).
+  const [restoring, setRestoring] = useState(() => !!readAgreementRef(ref));
 
   useEffect(() => {
     document.title = 'Checkout · PWise';
     pruneOldCheckouts();
   }, []);
+
+  // On (re)load, restore a generated agreement from its stashed id so a refresh returns to
+  // the share panel instead of the cart. Re-fetching gets the live status/expiry, so a
+  // confirmed or expired agreement shows its correct end-state. A gone/forbidden id is
+  // cleared and we fall back to the cart.
+  useEffect(() => {
+    const id = readAgreementRef(ref);
+    if (!id) {
+      setRestoring(false);
+      return undefined;
+    }
+    let alive = true;
+    getAgreement(id)
+      .then((ag) => {
+        if (!alive) return;
+        setAgreement(ag);
+        setStep('agreement');
+      })
+      .catch(() => {
+        if (alive) clearAgreementRef(ref);
+      })
+      .finally(() => {
+        if (alive) setRestoring(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ref]);
 
   useEffect(() => {
     if (!drawerOpen) return undefined;
@@ -149,9 +213,10 @@ export default function CheckoutPage() {
   const itemCount = items.reduce((sum, it) => sum + it.quantity, 0);
 
   // Product-specific discounts (applies_to = matching_items — i.e. scoped to a product,
-  // product+qty or category) come off those items directly. We show the discounted price ON
-  // the item with the original struck through, fold it into the subtotal, and DON'T also list
-  // it in the summary (that would double-count). Whole-order discounts stay as summary lines.
+  // product+qty or category) come off those items directly, so we show the discounted price ON
+  // the item with the original struck through. The summary shows the gross subtotal, a single
+  // "Total discount" line (all applied discounts), and the net total; the selected discounts
+  // are listed by name under the "Select discounts" button.
   const sameCategory = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   const appliedAmountById = new Map(result.applied.map((a) => [a.id, a.amount]));
   const itemMatches = (d, it) => (d.scope === 'category' ? sameCategory(it.category, d.targetCategory) : it.productId === d.targetProductId);
@@ -165,10 +230,6 @@ export default function CheckoutPage() {
     // Split the discount across the matching lines in proportion to their value.
     for (const i of matchIdx) perItemDiscount[i] += amount * ((items[i].unitPrice * items[i].quantity) / base);
   }
-  const itemDiscountTotal = perItemDiscount.reduce((s, v) => s + v, 0);
-  const itemSpecificIds = new Set(selectedDiscounts.filter((d) => d.appliesTo === 'matching_items').map((d) => d.id));
-  const summaryDiscounts = result.applied.filter((a) => !itemSpecificIds.has(a.id)); // whole-order discounts only
-  const displaySubtotal = result.subtotal - itemDiscountTotal;
 
   const valueBadge = (d) => (d.valueType === 'percent' ? `${d.value}% off` : `${formatPrice(d.value, currency)} off`);
 
@@ -225,6 +286,7 @@ export default function CheckoutPage() {
           notes: delivery.notes,
         },
       });
+      saveAgreementRef(ref, created.id);
       setAgreement(created);
       setStep('agreement');
     } catch (err) {
@@ -242,6 +304,36 @@ export default function CheckoutPage() {
     if (!q) return true;
     return (d.name || '').toLowerCase().includes(q) || (d.code || '').toLowerCase().includes(q);
   });
+
+  // A blank frame while we re-fetch a generated agreement after a reload.
+  if (restoring) {
+    return (
+      <div className="checkout-page">
+        <div className="checkout checkout--narrow">
+          <Spinner label="Loading order…" />
+        </div>
+      </div>
+    );
+  }
+
+  // The generated agreement takes precedence over the cart snapshot, so a restored (or
+  // just-created) agreement shows even after the cart snapshot has aged out.
+  if (step === 'agreement' && agreement) {
+    return (
+      <div className="checkout-page">
+        <div className="checkout checkout--narrow">
+          <header className="checkout__head">
+            <span className="checkout__head-icon"><CartIcon /></span>
+            <div>
+              <h1 className="checkout__title">Order Confirmation</h1>
+              <p className="checkout__sub">Share this with the customer to review and confirm.</p>
+            </div>
+          </header>
+          <AgreementPanel agreement={agreement} />
+        </div>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
@@ -271,24 +363,6 @@ export default function CheckoutPage() {
             </div>
           </header>
           <DeliveryForm onSubmit={submitDetails} onBack={() => setStep('review')} submitting={placing} />
-        </div>
-      </div>
-    );
-  }
-
-  // Step 3: the generated agreement + staff share/tracking controls.
-  if (step === 'agreement' && agreement) {
-    return (
-      <div className="checkout-page">
-        <div className="checkout checkout--narrow">
-          <header className="checkout__head">
-            <span className="checkout__head-icon"><CartIcon /></span>
-            <div>
-              <h1 className="checkout__title">Order agreement</h1>
-              <p className="checkout__sub">Share this with the customer to review and confirm.</p>
-            </div>
-          </header>
-          <AgreementPanel agreement={agreement} />
         </div>
       </div>
     );
@@ -333,7 +407,24 @@ export default function CheckoutPage() {
                     ) : discounted ? (
                       <>
                         <span className="checkout__item-line-now">{formatPrice(newLineTotal, currency)}</span>
-                        <span className="checkout__item-line-was">{formatPrice(lineTotal, currency)}</span>
+                        <span className="checkout__item-line-meta">
+                          <span
+                            className="checkout__item-line-save"
+                            tabIndex={0}
+                            aria-label={`Discount received: ${formatPrice(lineTotal, currency)} − ${formatPrice(perItemDiscount[i], currency)} = ${formatPrice(newLineTotal, currency)}`}
+                          >
+                            <TagIcon size={13} />
+                            −{formatPrice(perItemDiscount[i], currency)}
+                            <span className="checkout__tip" role="tooltip" aria-hidden="true">
+                              <span className="checkout__tip-title">Discount received</span>
+                              <span className="checkout__tip-calc">
+                                {formatPrice(lineTotal, currency)} − {formatPrice(perItemDiscount[i], currency)} ={' '}
+                                {formatPrice(newLineTotal, currency)}
+                              </span>
+                            </span>
+                          </span>
+                          <span className="checkout__item-line-was">{formatPrice(lineTotal, currency)}</span>
+                        </span>
                       </>
                     ) : (
                       formatPrice(lineTotal, currency)
@@ -376,19 +467,37 @@ export default function CheckoutPage() {
                 <span className="checkout__select-label">{activeDiscounts.length === 0 ? 'No discounts available' : 'Select discounts'}</span>
                 {selectedDiscounts.length > 0 && <span className="checkout__select-count">{selectedDiscounts.length}</span>}
               </button>
+
+              {selectedDiscounts.length > 0 && (
+                <ul className="checkout__selected">
+                  {selectedDiscounts.map((d) => {
+                    const amt = appliedAmountById.get(d.id);
+                    return (
+                      <li className="checkout__selected-row" key={d.id}>
+                        <span className="checkout__selected-name" title={d.name}>{d.name}</span>
+                        {amt ? (
+                          <span className="checkout__selected-amt">−{formatPrice(amt, currency)}</span>
+                        ) : (
+                          <span className="checkout__selected-off">Not applied</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
 
             <div className="checkout__panel checkout__summary">
+              {result.totalDiscount > 0 && (
+                <div className="checkout__summary-row checkout__summary-row--discount">
+                  <span>Discounts</span>
+                  <span>−{formatPrice(result.totalDiscount, currency)}</span>
+                </div>
+              )}
               <div className="checkout__summary-row">
                 <span>Subtotal</span>
-                <span>{formatPrice(displaySubtotal, currency)}</span>
+                <span>{formatPrice(result.subtotal, currency)}</span>
               </div>
-              {summaryDiscounts.map((a) => (
-                <div className="checkout__summary-row checkout__summary-row--discount" key={a.id}>
-                  <span title={a.name}>{a.name}</span>
-                  <span>−{formatPrice(a.amount, currency)}</span>
-                </div>
-              ))}
               <div className="checkout__summary-row checkout__summary-total">
                 <span>Total</span>
                 <strong>{formatPrice(result.total, currency)}</strong>
