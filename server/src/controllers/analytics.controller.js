@@ -46,3 +46,13 @@ export const insights = asyncHandler(async (req, res) => {
   const data = await service.insightsOverview({ rangeDays, accountId, token, fbPageId });
   sendSuccess(res, data);
 });
+
+// Messaging ("Contacts") tab: everyone who messaged the active page over the range,
+// split into new vs returning and broken down by channel. Purely app-side data —
+// no Meta call needed, so no token/page scoping beyond the caller's active page.
+export const messaging = asyncHandler(async (req, res) => {
+  const rangeDays = Math.min(Math.max(Number(req.query.range) || 28, 7), 365);
+  const accountId = await settings.getSelectedAccountId(req.user.id);
+  const data = await service.messaging({ rangeDays, accountId });
+  sendSuccess(res, data);
+});

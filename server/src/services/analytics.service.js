@@ -269,3 +269,133 @@ export async function insightsOverview({ rangeDays = 28, accountId = null, token
 
   return { rangeDays, pageName: profile?.name ?? null, sinceDate, untilDate: isoDay(now), cards: [...metricCards, ...convCards] };
 }
+
+// ── Messaging ("Contacts") tab ────────────────────────────────────────────────
+// Everyone who messaged the ACTIVE page over the range, split into new vs
+// returning and broken down by channel (origin). All app-side data — reliable and
+// range-scoped, no dependency on Meta's (deprecated) demographic metrics.
+//
+// One conversation row == one customer per page: an inbound message reuses the
+// existing thread for that customer_handle (see resolveOrCreateConversation), so a
+// distinct handle identifies a contact and conversations.created_at is that
+// customer's first-ever contact date. That makes "new" (created in window) vs
+// "returning" (active in window but created earlier) a clean split.
+
+// Stable per-customer identity for COUNT(DISTINCT): the handle when present, else
+// the conversation id so a thread with no handle still counts once.
+const CONTACT_ID = "COALESCE(c.customer_handle, CONCAT('c#', c.id))";
+
+// Fold per-origin rows tagged cur=1/0 into { total, changePct, channels } where
+// each channel carries its own current value + change vs the previous window.
+function foldChannels(rows) {
+  const cur = new Map();
+  const prev = new Map();
+  for (const r of rows) {
+    const bucket = Number(r.cur) ? cur : prev;
+    bucket.set(r.origin, (bucket.get(r.origin) || 0) + Number(r.n));
+  }
+  const origins = [...new Set([...cur.keys(), ...prev.keys()])];
+  const channels = origins
+    .map((o) => ({ origin: o, value: cur.get(o) || 0, changePct: changePct(cur.get(o) || 0, prev.get(o) || 0) }))
+    .filter((ch) => ch.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const sum = (m) => [...m.values()].reduce((s, v) => s + v, 0);
+  const curTotal = sum(cur);
+  return { total: curTotal, changePct: changePct(curTotal, sum(prev)), channels };
+}
+
+export async function messaging({ rangeDays = 28, accountId = null } = {}) {
+  const now = Date.now();
+  const curStart = isoDay(now - rangeDays * DAY_MS); // start of the current window (inclusive)
+  const prevStart = isoDay(now - 2 * rangeDays * DAY_MS); // start of the previous window
+
+  const emptyMetric = { total: 0, changePct: null, channels: [] };
+  if (accountId == null) {
+    return {
+      rangeDays,
+      pageName: null,
+      sinceDate: curStart,
+      untilDate: isoDay(now),
+      totalContacts: emptyMetric,
+      conversationsStarted: emptyMetric,
+      newContacts: emptyMetric,
+      returningContacts: emptyMetric,
+      series: { totalContacts: [], conversationsStarted: [] },
+    };
+  }
+
+  // Total contacts by channel — distinct customers with an inbound message in the
+  // current vs previous window.
+  const contactRows = await query(
+    `SELECT COALESCE(c.origin, 'Other') AS origin, (m.created_at >= ?) AS cur, COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ?
+      GROUP BY origin, (m.created_at >= ?)`,
+    [curStart, accountId, prevStart, curStart],
+  );
+
+  // New contacts (== conversations started) by channel — a first-ever contact opens
+  // a new thread, so both come from conversations.created_at.
+  const newRows = await query(
+    `SELECT COALESCE(origin, 'Other') AS origin, (created_at >= ?) AS cur, COUNT(*) AS n
+       FROM conversations WHERE account_id = ? AND created_at >= ?
+      GROUP BY origin, (created_at >= ?)`,
+    [curStart, accountId, prevStart, curStart],
+  );
+
+  // Returning contacts — active (inbound) in the current window but first contacted
+  // before it. Current window by channel + a prior-window scalar for the delta.
+  const retCurRows = await query(
+    `SELECT COALESCE(c.origin, 'Other') AS origin, COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ? AND c.created_at < ?
+      GROUP BY origin`,
+    [accountId, curStart, curStart],
+  );
+  const retPrevRows = await query(
+    `SELECT COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ? AND m.created_at < ? AND c.created_at < ?`,
+    [accountId, prevStart, curStart, prevStart],
+  );
+
+  // Daily series (current window) for the two headline metrics.
+  const contactSeriesRows = await query(
+    `SELECT DATE_FORMAT(m.created_at, '%Y-%m-%d') AS period, COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, curStart],
+  );
+  const startedSeriesRows = await query(
+    `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS period, COUNT(*) AS n
+       FROM conversations WHERE account_id = ? AND created_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, curStart],
+  );
+
+  const pageRow = await query('SELECT account_name FROM platform_accounts WHERE id = ? LIMIT 1', [accountId]);
+
+  const conversationsStarted = foldChannels(newRows);
+  const retChannels = retCurRows
+    .map((r) => ({ origin: r.origin, value: Number(r.n), changePct: null }))
+    .filter((ch) => ch.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const retTotal = retChannels.reduce((s, ch) => s + ch.value, 0);
+
+  return {
+    rangeDays,
+    pageName: pageRow[0]?.account_name ?? null,
+    sinceDate: curStart,
+    untilDate: isoDay(now),
+    totalContacts: foldChannels(contactRows),
+    conversationsStarted,
+    // A new thread is a first-ever contact, so new contacts mirror conversations started.
+    newContacts: { ...conversationsStarted },
+    returningContacts: { total: retTotal, changePct: changePct(retTotal, Number(retPrevRows[0]?.n || 0)), channels: retChannels },
+    series: {
+      totalContacts: contactSeriesRows.map((r) => ({ period: r.period, value: Number(r.n) })),
+      conversationsStarted: startedSeriesRows.map((r) => ({ period: r.period, value: Number(r.n) })),
+    },
+  };
+}
