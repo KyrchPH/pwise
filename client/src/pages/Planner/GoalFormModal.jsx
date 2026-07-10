@@ -8,6 +8,10 @@ export const METRIC_OPTIONS = [
   { value: 'shares', label: 'Shares' },
   { value: 'views', label: 'Views' },
   { value: 'reactions', label: 'Reactions' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'promoters', label: 'Promoters' },
+  { value: 'neutral', label: 'Neutral' },
+  { value: 'detractors', label: 'Detractors' },
 ];
 
 export const PERIOD_OPTIONS = [

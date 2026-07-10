@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import * as pagesService from '../../services/pages.service.js';
+import * as surveysService from '../../services/surveys.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
@@ -33,6 +34,12 @@ const RefreshIcon = () => (
     <polyline points="23 4 23 10 17 10" />
     <polyline points="1 20 1 14 7 14" />
     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </svg>
+);
+const SendIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <line x1="22" y1="2" x2="11" y2="13" />
+    <polygon points="22 2 15 22 11 13 2 9 22 2" />
   </svg>
 );
 
@@ -202,6 +209,11 @@ const BLANK = {
   sv_enabled: false,
   sv_chancePct: 25,
   sv_cooldownDays: 30,
+  sv_sender_email: '',
+  sv_sender_name: '',
+  sv_app_password: '',
+  sv_has_app_password: false,
+  sv_remove_app_password: false,
   currency: 'PHP',
 };
 
@@ -210,11 +222,17 @@ export default function FacebookPages({ embedded = false }) {
   const { hash, search, pathname } = useLocation();
   const navigate = useNavigate();
   const { refresh: refreshSwitcher } = usePages();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { id?, ...fields }
   const [busy, setBusy] = useState(false);
+  // "Send test survey" (Customer surveys section): recipient field + the latest test's
+  // live status for the page being edited.
+  const [svTestEmail, setSvTestEmail] = useState('');
+  const [svTest, setSvTest] = useState(null); // { token, to, state, respondedAt, satisfaction, nps, comment, devLink? }
+  const [svTestBusy, setSvTestBusy] = useState(false);
+  const svEditIdRef = useRef(null); // page id currently open — guards async test-status writes against a fast page switch
   const [fbBusy, setFbBusy] = useState(false); // Connect-with-Facebook / import in flight
   const [importBatch, setImportBatch] = useState(null); // { batch, pages, selected:Set } for the picker
   const [tested, setTested] = useState(false); // FB connection verified for the CURRENT field values
@@ -371,6 +389,17 @@ export default function FacebookPages({ embedded = false }) {
   };
   const startEdit = (p) => {
     resetTest();
+    // Customer-surveys test: default the recipient to the admin's own email, clear any
+    // prior status, then load this page's most recent test (admins only).
+    svEditIdRef.current = p.id;
+    setSvTestEmail(user?.email || '');
+    setSvTest(null);
+    if (isAdmin) {
+      surveysService
+        .getTestSurvey(p.id)
+        .then((test) => { if (svEditIdRef.current === p.id) setSvTest(test); })
+        .catch(() => {});
+    }
     setEditing({
       ...BLANK,
       id: p.id,
@@ -393,6 +422,10 @@ export default function FacebookPages({ embedded = false }) {
       sv_enabled: !!p.survey_config?.enabled,
       sv_chancePct: p.survey_config?.chancePct ?? 25,
       sv_cooldownDays: p.survey_config?.cooldownDays ?? 30,
+      sv_sender_email: p.survey_sender_email || '',
+      sv_sender_name: p.survey_sender_name || '',
+      sv_has_app_password: !!p.has_survey_sender_app_password,
+      sv_remove_app_password: false,
       currency: p.currency || 'PHP',
       comment_dm_default_message: p.comment_dm_default_message || '',
       live_agent_transfer_message: p.live_agent_transfer_message || '',
@@ -429,6 +462,57 @@ export default function FacebookPages({ embedded = false }) {
     resetTest();
     setEditing(null);
   };
+
+  // Send a test survey for the page being edited. Recipient is the field value; the
+  // server falls back to the admin's own email when it's blank. Reflects the new status.
+  const sendTestSurvey = async () => {
+    if (!editing?.id || svTestBusy) return;
+    setSvTestBusy(true);
+    try {
+      const sender = editing.sv_app_password.trim()
+        ? {
+            email: editing.sv_sender_email.trim(),
+            name: editing.sv_sender_name.trim(),
+            appPassword: editing.sv_app_password.trim(),
+          }
+        : undefined;
+      const test = await surveysService.sendTestSurvey({ to: svTestEmail.trim(), accountId: editing.id, sender });
+      if (svEditIdRef.current === editing.id) setSvTest(test);
+      toast.success(`Test survey sent to ${test.to}`);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSvTestBusy(false);
+    }
+  };
+
+  // Re-check whether the test recipient has responded yet (no email resend).
+  const refreshTestSurvey = async () => {
+    if (!editing?.id || svTestBusy) return;
+    setSvTestBusy(true);
+    try {
+      const test = await surveysService.getTestSurvey(editing.id);
+      if (svEditIdRef.current === editing.id) setSvTest(test);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSvTestBusy(false);
+    }
+  };
+
+  // While a test survey is still awaiting a response and its editor is open, poll so
+  // "waiting" flips to "responded" without a manual refresh. Stops once answered/expired.
+  useEffect(() => {
+    if (!editing?.id || svTest?.state !== 'active') return undefined;
+    const id = editing.id;
+    const t = setInterval(() => {
+      surveysService
+        .getTestSurvey(id)
+        .then((test) => { if (svEditIdRef.current === id) setSvTest(test); })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+  }, [editing?.id, svTest?.state, svTest?.token]);
   // A Facebook field edit invalidates a prior successful test → back to "Connect".
   const setField = (k) => (e) => {
     const v = e.target.value;
@@ -560,6 +644,10 @@ export default function FacebookPages({ embedded = false }) {
           chancePct: Number(editing.sv_chancePct),
           cooldownDays: Number(editing.sv_cooldownDays),
         };
+        payload.survey_sender_email = editing.sv_sender_email ?? '';
+        payload.survey_sender_name = editing.sv_sender_name ?? '';
+        if (editing.sv_remove_app_password) payload.survey_sender_remove_password = true;
+        if (editing.sv_app_password.trim()) payload.survey_sender_app_password = editing.sv_app_password.trim();
         payload.currency = editing.currency || 'PHP';
       }
       if (editing.id) await pagesService.update(editing.id, payload);
@@ -1074,6 +1162,133 @@ export default function FacebookPages({ embedded = false }) {
                         <input className="input" type="number" min="1" max="365" value={editing.sv_cooldownDays} onChange={setAiField('sv_cooldownDays')} disabled={!editing.sv_enabled} />
                       </Field>
                     </div>
+
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                      <div className="text-sm" style={{ fontWeight: 600, marginBottom: 8 }}>Survey email sender</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                        <Field label="Sender email" hint="SMTP account for surveys">
+                          <input
+                            className="input"
+                            type="email"
+                            value={editing.sv_sender_email}
+                            placeholder="page@example.com"
+                            onChange={setAiField('sv_sender_email')}
+                          />
+                        </Field>
+                        <Field label="Sender name" hint="shown in the email From name">
+                          <input
+                            className="input"
+                            value={editing.sv_sender_name}
+                            placeholder={editing.account_name || 'Page name'}
+                            onChange={setAiField('sv_sender_name')}
+                          />
+                        </Field>
+                      </div>
+                      <Field
+                        label="App password"
+                        hint={editing.sv_has_app_password ? 'saved - leave blank to keep it' : 'required for the page sender'}
+                      >
+                        <input
+                          className="input"
+                          type="password"
+                          value={editing.sv_app_password}
+                          placeholder={editing.sv_has_app_password ? 'Saved app password' : 'App password'}
+                          disabled={editing.sv_remove_app_password}
+                          onChange={(e) =>
+                            setEditing((ed) => ({
+                              ...ed,
+                              sv_app_password: e.target.value,
+                              sv_remove_app_password: false,
+                            }))
+                          }
+                        />
+                      </Field>
+                      {editing.sv_has_app_password && (
+                        <label className="agreement-view__check" style={{ marginTop: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={!!editing.sv_remove_app_password}
+                            onChange={(e) =>
+                              setEditing((ed) => ({
+                                ...ed,
+                                sv_remove_app_password: e.target.checked,
+                                sv_app_password: e.target.checked ? '' : ed.sv_app_password,
+                              }))
+                            }
+                          />
+                          <span>Remove saved app password on save</span>
+                        </label>
+                      )}
+                    </div>
+
+                    {/* Send a real test survey to confirm the whole pipe (email → link →
+                        response tracking) works. Admin-only; kept out of the analytics
+                        via is_test — see surveys.service.js. */}
+                    {isAdmin && (
+                      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                        <div className="text-sm" style={{ fontWeight: 600, marginBottom: 4 }}>Test that surveys are sending</div>
+                        <div className="text-sm text-muted" style={{ margin: '0 0 10px' }}>
+                          Email yourself (or anyone) a real survey now to confirm it sends, the link opens, and the
+                          response is recorded. This test never counts toward your Insights numbers.
+                        </div>
+                        <Field label="Send test to">
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <input
+                              className="input"
+                              style={{ flex: 1 }}
+                              type="email"
+                              value={svTestEmail}
+                              placeholder={user?.email || 'you@example.com'}
+                              onChange={(e) => setSvTestEmail(e.target.value)}
+                            />
+                            <Button
+                              variant="primary"
+                              className="btn--flat btn--icon"
+                              onClick={sendTestSurvey}
+                              disabled={svTestBusy}
+                              title="Send test survey"
+                              aria-label={svTestBusy ? 'Sending test survey…' : 'Send test survey'}
+                            >
+                            {svTestBusy ? (
+                              <span
+                                aria-hidden="true"
+                                style={{
+                                  display: 'inline-block', width: 16, height: 16, borderRadius: '50%',
+                                  border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff',
+                                  animation: 'spin 0.7s linear infinite',
+                                }}
+                              />
+                            ) : (
+                              <SendIcon />
+                            )}
+                            </Button>
+                          </div>
+                        </Field>
+                        {svTest && (
+                          <div className="text-sm" style={{ marginTop: 10 }}>
+                            {svTest.state === 'submitted' ? (
+                              <span>
+                                ✅ <strong>Responded</strong> — CSAT {svTest.satisfaction}/5 · NPS {svTest.nps}/10
+                                {svTest.comment ? ` · “${svTest.comment}”` : ''}
+                              </span>
+                            ) : svTest.state === 'expired' ? (
+                              <span className="text-muted">The last test to {svTest.to} expired without a response.</span>
+                            ) : (
+                              <div className="text-muted row gap-sm" style={{ alignItems: 'center' }}>
+                                <span>Sent to {svTest.to} — waiting for a response…</span>
+                                <Button size="sm" variant="ghost" onClick={refreshTestSurvey} disabled={svTestBusy}>Check now</Button>
+                              </div>
+                            )}
+                            {svTest.devLink && (
+                              <div className="text-muted" style={{ marginTop: 6, wordBreak: 'break-all' }}>
+                                No SMTP configured (dev) — open the survey link directly:{' '}
+                                <a href={svTest.devLink} target="_blank" rel="noreferrer">{svTest.devLink}</a>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </details>
               )}
@@ -1084,7 +1299,7 @@ export default function FacebookPages({ embedded = false }) {
             <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
               Cancel
             </Button>
-            <Button size="sm" variant={tested ? 'accent' : 'primary'} onClick={onPrimary} disabled={busy}>
+            <Button size="sm" variant={tested ? 'accent' : 'primary'} className="btn--flat" onClick={onPrimary} disabled={busy}>
               {busy ? (tested ? 'Saving…' : 'Testing…') : tested ? (editing.id ? 'Save' : 'Add page') : 'Connect'}
             </Button>
           </div>

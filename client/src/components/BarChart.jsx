@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 // buckets (days / weeks / months). Props:
 //   buckets: [{ key, label }]                       — the x groups, left→right
 //   series:  [{ key, label, color, values:number[] }] — values aligned to buckets
-// A legend toggles series on/off; horizontal gridlines + a fitted y-axis; native
-// <title> tooltips per bar. The SVG sizes itself to the data (readable bars) and
-// scrolls horizontally inside its wrapper when there are many buckets.
+// A legend toggles series on/off; horizontal gridlines + a fitted y-axis; a custom
+// cursor-following tooltip per bar (instant — native <title> has an un-overridable
+// browser hover delay). The SVG sizes itself to the data (readable bars) and scrolls
+// horizontally inside its wrapper when there are many buckets.
 
 const H = 300;
 const PAD_T = 16;
@@ -33,8 +34,12 @@ function niceStep(raw) {
   return f * mag;
 }
 
-export default function BarChart({ buckets = [], series = [], selectedKeys = null, onSelect = null }) {
+export default function BarChart({ buckets = [], series = [], selectedKeys = null, onSelect = null, showLegend = true, ariaLabel = 'Metric history' }) {
   const [hidden, setHidden] = useState(() => new Set());
+  // Custom tooltip: cursor position (relative to the chart root) + the hovered bar's
+  // data. Shows with zero delay, unlike a native <title>. null when nothing is hovered.
+  const rootRef = useRef(null);
+  const [tip, setTip] = useState(null);
   // Measure the wrapper so the plot (and its gridlines/axis) can stretch to fill the
   // container when there are only a few buckets, instead of stopping at the last bar.
   const wrapRef = useRef(null);
@@ -55,6 +60,14 @@ export default function BarChart({ buckets = [], series = [], selectedKeys = nul
       else n.add(key);
       return n;
     });
+
+  // Track the cursor over a bar so the tooltip follows it (positioned relative to the
+  // chart root, which isn't clipped by the horizontal scroll wrapper).
+  const showTip = (e, b, s, v) => {
+    const r = rootRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setTip({ x: e.clientX - r.left, y: e.clientY - r.top, bucket: b.label, series: s.label, color: s.color, value: v });
+  };
 
   const visible = series.filter((s) => !hidden.has(s.key));
   const nB = buckets.length;
@@ -84,23 +97,25 @@ export default function BarChart({ buckets = [], series = [], selectedKeys = nul
   const groupX = (i) => PAD_L + GROUP_GAP / 2 + i * (groupW + GROUP_GAP);
 
   return (
-    <div className="barchart">
-      <div className="barchart__legend">
-        {series.map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            className={`barchart__leg${hidden.has(s.key) ? ' is-off' : ''}`}
-            onClick={() => toggle(s.key)}
-          >
-            <span className="barchart__leg-dot" style={{ background: s.color }} />
-            {s.label}
-          </button>
-        ))}
-      </div>
+    <div className="barchart" ref={rootRef}>
+      {showLegend && (
+        <div className="barchart__legend">
+          {series.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              className={`barchart__leg${hidden.has(s.key) ? ' is-off' : ''}`}
+              onClick={() => toggle(s.key)}
+            >
+              <span className="barchart__leg-dot" style={{ background: s.color }} />
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="barchart__scroll" ref={wrapRef}>
-        <svg className="barchart__svg" width={W} height={H} role="img" aria-label="Engagement history">
+        <svg className="barchart__svg" width={W} height={H} role="img" aria-label={ariaLabel}>
           {yTicks.map((t, i) => (
             <g key={`y${i}`}>
               <line className="barchart__grid" x1={PAD_L} y1={y(t)} x2={W - PAD_R} y2={y(t)} />
@@ -138,9 +153,10 @@ export default function BarChart({ buckets = [], series = [], selectedKeys = nul
                       height={bh}
                       rx="3"
                       fill={s.color}
-                    >
-                      <title>{`${b.label} · ${s.label}: ${v.toLocaleString()}`}</title>
-                    </rect>
+                      onMouseEnter={(e) => showTip(e, b, s, v)}
+                      onMouseMove={(e) => showTip(e, b, s, v)}
+                      onMouseLeave={() => setTip(null)}
+                    />
                   );
                 })}
                 <text className={`barchart__xlabel${selected ? ' is-selected' : ''}`} x={gx + groupW / 2} y={H - PAD_B + 18} textAnchor="middle">
@@ -153,6 +169,14 @@ export default function BarChart({ buckets = [], series = [], selectedKeys = nul
           <line className="barchart__axis" x1={PAD_L} y1={PAD_T + INNER_H} x2={W - PAD_R} y2={PAD_T + INNER_H} />
         </svg>
       </div>
+
+      {tip && (
+        <div className="barchart__tip" style={{ left: tip.x, top: tip.y }} aria-hidden="true">
+          <span className="barchart__tip-dot" style={{ background: tip.color }} />
+          <span className="barchart__tip-name">{tip.bucket} · {tip.series}</span>
+          <strong className="barchart__tip-val">{tip.value.toLocaleString()}</strong>
+        </div>
+      )}
     </div>
   );
 }

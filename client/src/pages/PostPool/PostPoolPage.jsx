@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import * as postPool from '../../services/post_pool.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
@@ -7,6 +6,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
 import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, Field, MediaThumb, TimeSelect, Dropdown, PageAvatar, HeartIcon, CommentIcon, ShareIcon, EyeIcon } from '../../components/ui.jsx';
 import PostViewer from '../../components/PostViewer.jsx';
+import CreateContentMenu from '../../components/CreateContentMenu.jsx';
 
 const FILTERS = ['all', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired', 'deleted'];
 
@@ -399,9 +399,7 @@ export default function PostPoolPage() {
           <Button variant="ghost" onClick={() => setExportOpen(true)}>
             Export Analytics Data
           </Button>
-          <Button as={Link} to="/upload">
-            + Upload post
-          </Button>
+          <CreateContentMenu />
         </div>
       </div>
 
@@ -419,11 +417,7 @@ export default function PostPoolPage() {
                   ? 'Upload your first post to get started.'
                   : `No posts with status "${filter}".`
             }
-            action={
-              <Button as={Link} to="/upload">
-                Upload a post
-              </Button>
-            }
+            action={<CreateContentMenu label="+ Create content" />}
           />
         </Card>
       ) : (

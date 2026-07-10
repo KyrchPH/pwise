@@ -19,7 +19,23 @@ const fmtCompact = (n) => {
 const fmtExact = (n) => (Number(n) || 0).toLocaleString('en-US');
 const fmtLong = (iso) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 const fmtPostedAt = (v) => (v ? new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—');
-const titleCase = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '—');
+// Friendly post-type label. Callers pass post_kind ('reel') when set, else fall back
+// to media_type ('image'|'video'|null). Photo / Video / Reels / Text are what the
+// pool produces; 'story' is mapped too (stories live in their own view but reuse
+// this label elsewhere).
+const typeLabel = (t) => {
+  switch (String(t || '').toLowerCase()) {
+    case 'video': return 'Video';
+    case 'reel':
+    case 'reels': return 'Reels';
+    case 'image':
+    case 'photo': return 'Photo';
+    case 'story': return 'Story';
+    case '':
+    case 'text': return 'Text';
+    default: return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+};
 
 function Delta({ pct }) {
   if (pct == null) return null;
@@ -135,12 +151,12 @@ export default function OverviewSection({ range }) {
                 {topPosts.map((p) => (
                   <tr key={p.id}>
                     <td className="cell-truncate" data-label="Post">
-                      <Link to="/post-pool">
+                      <Link to="/post-pool?view=posts">
                         #{p.id}
                         {p.caption ? ` — ${p.caption.slice(0, 60)}` : ''}
                       </Link>
                     </td>
-                    <td data-label="Type">{titleCase(p.media_type)}</td>
+                    <td data-label="Type">{typeLabel(p.post_kind === 'reel' ? 'reel' : p.media_type)}</td>
                     <td data-label="Posted">{fmtPostedAt(p.posted_at)}</td>
                     <td data-label="Reactions">{fmtCompact(p.reactions_count)}</td>
                     <td data-label="Comments">{fmtCompact(p.comments_count)}</td>

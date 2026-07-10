@@ -2,6 +2,7 @@ import { Router } from 'express';
 import requireAuth from '../middleware/auth.middleware.js';
 import requireAdmin from '../middleware/admin.middleware.js';
 import * as ctrl from '../controllers/admin.controller.js';
+import * as roleCtrl from '../controllers/roles.controller.js';
 
 const router = Router();
 
@@ -11,6 +12,12 @@ router.use(requireAuth, requireAdmin);
 router.post('/invites', ctrl.createInvite);
 router.get('/invites', ctrl.listInvites);
 router.delete('/invites/:id', ctrl.deleteInvite);
+
+// User Roles — named module-access presets.
+router.get('/roles', roleCtrl.listRoles);
+router.post('/roles', roleCtrl.createRole); // { name, modules }
+router.patch('/roles/:id', roleCtrl.updateRole); // { name?, modules? } → live fan-out
+router.delete('/roles/:id', roleCtrl.deleteRole);
 router.get('/users', ctrl.listUsers);
 router.patch('/users/:id', ctrl.setActive); // { is_active: boolean }
 router.patch('/users/:id/role', ctrl.setRole); // { role: 'user' | 'admin' }

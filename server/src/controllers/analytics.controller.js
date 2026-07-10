@@ -5,9 +5,10 @@ import * as settings from '../services/settings.service.js';
 import * as accounts from '../services/platform_accounts.service.js';
 
 // Page analytics overview for the Analytics dashboard, scoped to the caller's
-// active page. `range` = days (7..365).
+// active page. `range` = days (7..1825), so the UI can bucket years when the
+// warehouse has enough history.
 export const overview = asyncHandler(async (req, res) => {
-  const rangeDays = Math.min(Math.max(Number(req.query.range) || 28, 7), 365);
+  const rangeDays = Math.min(Math.max(Number(req.query.range) || 28, 7), 1825);
   // Optional ?accountId scopes to a specific (workspace-shared) page — used by the
   // per-post insights tab; otherwise fall back to the caller's active page.
   const reqAccount = Number(req.query.accountId);

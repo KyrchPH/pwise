@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useActiveRender } from '../context/ActiveRenderContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { ProgressBar, Button } from './ui.jsx';
@@ -11,6 +11,7 @@ export default function RenderIndicator() {
   const { render, error, clearError } = useActiveRender();
   const { isAuthenticated } = useAuth();
   const { pathname } = useLocation();
+  const [params] = useSearchParams();
   const navigate = useNavigate();
   const [dismissedUrl, setDismissedUrl] = useState(null);
 
@@ -34,7 +35,9 @@ export default function RenderIndicator() {
   }
 
   if (!render) return null;
-  const onUpload = pathname === '/upload';
+  // The compose view (Contents › Create) shows the accept/drop dialog itself, so the
+  // toast steps aside there.
+  const onCompose = pathname === '/post-pool' && params.get('view') === 'compose';
 
   if (render.status === 'uploading' || render.status === 'rendering') {
     const uploading = render.status === 'uploading';
@@ -54,9 +57,9 @@ export default function RenderIndicator() {
     );
   }
 
-  // Finished while the user was elsewhere → nudge them back to Upload to use it. On the
-  // Upload page the form itself shows the accept/drop dialog, so the toast steps aside.
-  if (render.status === 'ready' && !onUpload && dismissedUrl !== render.url) {
+  // Finished while the user was elsewhere → nudge them to Compose to use it. On the
+  // compose view the form itself shows the accept/drop dialog, so the toast steps aside.
+  if (render.status === 'ready' && !onCompose && dismissedUrl !== render.url) {
     return (
       <div className="render-toast render-toast--ready" role="status">
         <div className="render-toast__head">
@@ -73,9 +76,9 @@ export default function RenderIndicator() {
             ×
           </button>
         </div>
-        <p className="render-toast__hint">Open Upload to add it to your post.</p>
+        <p className="render-toast__hint">Open Compose to add it to your post.</p>
         <div className="render-toast__actions">
-          <Button size="sm" onClick={() => navigate('/upload')}>
+          <Button size="sm" onClick={() => navigate('/post-pool?view=compose&type=video')}>
             View
           </Button>
         </div>

@@ -108,7 +108,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = String($json.output ?? '').trim();\nif (!raw) {\n  throw new Error('DeepSeek did not return an assistant answer');\n}\n\n// The agent is told to reply with {\"answer\",\"actions\"} JSON. Be forgiving: strip\n// markdown fences, and if parsing still fails treat the whole text as the answer.\nfunction tryParse(text) {\n  try {\n    const parsed = JSON.parse(text);\n    return parsed && typeof parsed === 'object' ? parsed : null;\n  } catch {\n    return null;\n  }\n}\n\nlet cleaned = raw;\nconst fenced = cleaned.match(/^\\s*```(?:json)?\\s*([\\s\\S]*?)\\s*```\\s*$/i);\nif (fenced) cleaned = fenced[1].trim();\n\nlet parsed = tryParse(cleaned);\nif (!parsed) {\n  // Sometimes the JSON is embedded in prose — take the outermost object.\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start !== -1 && end > start) parsed = tryParse(cleaned.slice(start, end + 1));\n}\n\nconst answer = String((parsed && (parsed.answer ?? parsed.message)) ?? cleaned).trim();\nif (!answer) {\n  throw new Error('assistant reply had no answer text');\n}\n\n// Light shape filter here; the pwise server re-validates every action against its\n// allowlist before anything reaches the browser.\nconst KNOWN_TYPES = new Set(['navigate', 'reload', 'read_storage', 'ui']);\nconst actions = (parsed && Array.isArray(parsed.actions) ? parsed.actions : [])\n  .filter((a) => a && typeof a === 'object' && KNOWN_TYPES.has(a.type))\n  .slice(0, 5);\n\nreturn [{\n  json: {\n    answer,\n    actions,\n    source: 'n8n',\n    model: 'deepseek-chat',\n  },\n}];"
+        "jsCode": "const raw = String($json.output ?? '').trim();\nif (!raw) {\n  throw new Error('DeepSeek did not return an assistant answer');\n}\n\n// The agent is told to reply with {\"answer\",\"actions\"} JSON. Be forgiving: strip\n// markdown fences, and if parsing still fails treat the whole text as the answer.\nfunction tryParse(text) {\n  try {\n    const parsed = JSON.parse(text);\n    return parsed && typeof parsed === 'object' ? parsed : null;\n  } catch {\n    return null;\n  }\n}\n\nlet cleaned = raw;\nconst fenced = cleaned.match(/^\\s*```(?:json)?\\s*([\\s\\S]*?)\\s*```\\s*$/i);\nif (fenced) cleaned = fenced[1].trim();\n\nlet parsed = tryParse(cleaned);\nif (!parsed) {\n  // Sometimes the JSON is embedded in prose — take the outermost object.\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start !== -1 && end > start) parsed = tryParse(cleaned.slice(start, end + 1));\n}\n\nconst answer = String((parsed && (parsed.answer ?? parsed.message)) ?? cleaned).trim();\nif (!answer) {\n  throw new Error('assistant reply had no answer text');\n}\n\n// Light shape filter here; the pwise server re-validates every action against its\n// allowlist before anything reaches the browser.\nconst KNOWN_TYPES = new Set(['navigate', 'reload', 'read_storage', 'ui', 'theme', 'page', 'sidebar', 'pin', 'notes']);\nconst actions = (parsed && Array.isArray(parsed.actions) ? parsed.actions : [])\n  .filter((a) => a && typeof a === 'object' && KNOWN_TYPES.has(a.type))\n  .slice(0, 5);\n\nreturn [{\n  json: {\n    answer,\n    actions,\n    source: 'n8n',\n    model: 'deepseek-chat',\n  },\n}];"
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000006",
       "name": "Format Assistant Answer",
@@ -162,7 +162,7 @@
         "options": {}
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000009",
-      "name": "pwise API (read-only)",
+      "name": "pwise_api",
       "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
       "typeVersion": 1.1,
       "position": [
@@ -270,7 +270,7 @@
         ]
       ]
     },
-    "pwise API (read-only)": {
+    "pwise_api": {
       "ai_tool": [
         [
           {

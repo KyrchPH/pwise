@@ -31,7 +31,6 @@ const NAVIGABLE_PATHS = new Set([
   '/analytics',
   '/insights',
   '/post-pool',
-  '/upload',
   '/shop',
   '/shop/products',
   '/shop/discounts',

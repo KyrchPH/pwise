@@ -136,27 +136,17 @@ const PRIMARY_NAV = [
     label: 'Contents',
     moduleId: 'post-pool',
     children: [
-      { to: '/post-pool', label: 'Posts & reels', postPoolView: 'contents' },
+      { to: '/post-pool', label: 'Overview', postPoolView: 'overview' },
+      { to: '/post-pool?view=posts', label: 'Posts & reels', postPoolView: 'posts' },
       { to: '/post-pool?view=stories', label: 'Stories', postPoolView: 'stories' },
       { to: '/post-pool?view=comments', label: 'Comments', postPoolView: 'comments' },
+      { to: '/post-pool?view=compose&type=post', label: 'Create', postPoolView: 'compose' },
     ],
     icon: (
       <Ico>
         <path d="M12 2 2 7l10 5 10-5-10-5z" />
         <path d="M2 17l10 5 10-5" />
         <path d="M2 12l10 5 10-5" />
-      </Ico>
-    ),
-  },
-  {
-    to: '/upload',
-    label: 'Upload',
-    moduleId: 'upload',
-    icon: (
-      <Ico>
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="17 8 12 3 7 8" />
-        <line x1="12" y1="3" x2="12" y2="15" />
       </Ico>
     ),
   },
@@ -284,7 +274,7 @@ function formatCount(n) {
 // posting, messaging, products, analytics). When the active page's Facebook
 // connection is broken, these are gated behind a reconnect prompt; page-independent
 // routes (Vault, Logs, Settings, Profile…) stay usable so the page can be fixed.
-const PAGE_SCOPED_PATHS = ['/dashboard', '/analytics', '/post-pool', '/upload', '/shop', '/messages'];
+const PAGE_SCOPED_PATHS = ['/dashboard', '/analytics', '/post-pool', '/shop', '/messages'];
 
 // Full-screen block shown in place of a page-scoped view when the active page's
 // Facebook token has been revoked/expired. Admins get a Reconnect shortcut; everyone
@@ -353,6 +343,8 @@ export default function AppLayout() {
   const isActivityPage = pathname === '/activity';
   const isLogsPage = pathname === '/logs';
   const isAccountsPage = pathname === '/accounts';
+  const isDashboardPage = pathname === '/dashboard';
+  const isAnalyticsPage = pathname === '/analytics';
   const isPostPoolPage = pathname === '/post-pool';
   const isInsightsPage = pathname === '/insights';
   // The Comments sub-view (/post-pool?view=comments) is a full-height inbox like Messaging.
@@ -545,7 +537,13 @@ export default function AppLayout() {
     const isPinned = pinnedSet.has(n.to);
     const query = new URLSearchParams(search);
     const insightsView = pathname === '/insights' ? query.get('view') || 'overview' : '';
-    const postPoolView = pathname === '/post-pool' ? query.get('view') || 'contents' : '';
+    const rawPostPoolView = pathname === '/post-pool' ? query.get('view') || 'overview' : '';
+    const postPoolView =
+      rawPostPoolView === 'contents'
+        ? 'posts'
+        : ['posts', 'stories', 'comments', 'compose'].includes(rawPostPoolView)
+          ? rawPostPoolView
+          : 'overview';
     const settingsSection = pathname === '/settings' ? (hash === '#facebook-pages' ? 'pages' : query.get('section') || 'posting') : '';
     const children = (n.children || []).filter((child) => child.enabled !== false && !(child.admin && !isAdmin));
     const showSubnav = !keyPrefix && !collapsed && !locked && pathname === n.to && children.length > 0;
@@ -886,7 +884,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage || isSettingsPage ? ' content__inner--fill' : ''}${isCommentsView ? ' content__inner--comments' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage || isPostPoolPage || isSettingsPage || isInsightsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage || isSettingsPage ? ' content__inner--fill' : ''}${isCommentsView ? ' content__inner--comments' : ''}${isDashboardPage || isAnalyticsPage || isProductsPage || isActivityPage || isLogsPage || isAccountsPage || isPostPoolPage || isSettingsPage || isInsightsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             {gated ? (

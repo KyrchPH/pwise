@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Card, EmptyState, Modal, Spinner } from '../../components/ui.jsx';
+import { Button, Card, EmptyState, Modal, PageAvatar, Spinner } from '../../components/ui.jsx';
 import { AvatarWithPresence } from '../../components/PresenceBadge.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import ProductsDrawer from '../../components/ProductsDrawer.jsx';
@@ -69,6 +69,23 @@ function CheckIcon({ size = 16 }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+function MoreIcon({ size = 16 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+function BlockIcon({ size = 18 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
     </svg>
   );
 }
@@ -765,6 +782,7 @@ export default function MessagingPage() {
   const filterRef = useRef(null);
   const copyTimerRef = useRef(null);
   const conversationCopyTimerRef = useRef(null);
+  const conversationMenuRef = useRef(null);
   const composerInputRef = useRef(null);
   const messagesRef = useRef(null); // scroll container for the open thread
   const inboxRefreshSeqRef = useRef(0);
@@ -796,6 +814,7 @@ export default function MessagingPage() {
   const [npsView, setNpsView] = useState(false); // NPS survey metrics section in the content view
   const [agentView, setAgentView] = useState(storedAgentView); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
+  const [conversationMenuOpen, setConversationMenuOpen] = useState(false); // thread header overflow menu
   const [copiedId, setCopiedId] = useState(null); // message whose copy just succeeded
   const [copiedConversationId, setCopiedConversationId] = useState(null); // public conversation id whose copy just succeeded
   const [conversations, setConversations] = useState([]);
@@ -1138,6 +1157,27 @@ export default function MessagingPage() {
   const blocked = !!activeConversation?.blocked;
 
   useEffect(() => {
+    setConversationMenuOpen(false);
+  }, [activeConversation?.id]);
+
+  useEffect(() => {
+    if (!conversationMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (conversationMenuRef.current?.contains(event.target)) return;
+      setConversationMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setConversationMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [conversationMenuOpen]);
+
+  useEffect(() => {
     if (!composerPageId) {
       setComposerTemplates([]);
       return undefined;
@@ -1196,6 +1236,7 @@ export default function MessagingPage() {
   const filterLabel = isAllPages
     ? 'All pages'
     : pageCards.find((page) => page.id === selectedPageId)?.name || 'All pages';
+  const selectedFilterPage = !isAllPages ? pageCards.find((page) => page.id === selectedPageId) : null;
 
   const applyPageFilter = (value) => {
     const nextSearchParams = new URLSearchParams(searchParams);
@@ -1713,10 +1754,11 @@ export default function MessagingPage() {
                   aria-label="Filter conversations by page"
                   title="Filter by page"
                 >
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                  </svg>
-                  <span className="msg-filter__label">{filterLabel}</span>
+                  {selectedFilterPage ? (
+                    <PageAvatar page={selectedFilterPage} className="msg-filter__avatar" />
+                  ) : (
+                    <span className="msg-filter__label">{filterLabel}</span>
+                  )}
                   {unreadTotal > 0 && (
                     <span className="msg-filter__count" title={`${unreadTotal} unread chats`}>
                       {unreadTotal}
@@ -1754,7 +1796,10 @@ export default function MessagingPage() {
                           className={`dropdown__opt${selected ? ' is-selected' : ''}`}
                           onClick={() => applyPageFilter(page.id)}
                         >
-                          <span>{page.name}</span>
+                          <span className="msg-filter__opt-main">
+                            <PageAvatar page={page} className="msg-filter__opt-avatar" />
+                            <span>{page.name}</span>
+                          </span>
                           {pageUnread > 0 && (
                             <span className="msg-filter__opt-end">
                               <span className="msg-filter__opt-count">{pageUnread}</span>
@@ -1920,56 +1965,100 @@ export default function MessagingPage() {
                   </div>
                 </div>
                 <div className="msg-thread__meta">
-                  <span className="msg-thread-id" title={`Conversation ID ${activeConversationCid}`}>
-                    <span className="msg-thread-id__label">ID</span>
-                    <span className="msg-thread-id__value">{activeConversationCid}</span>
-                    <button
-                      type="button"
-                      className={`msg-thread-id__copy${copiedConversationId === activeConversationCid ? ' is-copied' : ''}`}
-                      onClick={handleCopyConversationId}
-                      title={copiedConversationId === activeConversationCid ? 'Copied' : 'Copy conversation ID'}
-                      aria-label={copiedConversationId === activeConversationCid ? 'Copied conversation ID' : 'Copy conversation ID'}
-                    >
-                      {copiedConversationId === activeConversationCid ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-                    </button>
-                  </span>
-                  <button
-                    type="button"
-                    className="msg-notes-btn"
-                    onClick={() => setNotesOpen(true)}
-                    title="Notes"
-                    aria-label={notes.length ? `Notes (${notes.length})` : 'Notes'}
-                  >
-                    <NotesIcon />
-                    {notes.length > 0 && <span className="msg-notes-btn__badge">{notes.length}</span>}
-                  </button>
-                  {isLiveAgent && (
-                    <button
-                      type="button"
-                      className="msg-transfer-btn"
-                      onClick={openTransfer}
-                      title="Transfer conversation"
-                      aria-label="Transfer conversation"
-                    >
-                      <TransferIcon />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className={`msg-transfer-btn msg-block-btn${blocked ? ' is-blocked' : ''}`}
-                    onClick={blocked ? handleUnblock : handleBlock}
-                    title={blocked ? 'Unblock customer' : 'Block customer'}
-                    aria-label={blocked ? 'Unblock customer' : 'Block customer'}
-                  >
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9" />
-                      <line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
-                    </svg>
-                  </button>
                   <span className={`msg-status-badge msg-status-badge--${isLiveAgent ? 'live' : 'ai'}`}>
                     <span className="msg-status-badge__dot" aria-hidden="true" />
                     {activeConversation.handledBy}
                   </span>
+                  <div className="msg-thread-menu" ref={conversationMenuRef}>
+                    <button
+                      type="button"
+                      className="msg-thread-menu__trigger"
+                      onClick={() => setConversationMenuOpen((open) => !open)}
+                      aria-haspopup="menu"
+                      aria-expanded={conversationMenuOpen}
+                      aria-label="Conversation options"
+                      title="Conversation options"
+                    >
+                      <MoreIcon />
+                    </button>
+                    {conversationMenuOpen && (
+                      <div className="msg-thread-menu__panel" role="menu" aria-label="Conversation options">
+                        <button
+                          type="button"
+                          className="msg-thread-menu__item msg-thread-menu__item--id"
+                          onClick={handleCopyConversationId}
+                          role="menuitem"
+                          title={copiedConversationId === activeConversationCid ? 'Copied' : 'Copy conversation ID'}
+                        >
+                          <span className="msg-thread-menu__icon" aria-hidden="true">
+                            {copiedConversationId === activeConversationCid ? <CheckIcon size={15} /> : <CopyIcon size={15} />}
+                          </span>
+                          <span className="msg-thread-menu__content">
+                            <span className="msg-thread-menu__label">Conversation ID</span>
+                            <span className="msg-thread-menu__value">{activeConversationCid}</span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="msg-thread-menu__item"
+                          onClick={() => {
+                            setConversationMenuOpen(false);
+                            setNotesOpen(true);
+                          }}
+                          role="menuitem"
+                        >
+                          <span className="msg-thread-menu__icon" aria-hidden="true">
+                            <NotesIcon />
+                          </span>
+                          <span className="msg-thread-menu__content">
+                            <span className="msg-thread-menu__label">Notes</span>
+                            <span className="msg-thread-menu__meta">
+                              {notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : 'Add or view notes'}
+                            </span>
+                          </span>
+                        </button>
+                        {isLiveAgent && (
+                          <button
+                            type="button"
+                            className="msg-thread-menu__item"
+                            onClick={() => {
+                              setConversationMenuOpen(false);
+                              openTransfer();
+                            }}
+                            role="menuitem"
+                          >
+                            <span className="msg-thread-menu__icon" aria-hidden="true">
+                              <TransferIcon />
+                            </span>
+                            <span className="msg-thread-menu__content">
+                              <span className="msg-thread-menu__label">Transfer</span>
+                              <span className="msg-thread-menu__meta">Send to another agent</span>
+                            </span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className={`msg-thread-menu__item msg-thread-menu__item--danger${blocked ? ' is-active' : ''}`}
+                          onClick={() => {
+                            setConversationMenuOpen(false);
+                            if (blocked) handleUnblock();
+                            else handleBlock();
+                          }}
+                          role="menuitem"
+                        >
+                          <span className="msg-thread-menu__icon" aria-hidden="true">
+                            <BlockIcon />
+                          </span>
+                          <span className="msg-thread-menu__content">
+                            <span className="msg-thread-menu__label">{blocked ? 'Unblock' : 'Block'}</span>
+                            <span className="msg-thread-menu__meta">
+                              {blocked ? 'Allow customer messages' : 'Stop customer messages'}
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

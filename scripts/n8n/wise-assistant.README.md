@@ -18,7 +18,7 @@ DevScreenAgent.jsx (dev overlay)
       ├─ Build Assistant Prompt          (system + user prompt, action contract + client context)
       ├─ Wise Agent → DeepSeek Chat Model (LLM answer)
       │     ├─ Redis Chat Memory           (per-user conversation buffer, keyed by user id)
-      │     └─ pwise API (read-only) tool  (GET back into /api/* with the scoped token)
+      │     └─ pwise_api tool (read-only)  (GET back into /api/* with the scoped token)
       ├─ Format Assistant Answer          (parses {answer, actions} JSON)
       └─ Respond to App → { answer, actions, source, model }
   ← server SANITIZES actions against an allowlist, returns { answer, actions, source }
@@ -37,8 +37,18 @@ The agent may return an `actions` array (max 5) the browser executes **after** t
 | `reload` | Reload the current page | — |
 | `read_storage` | Show the user their app `localStorage` | Values are **redacted client-side** (anything matching `token/secret/password/otp/credential/device`) before they ever leave the browser. |
 | `ui` (`fill`/`toggle`/`click`) | Operate a visible control on the current page | Never touches password/OTP/file inputs, never operates profile/account screens, never follows links that leave the app or open a file picker. |
+| `theme` (`dark`/`light`/`toggle`) | Switch the color theme | App-state action (calls `ThemeContext`), so it's reliable regardless of page — no menu to open. |
+| `notes` (`show`/`hide`/`toggle`) | Show/hide the Wise Notes sticky notes | Per-user UI aid; never leaves the browser. |
+| `sidebar` (`collapse`/`expand`/`toggle`) | Collapse/expand the left sidebar rail | Cosmetic, persisted per browser. |
+| `pin` (`pin`/`unpin`/`toggle`, `target`) | Pin/unpin a sidebar item to Quick Access | Only items the user can access (reuses `checkNavigation`). |
+| `page` (`target`) | Switch the active Facebook page | Matched against the user's **own** connected pages; changes the data context app-wide, so the model only emits it on explicit request. |
 
-**Reading user data:** the `pwise API (read-only)` tool GETs the pwise REST API on the
+The last four app-state actions (`theme`/`notes`/`sidebar`/`pin`) and `page` call app state
+directly instead of hunting a DOM button: `theme`/`page` via React context in `DevScreenAgent`,
+and `sidebar`/`pin`/`notes` via a tiny UI bus (`client/src/utils/wiseUiBus.js`) that `AppLayout`
+and `WiseNotes` subscribe to.
+
+**Reading user data:** the `pwise_api` (read-only) tool GETs the pwise REST API on the
 user's behalf. It uses a short-lived (10-min), session-bound, `scope:wise_assistant` JWT
 minted by the server — `requireAuth` rejects any non-GET request made with it, so the
 agent can **read** the signed-in user's data (scoped to them by the normal API) but can
@@ -53,8 +63,22 @@ time. Both layers must agree for an action to run.
 
 ## 1. Populate Supabase context
 
-The four tables are created and filled by the import script from the spreadsheet
-`artifacts/wise-assistant-layout-context.xlsx`:
+The four tables — `public.navigations`, `public.screens`, `public.controls`,
+`public.assistant_playbook` — hold the app map the agent grounds its answers in. There are
+**two ways** to load them; both create the tables if missing and **TRUNCATE + reload**.
+
+**A. SQL (no local tooling, paste into Supabase) — recommended for a quick refresh.**
+`artifacts/wise-assistant-context.sql` is a ready-to-run transaction reflecting the current
+app (incl. rows describing the executable actions above). Regenerate it any time the app
+changes, then paste the file into the **Supabase SQL editor** (or `psql`):
+
+```bash
+node scripts/src/generate-wise-assistant-context-sql.js   # -> artifacts/wise-assistant-context.sql
+```
+
+**B. Workbook + importer (the original pipeline).** Edit the hardcoded rows in
+`scripts/src/generate-wise-assistant-context.py`, rebuild `artifacts/wise-assistant-layout-context.xlsx`,
+then load it:
 
 ```bash
 cd scripts
@@ -63,9 +87,10 @@ cd scripts
 node src/import-wise-assistant-context.js
 ```
 
-Creates/loads `public.navigations`, `public.screens`, `public.controls`,
-`public.assistant_playbook` (each has `sort_order` + `created_at`/`updated_at`, which the
-workflow query relies on). Re-run any time the spreadsheet changes — it TRUNCATEs + reloads.
+> **Both replace the table contents** (`TRUNCATE … RESTART IDENTITY`). Any rows hand-edited
+> directly in the Supabase Table Editor are overwritten — fold such edits back into the
+> generator (A or B) so they survive the next refresh. Each row keeps `sort_order` +
+> `created_at`/`updated_at`, which the workflow query relies on.
 
 ## 2. Import + configure the n8n workflow
 
@@ -80,10 +105,13 @@ workflow query relies on). Re-run any time the spreadsheet changes — it TRUNCA
 4. **Webhook secret** (recommended) — the **Wise Assistant Webhook** node ships with
    **Header Auth** enabled. Create a **Header Auth** credential with Name `x-wise-assistant-secret`
    and Value = your secret, then select it on the node. See "Securing the webhook" below.
-5. **pwise API (read-only) tool** — no config needed. The **Normalize Request** node passes a
+5. **pwise_api tool** (read-only) — no config needed. The **Normalize Request** node passes a
    per-request `assistant_api` (base URL + scoped token) that the tool node reads via
    expressions; there is no credential to select. Just make sure n8n can reach the pwise API
    at the base URL the server sends (see `N8N_WISE_ASSISTANT_API_BASE_URL` below).
+   **Keep the node name `pwise_api`** — n8n derives the agent tool name from the node name and
+   (since n8n 2.16.x) rejects anything but letters, digits, and underscores. Spaces or `()` in
+   the name break the workflow, and the system prompt tells the model to call `pwise_api`.
 6. **Redis Chat Memory** — open the **Redis Chat Memory** node and select your Redis
    credential (the JSON ships a placeholder id `REPLACE_WITH_REDIS_CREDENTIAL_ID`; reuse the
    same Redis your other workflows use). The session key is `wise-assistant:<user id>`, so the

@@ -20,7 +20,6 @@ export const NAVIGABLE_ROUTES = [
   { path: '/analytics', label: 'Analytics', moduleId: 'analytics' },
   { path: '/insights', label: 'Insights', moduleId: 'insights' },
   { path: '/post-pool', label: 'Contents', moduleId: 'post-pool' },
-  { path: '/upload', label: 'Upload', moduleId: 'upload' },
   { path: '/shop', label: 'Shop', moduleId: 'products' },
   { path: '/shop/products', label: 'Shop — Products', moduleId: 'products' },
   { path: '/shop/discounts', label: 'Shop — Discounts', moduleId: 'products' },

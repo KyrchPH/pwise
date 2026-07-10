@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as stories from '../../services/stories.service.js';
 import * as upload from '../../services/upload.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
-import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, MediaThumb, ProgressBar, PageAvatar } from '../../components/ui.jsx';
+import { Button, Card, Spinner, StatusBadge, EmptyState, Modal, MediaThumb, ProgressBar } from '../../components/ui.jsx';
 import MediaDropzone from '../../components/MediaDropzone.jsx';
 
 const PAGE_SIZE = 18;
@@ -45,8 +46,80 @@ function PlatformChip({ platform }) {
   return <span className={`story-card__platform story-card__platform--${platform}`}>{PLATFORM_LABELS[platform] || platform}</span>;
 }
 
+function PlatformLogo({ platform }) {
+  const key = String(platform || '').toLowerCase();
+  const label = PLATFORM_LABELS[key] || platform || 'Platform';
+
+  if (key === 'facebook') {
+    return (
+      <span className="story-card__platform-logo" title={label} aria-label={label}>
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+          <rect width="24" height="24" rx="6" fill="#1877F2" />
+          <path
+            d="M15.5 12.5l.4-2.6h-2.5V8.2c0-.7.35-1.4 1.45-1.4h1.15V4.6s-1.05-.18-2.05-.18c-2.1 0-3.45 1.27-3.45 3.56v2.02H8.2v2.6h2.25V19h2.95v-6.5z"
+            fill="#fff"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  if (key === 'instagram') {
+    return (
+      <span className="story-card__platform-logo story-card__platform-logo--instagram" title={label} aria-label={label}>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <rect x="5" y="5" width="14" height="14" rx="4" />
+          <circle cx="12" cy="12" r="3" />
+          <circle cx="16.5" cy="7.5" r="0.8" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span className="story-card__platform-logo story-card__platform-logo--unknown" title={label} aria-label={label}>
+      {label.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+// Pressing the media opens the full story view page (media + insights). Video
+// plays there, large and with controls — no inline preview player here.
+function StoryMedia({ story, onOpen }) {
+  return (
+    <button type="button" className="story-card__open" onClick={onOpen} aria-label={`View story #${story.id}`}>
+      <MediaThumb
+        mediaUrl={story.media_preview_url}
+        mediaType={story.media_type}
+        thumbnailUrl={story.thumbnail_preview_url}
+      >
+        <span className="story-card__open-hint" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          View insights
+        </span>
+      </MediaThumb>
+    </button>
+  );
+}
+
 export default function StoriesPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const { activePage } = usePages();
   const [page, setPage] = useState(1);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -140,19 +213,24 @@ export default function StoriesPage() {
           {items.map((story) => {
             const expired = isExpired(story);
             const countdown = !expired && story.status === 'posted' ? expiresIn(story.expires_at) : null;
+            const storyTime =
+              story.status === 'posted'
+                ? timeAgo(story.posted_at)
+                : story.status === 'posting'
+                  ? 'publishing...'
+                  : timeAgo(story.created_at);
             return (
-              <Card key={story.id} className="story-card">
+              <div
+                key={story.id}
+                className={`story-card${expired ? ' story-card--expired' : ''}`}
+              >
                 <div className="story-card__head">
-                  <PageAvatar page={activePage} className="story-card__avatar" />
+                  <PlatformLogo platform={story.platform} />
                   <PlatformChip platform={story.platform} />
                   <StatusBadge status={expired ? 'expired' : story.status} />
                 </div>
                 <div className="story-card__thumb">
-                  <MediaThumb
-                    mediaUrl={story.media_preview_url}
-                    mediaType={story.media_type}
-                    thumbnailUrl={story.thumbnail_preview_url}
-                  />
+                  <StoryMedia story={story} onOpen={() => navigate(`/stories/${story.id}`)} />
                 </div>
                 {story.status === 'failed' && story.failed_reason && (
                   <div className="story-card__error" title={story.failed_reason}>
@@ -161,12 +239,8 @@ export default function StoriesPage() {
                 )}
                 <div className="story-card__foot">
                   <span className="story-card__time" title={story.posted_at || story.created_at || ''}>
-                    {story.status === 'posted'
-                      ? timeAgo(story.posted_at)
-                      : story.status === 'posting'
-                        ? 'publishing…'
-                        : timeAgo(story.created_at)}
-                    {countdown ? ` · ${countdown}` : ''}
+                    <span className="story-card__time-main">{storyTime}</span>
+                    {countdown && <span className="story-card__time-sub">{countdown}</span>}
                   </span>
                   <span className="story-card__actions">
                     {story.status === 'failed' && (
@@ -174,12 +248,19 @@ export default function StoriesPage() {
                         {retryingId === story.id ? 'Retrying…' : 'Retry'}
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" onClick={() => setDeleting(story)}>
-                      Delete
+                    <Button
+                      className="story-card__icon-btn"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeleting(story)}
+                      aria-label="Delete story"
+                      title="Delete story"
+                    >
+                      <TrashIcon />
                     </Button>
                   </span>
                 </div>
-              </Card>
+              </div>
             );
           })}
         </div>
@@ -357,7 +438,7 @@ function StoryComposer({ open, onClose, activePage, onCreated }) {
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy || !file}>
+          <Button className="btn--flat" onClick={submit} disabled={busy || !file}>
             {busy ? (phase === 'uploading' ? 'Uploading…' : 'Publishing…') : 'Post story'}
           </Button>
         </>

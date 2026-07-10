@@ -628,11 +628,137 @@ export function buildRangeAnalyticsPdf({ start, end, posts, pageName, logo }) {
   return doc;
 }
 
+// Bucket a daily period ('YYYY-MM-DD') into a day / week (Mon-start) / month key.
+// Returns a sortable string key whose lexical order is chronological.
+function granKey(period, gran) {
+  const d = periodDate(period);
+  if (Number.isNaN(d.getTime())) return String(period);
+  const p2 = (n) => String(n).padStart(2, '0');
+  if (gran === 'month') return `${d.getFullYear()}-${p2(d.getMonth() + 1)}`;
+  if (gran === 'week') {
+    const mon = new Date(d);
+    mon.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back up to Monday
+    return `${mon.getFullYear()}-${p2(mon.getMonth() + 1)}-${p2(mon.getDate())}`;
+  }
+  return String(period).slice(0, 10);
+}
+
+// A bucket key → a human label for its granularity.
+function granLabel(key, gran) {
+  if (gran === 'month') return new Date(`${key}-01T00:00:00`).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  if (gran === 'week') {
+    const start = new Date(`${key}T00:00:00`);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return `${fmtDateShort(start)} - ${fmtDateShort(end)}`;
+  }
+  return fmtDateLong(periodDate(key));
+}
+
+// Bold section heading; adds a page first if it wouldn't fit above the footer.
+function drawSectionTitle(doc, ctx, text) {
+  ensureSpace(doc, ctx, 40);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...COLORS.dark);
+  doc.text(text, M, ctx.y);
+  ctx.y += 14;
+}
+
+// The core Analytics growth metrics, in the order the screen lists them.
+const GROWTH_METRICS = [
+  { key: 'page_daily_follows_unique', label: 'Follows' },
+  { key: 'page_daily_unfollows_unique', label: 'Unfollows' },
+  { key: 'post_views', label: 'Views' },
+  { key: 'page_views_total', label: 'Visits' },
+  { key: 'page_post_engagements', label: 'Engagement' },
+];
+
+// One breakdown table (Daily / Weekly / Monthly) of the growth metrics: rows are
+// time buckets, columns are the given metrics, with a totals footer. When a live
+// `followers` count is given, a trailing "Followers" column shows the end-of-period
+// follower count and its total is the current figure. Long ranges are capped to the
+// most-recent `cap` buckets (with a note) so the PDF stays sane.
+function drawGrowthBreakdown(doc, ctx, { series, metrics, gran, title, cap, noun, followers = null }) {
+  const keys = new Set();
+  const maps = metrics.map((m) => {
+    const map = new Map();
+    for (const p of series[m.key] || []) {
+      const k = granKey(p.period, gran);
+      keys.add(k);
+      map.set(k, (map.get(k) || 0) + num(p.value));
+    }
+    return map;
+  });
+  const ordered = [...keys].sort();
+  if (!ordered.length) return;
+
+  const shown = ordered.slice(-cap);
+  const truncated = shown.length < ordered.length;
+
+  // Optional trailing "Followers" column: the end-of-period follower count,
+  // reconstructed backward from the current live count via net follows (so the
+  // column lands on — and totals to — the current follower figure).
+  const hasFollowers = followers != null;
+  const followersByKey = new Map();
+  if (hasFollowers) {
+    const netByKey = new Map();
+    const addNet = (key, sign) => {
+      for (const p of series[key] || []) {
+        const k = granKey(p.period, gran);
+        netByKey.set(k, (netByKey.get(k) || 0) + sign * num(p.value));
+      }
+    };
+    addNet('page_daily_follows_unique', 1);
+    addNet('page_daily_unfollows_unique', -1);
+    let acc = num(followers);
+    for (let i = shown.length - 1; i >= 0; i -= 1) {
+      followersByKey.set(shown[i], acc);
+      acc -= netByKey.get(shown[i]) || 0;
+    }
+  }
+
+  const body = shown.map((k) => [
+    granLabel(k, gran),
+    ...maps.map((map) => fmtInt(map.get(k) || 0)),
+    ...(hasFollowers ? [fmtInt(followersByKey.get(k) || 0)] : []),
+  ]);
+  const totals = maps.map((map) => shown.reduce((a, k) => a + (map.get(k) || 0), 0));
+  const numeric = {};
+  const colCount = metrics.length + (hasFollowers ? 1 : 0);
+  for (let i = 1; i <= colCount; i += 1) numeric[i] = { halign: 'right' };
+
+  drawSectionTitle(doc, ctx, title);
+  if (truncated) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...COLORS.muted);
+    doc.text(`Showing the most recent ${shown.length} of ${ordered.length} ${noun}.`, M, ctx.y);
+    ctx.y += 12;
+  }
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    head: [['Period', ...metrics.map((m) => m.label), ...(hasFollowers ? ['Followers'] : [])]],
+    body,
+    foot: [[
+      { content: truncated ? 'Total (shown)' : 'Total', styles: { halign: 'left' } },
+      ...totals.map((t) => fmtInt(t)),
+      ...(hasFollowers ? [fmtInt(num(followers))] : []),
+    ]],
+    footStyles: { fillColor: COLORS.foot, textColor: COLORS.dark, fontStyle: 'bold', halign: 'right' },
+    showFoot: 'lastPage',
+    columnStyles: { 0: { cellWidth: 100 }, ...numeric },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 22;
+}
+
 /**
  * Page-performance report for the Analytics page: summary cards, the three metric line
- * charts (reach / engagement / new follows) and the top-posts table — mirroring what the
- * Analytics screen shows for the selected range. Reuses the shared header/cards/chart/table
- * helpers. `series` is keyed by metric → [{ period, value }]; `ranking` is the top posts.
+ * charts (reach / engagement / new follows), daily/weekly/monthly breakdown tables of the
+ * growth metrics, and the top-posts table — mirroring what the Analytics screen shows for
+ * the selected range. Reuses the shared header/cards/chart/table helpers. `series` is keyed
+ * by metric → [{ period, value }]; `ranking` is the top posts.
  */
 export function buildPageAnalyticsPdf({ start, end, pageName, logo, followers, series = {}, ranking = [] }) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -666,6 +792,17 @@ export function buildPageAnalyticsPdf({ start, end, pageName, logo, followers, s
     const pts = series[c.key] || [];
     if (pts.length) drawLineChart(doc, ctx, { points: pts, color: c.color, title: c.label });
   });
+
+  // Daily / weekly / monthly rollups of follows, unfollows, views, visits and
+  // engagement — only the metrics that actually have data get a column.
+  const growthMetrics = GROWTH_METRICS.filter((m) => (series[m.key] || []).length);
+  if (growthMetrics.length) {
+    [
+      { gran: 'day', title: 'Daily breakdown', cap: 92, noun: 'days' },
+      { gran: 'week', title: 'Weekly breakdown', cap: 30, noun: 'weeks' },
+      { gran: 'month', title: 'Monthly breakdown', cap: 24, noun: 'months' },
+    ].forEach((g) => drawGrowthBreakdown(doc, ctx, { series, metrics: growthMetrics, followers, ...g }));
+  }
 
   if (ranking && ranking.length) {
     ensureSpace(doc, ctx, 40);

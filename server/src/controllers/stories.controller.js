@@ -16,6 +16,18 @@ export const list = asyncHandler(async (req, res) => {
   sendSuccess(res, { stories, total });
 });
 
+export const getOne = asyncHandler(async (req, res) => {
+  const accountId = await settings.getSelectedAccountId(req.user.id); // active page scope
+  const story = await service.getOne(req.params.id, accountId);
+  sendSuccess(res, { story });
+});
+
+export const insights = asyncHandler(async (req, res) => {
+  const accountId = await settings.getSelectedAccountId(req.user.id);
+  const data = await service.insights(req.params.id, accountId);
+  sendSuccess(res, data);
+});
+
 export const create = asyncHandler(async (req, res) => {
   const accountId = await settings.getSelectedAccountId(req.user.id);
   const stories = await service.create(req.user, { ...(req.body || {}), accountId });

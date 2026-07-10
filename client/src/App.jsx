@@ -14,7 +14,7 @@ import PlannerPage from './pages/Planner/PlannerPage.jsx';
 import AnalyticsPage from './pages/Analytics/AnalyticsPage.jsx';
 import InsightsPage from './pages/Insights/InsightsPage.jsx';
 import ContentsView from './pages/PostPool/ContentsView.jsx';
-import UploadPostPage from './pages/UploadPost/UploadPostPage.jsx';
+import StoryViewPage from './pages/Stories/StoryViewPage.jsx';
 import ProductsPage from './pages/Products/ProductsPage.jsx';
 import ShopLayout from './pages/Shop/ShopLayout.jsx';
 import DiscountsPage from './pages/Shop/DiscountsPage.jsx';
@@ -73,7 +73,9 @@ export default function App() {
         <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
         <Route path="/insights" element={<ModuleRoute moduleId="insights"><InsightsPage /></ModuleRoute>} />
         <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><ContentsView /></ModuleRoute>} />
-        <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
+        <Route path="/stories/:id" element={<ModuleRoute moduleId="post-pool"><StoryViewPage /></ModuleRoute>} />
+        {/* Compose moved into Contents; keep /upload working for old links/bookmarks. */}
+        <Route path="/upload" element={<Navigate to="/post-pool?view=compose&type=post" replace />} />
         <Route path="/shop" element={<ModuleRoute moduleId="products"><ShopLayout /></ModuleRoute>}>
           <Route index element={<Navigate to="/shop/products" replace />} />
           <Route path="products" element={<ProductsPage />} />

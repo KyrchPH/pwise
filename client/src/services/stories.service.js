@@ -9,6 +9,20 @@ export async function list(params = {}) {
   return data.data; // { stories, total }
 }
 
+// A single story (scoped to the active page) with presigned media previews —
+// used by the story view page.
+export async function get(id) {
+  const { data } = await api.get(`/stories/${id}`);
+  return data.data.story;
+}
+
+// Live per-story insights from Meta. Returns { platform, status, supported,
+// metrics: [{ key, label, hint, value }], note }.
+export async function insights(id) {
+  const { data } = await api.get(`/stories/${id}/insights`);
+  return data.data;
+}
+
 // payload: { s3_key, thumbnail_s3_key, media_type, platforms: ['facebook','instagram'] }
 // Returns the created records (one per platform), already in 'posting'.
 export async function create(payload) {

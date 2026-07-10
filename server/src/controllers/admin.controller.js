@@ -7,7 +7,7 @@ import * as appSettings from '../services/app_settings.service.js';
 
 // Invites -------------------------------------------------------------------
 export const createInvite = asyncHandler(async (req, res) => {
-  const invite = await invites.create(req.user.id, req.body?.modules);
+  const invite = await invites.create(req.user.id, req.body?.modules, req.body?.role_id);
   sendSuccess(res, invite, 201); // { token, link }
 });
 
@@ -48,7 +48,7 @@ export const unlockAccount = asyncHandler(async (req, res) => {
 
 export const setModuleAccess = asyncHandler(async (req, res) => {
   if (Number(req.params.id) === req.user.id) throw ApiError.badRequest("you can't change your own access");
-  const result = await admin.setModuleAccess(req.params.id, req.body?.modules);
+  const result = await admin.setModuleAccess(req.params.id, { modules: req.body?.modules, roleId: req.body?.role_id });
   sendSuccess(res, result);
 });
 

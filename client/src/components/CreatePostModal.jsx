@@ -1,5 +1,5 @@
 import { Modal } from './ui.jsx';
-import UploadPostForm from './UploadPostForm.jsx';
+import ContentComposer from './ContentComposer.jsx';
 
 const fmtDate = (key) => {
   if (!key) return '';
@@ -10,9 +10,9 @@ const fmtDate = (key) => {
 };
 
 /**
- * "Create Post" dialog opened from a calendar day. Hosts the full Upload form
- * (media / template / caption / schedule) with the schedule date pre-set to the
- * cell's day. `onCreated` fires after a post is saved.
+ * "Create Post" dialog opened from a calendar day. Hosts the content composer
+ * (type / media / caption) pre-set to schedule on the cell's day. `onCreated`
+ * fires after a post is saved.
  */
 export default function CreatePostModal({ dateKey, onClose, onCreated }) {
   return (
@@ -22,7 +22,7 @@ export default function CreatePostModal({ dateKey, onClose, onCreated }) {
       onClose={onClose}
       className="modal--wide modal--scrollbody"
     >
-      <UploadPostForm defaultDate={dateKey} embedded onCreated={onCreated} />
+      <ContentComposer layout="modal" defaultDate={dateKey} defaultScheduled onCreated={onCreated} />
     </Modal>
   );
 }

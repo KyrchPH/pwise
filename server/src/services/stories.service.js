@@ -41,6 +41,48 @@ export async function getById(id) {
   return rows[0];
 }
 
+// A single story, scoped to the caller's page. The list is page-scoped, so a
+// story you're allowed to view is one on your currently-selected page — a story
+// on another page reads as not-found (don't leak its existence).
+async function getScopedRow(id, accountId) {
+  const story = await getById(id); // throws notFound
+  if (accountId == null || Number(story.account_id) !== Number(accountId)) {
+    throw ApiError.notFound('story not found');
+  }
+  return story;
+}
+
+// Page-scoped single story with presigned media previews (for the view page).
+export async function getOne(id, accountId) {
+  return withMediaPreview(await getScopedRow(id, accountId));
+}
+
+// Live per-story insights from Meta. Only a POSTED story with a platform id can
+// have any; Facebook stories come back unsupported (fetchStoryInsights handles
+// the platform split). Never throws for "not ready" — those degrade to a note.
+export async function insights(id, accountId) {
+  const story = await getScopedRow(id, accountId);
+  const base = { platform: story.platform, status: story.status };
+  if (story.status !== 'posted' || !story.platform_story_id) {
+    return { ...base, supported: false, metrics: [], note: 'Insights appear once the story has finished publishing.' };
+  }
+  // Both platforms read their per-story metrics live from Meta, so both need the
+  // page's decrypted token. A broken/missing connection degrades to an honest
+  // note instead of a 500 (the metrics call itself never throws).
+  let token;
+  try {
+    token = (await accounts.getDecrypted(story.account_id)).access_token;
+  } catch {
+    return { ...base, supported: false, metrics: [], note: 'Reconnect this page to load its story insights.' };
+  }
+  const res = await fb.fetchStoryInsights({
+    platform: story.platform,
+    mediaId: story.platform_story_id,
+    token,
+  });
+  return { ...base, ...res };
+}
+
 // Page-scoped, newest first. Returns { stories, total } with presigned previews.
 export async function list({ accountId, limit = 30, offset = 0 } = {}) {
   if (accountId == null) return { stories: [], total: 0 };

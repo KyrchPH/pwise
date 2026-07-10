@@ -588,6 +588,91 @@ export async function deleteStory(platformStoryId, token) {
   }
 }
 
+// Per-story insight metrics, each with a friendly label + hint for the story view
+// page. Fetched PER-METRIC (never batched) because the valid set drifts with a
+// story's age, the account type, AND Meta's ongoing migration (Story Impressions
+// / Reach → the unified Views / Viewers metrics, being retired across 2025-2026)
+// — one unsupported/deprecated metric must not sink the rest (same reasoning as
+// fetchPageInsights). Both platforms answer on the object's /insights edge.
+const IG_STORY_METRICS = [
+  { key: 'views', label: 'Views', hint: 'Times this story was seen' },
+  { key: 'reach', label: 'Accounts reached', hint: 'Unique accounts that saw it' },
+  { key: 'replies', label: 'Replies', hint: 'Replies sent to the story' },
+  { key: 'shares', label: 'Shares', hint: 'Times the story was shared' },
+  { key: 'total_interactions', label: 'Interactions', hint: 'Reactions, replies and shares' },
+  { key: 'profile_visits', label: 'Profile visits', hint: 'Profile opens from the story' },
+  { key: 'follows', label: 'Follows', hint: 'New follows from the story' },
+];
+
+// Facebook page-story metrics, queried on the story POST id. Ordered newest-first
+// so the migrated Views metric leads; the legacy impressions/reach names are kept
+// as fallbacks and simply drop (invalid-metric error) once Meta retires them.
+const FB_STORY_METRICS = [
+  { key: 'post_video_views', label: 'Views', hint: 'Times the story was viewed' },
+  { key: 'post_impressions', label: 'Impressions', hint: 'Total times it was on screen' },
+  { key: 'post_impressions_unique', label: 'Reach', hint: 'Unique people who saw it' },
+  { key: 'post_reactions_by_type_total', label: 'Reactions', hint: 'All reactions on the story' },
+  { key: 'post_clicks', label: 'Clicks', hint: 'Clicks on the story' },
+];
+
+// Read a scalar out of a Graph insight node across BOTH shapes Meta returns: the
+// classic time-series (`values: [{ value }]`) and the newer total (`total_value:
+// { value }`). A breakdown object collapses to the sum of its parts.
+function readInsightValue(node) {
+  if (node?.total_value && typeof node.total_value.value === 'number') return node.total_value.value;
+  const vals = Array.isArray(node?.values) ? node.values : null;
+  const last = vals ? vals[vals.length - 1]?.value : undefined;
+  if (typeof last === 'number') return last;
+  if (last && typeof last === 'object') return Object.values(last).reduce((a, b) => a + (Number(b) || 0), 0);
+  return null;
+}
+
+// Fetch one story metric off an object's /insights edge, tolerating Meta's two
+// request conventions: legacy metrics answer to a plain `metric=`; newer ones
+// (IG views/interactions…) need `metric_type=total_value`. Try plain first, then
+// the total_value variant. Returns a scalar, or null if the metric is
+// invalid/unsupported/errored for this object.
+async function fetchStoryMetric(objectId, key, token) {
+  for (const extra of [{}, { metric_type: 'total_value' }]) {
+    let res;
+    try {
+      res = await graph(`${objectId}/insights`, { fields: { metric: key, ...extra }, token });
+    } catch {
+      continue; // network/timeout — try the other variant, then give up
+    }
+    if (res.ok) {
+      const v = readInsightValue(res.data?.data?.[0]);
+      if (v != null) return v;
+    }
+  }
+  return null;
+}
+
+// Live per-story insights for either platform. Instagram answers on the story
+// MEDIA id, Facebook on the story POST id — both via the /insights edge. Metrics
+// are fetched per-metric and whatever comes back is returned, so the result stays
+// honest across Meta's metric migration rather than asserting a false negative.
+// Returns { supported, metrics: [{ key, label, hint, value }], note }.
+export async function fetchStoryInsights({ platform, mediaId, token } = {}) {
+  if (!mediaId || !token) return { supported: false, metrics: [], note: null };
+  const wanted = platform === 'instagram' ? IG_STORY_METRICS : FB_STORY_METRICS;
+  const results = await Promise.all(
+    wanted.map(async (m) => {
+      const value = await fetchStoryMetric(mediaId, m.key, token);
+      return value == null ? null : { ...m, value };
+    }),
+  );
+  const metrics = results.filter(Boolean);
+  const source = platform === 'instagram' ? 'Instagram' : 'Facebook';
+  return {
+    supported: metrics.length > 0,
+    metrics,
+    note: metrics.length
+      ? null
+      : `${source} hasn’t returned insights for this story yet — they can lag after posting, and some story metrics are being retired by Meta.`,
+  };
+}
+
 // Subscribe a Page to this app's webhooks for messaging, so its inbound messages
 // reach our /api/webhooks/messenger endpoint. Best-effort.
 export async function subscribeMessaging(token, pageId) {

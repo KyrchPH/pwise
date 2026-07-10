@@ -43,6 +43,9 @@ function toSafe(r) {
     analytics_config: resolveAnalyticsConfig(r.analytics_config),
     // Customer-survey settings (resolved with defaults) — enabled / chance % / cooldown.
     survey_config: resolveSurveyConfig(r.survey_config),
+    survey_sender_email: r.survey_sender_email || '',
+    survey_sender_name: r.survey_sender_name || '',
+    has_survey_sender_app_password: !!r.survey_sender_app_password,
     // Display currency (ISO 4217) for product prices; defaults to Peso.
     currency: r.currency || 'PHP',
     // Admin-filled business profile (contact / location / hours) the AI agent reads
@@ -95,6 +98,9 @@ export async function getDecrypted(id) {
     wa_business_account_id: r.wa_business_account_id || null,
     wa_phone_display: r.wa_phone_display || null,
     wa_access_token: decrypt(r.wa_access_token),
+    survey_sender_email: r.survey_sender_email || null,
+    survey_sender_name: r.survey_sender_name || null,
+    survey_sender_app_password: decrypt(r.survey_sender_app_password),
     is_active: !!r.is_active,
   };
 }
@@ -153,6 +159,14 @@ function requireStr(value, label) {
   const s = String(value ?? '').trim();
   if (!s) throw ApiError.badRequest(`${label} is required`);
   return s;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function optionalEmail(value, label) {
+  const s = String(value ?? '').trim();
+  if (s && !EMAIL_RE.test(s)) throw ApiError.badRequest(`${label} must be a valid email address`);
+  return s || null;
 }
 
 // Validate a Telegram bot API key against Telegram (getMe) and return the columns
@@ -415,6 +429,36 @@ export async function update(id, data = {}) {
   // Customer-survey settings — stored resolved/clamped like the analytics config.
   if (data.survey_config !== undefined) {
     set('survey_config', JSON.stringify(resolveSurveyConfig(data.survey_config)));
+  }
+
+  // Optional per-page SMTP identity for customer survey emails. The app password is
+  // write-only and encrypted; clearing the sender email removes the saved password too.
+  let surveySenderCleared = false;
+  let surveySenderPasswordCleared = false;
+  let surveySenderEmail = existing.survey_sender_email || null;
+  const surveySenderAppPassword = String(data.survey_sender_app_password ?? '').trim();
+  if (data.survey_sender_email !== undefined) {
+    surveySenderEmail = optionalEmail(data.survey_sender_email, 'survey sender email');
+    set('survey_sender_email', surveySenderEmail);
+    if (!surveySenderEmail) {
+      surveySenderCleared = true;
+      set('survey_sender_name', null);
+      set('survey_sender_app_password', null);
+      surveySenderPasswordCleared = true;
+    } else if (surveySenderEmail !== (existing.survey_sender_email || null) && !surveySenderAppPassword) {
+      set('survey_sender_app_password', null);
+      surveySenderPasswordCleared = true;
+    }
+  }
+  if (!surveySenderCleared && data.survey_sender_name !== undefined) {
+    set('survey_sender_name', String(data.survey_sender_name ?? '').trim().slice(0, 255) || null);
+  }
+  if (!surveySenderCleared && data.survey_sender_remove_password && !surveySenderPasswordCleared) {
+    set('survey_sender_app_password', null);
+  }
+  if (!surveySenderCleared && surveySenderAppPassword) {
+    if (!surveySenderEmail) throw ApiError.badRequest('survey sender email is required before saving an app password');
+    set('survey_sender_app_password', encrypt(surveySenderAppPassword));
   }
 
   // Default first message for messaging a commenter (Comment → DM). Empty → NULL (blank composer).

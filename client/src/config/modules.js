@@ -26,14 +26,7 @@ export const APP_MODULES = [
     label: 'Contents',
     route: '/post-pool',
     group: 'workspace',
-    description: 'Posts, reels, stories, comments, and content review.',
-  },
-  {
-    id: 'upload',
-    label: 'Upload',
-    route: '/upload',
-    group: 'workspace',
-    description: 'Create, prepare, and schedule content for posting.',
+    description: 'Posts, reels, stories, comments, create, and content review.',
   },
   {
     id: 'products',

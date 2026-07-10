@@ -26,3 +26,26 @@ export const summary = asyncHandler(async (req, res) => {
     : await settings.getSelectedAccountId(req.user.id);
   sendSuccess(res, await service.summary({ accountId, rangeDays }));
 });
+
+// Resolve the target page: an explicit body/query accountId, else the caller's active page.
+async function resolveAccountId(req, raw) {
+  const requested = Number(raw);
+  return Number.isInteger(requested) && requested > 0
+    ? requested
+    : settings.getSelectedAccountId(req.user.id);
+}
+
+// Admin: send a test survey to verify the pipe (Settings → Customer surveys). The
+// recipient defaults to the admin's own email when the field is left blank.
+export const sendTest = asyncHandler(async (req, res) => {
+  const accountId = await resolveAccountId(req, req.body?.accountId);
+  const to = String(req.body?.to || '').trim() || req.user.email;
+  const test = await service.sendTest({ accountId, to, actor: req.user, sender: req.body?.sender });
+  sendSuccess(res, { test }, 201);
+});
+
+// The active/target page's most recent test survey and its live status.
+export const testStatus = asyncHandler(async (req, res) => {
+  const accountId = await resolveAccountId(req, req.query.accountId);
+  sendSuccess(res, await service.latestTest({ accountId }));
+});

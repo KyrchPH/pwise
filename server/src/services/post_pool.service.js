@@ -22,6 +22,10 @@ async function pageCtx(post) {
 
 const ALLOWED_STATUS = ['draft', 'ready', 'posting', 'posted', 'failed', 'archived', 'expired', 'deleted'];
 const ALLOWED_MEDIA = ['image', 'video'];
+// How a post is published: 'post' (text/photo → /feed or /photos), 'video' (feed
+// video → /videos), 'reel' (→ /video_reels). Orthogonal to media_type; immutable
+// after creation (it picks the publish path).
+const ALLOWED_KINDS = ['post', 'video', 'reel'];
 
 // Engagement counts older than this are re-read from Facebook when a post is
 // viewed; within the window the cached numbers are served, so rapid reloads (or
@@ -503,6 +507,7 @@ export async function create(actor = {}, data = {}) {
   const {
     caption = null,
     media_type = null,
+    post_kind = 'post',
     media_url = null,
     s3_key = null,
     thumbnail_s3_key = null,
@@ -520,6 +525,12 @@ export async function create(actor = {}, data = {}) {
   if (!hasMedia && !hasCaption) throw ApiError.badRequest('a caption or media is required');
   if (status && !ALLOWED_STATUS.includes(status)) throw ApiError.badRequest(`invalid status: ${status}`);
   if (media_type && !ALLOWED_MEDIA.includes(media_type)) throw ApiError.badRequest(`invalid media_type: ${media_type}`);
+  if (!ALLOWED_KINDS.includes(post_kind)) throw ApiError.badRequest(`invalid post_kind: ${post_kind}`);
+  // A reel or feed-video must carry a video (the client also gates reel eligibility
+  // on duration/aspect; the server can't probe the file, so it enforces the basics).
+  if ((post_kind === 'reel' || post_kind === 'video') && !(hasMedia && media_type === 'video')) {
+    throw ApiError.badRequest(`a ${post_kind} requires a video file`);
+  }
 
   // "Post now" (immediate) is handed straight to n8n via the webhook below, not
   // the scheduled drain: scheduled_at stays NULL so claimNextBatch / expireOverdue
@@ -543,9 +554,9 @@ export async function create(actor = {}, data = {}) {
   // scheduler/posting falls back to the env page during rollout).
   const accountId = actor.id != null ? await getSelectedAccountId(actor.id) : null;
   const result = await query(
-    `INSERT INTO post_pool (user_id, caption, media_type, media_url, s3_key, thumbnail_s3_key, target_platform, account_id, status, priority, scheduled_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [actor.id, caption, media_type, media_url, s3_key, thumbnail_s3_key, target_platform, accountId, isImmediate ? 'posting' : status, Number(priority) || 0, schedule],
+    `INSERT INTO post_pool (user_id, caption, media_type, post_kind, media_url, s3_key, thumbnail_s3_key, target_platform, account_id, status, priority, scheduled_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [actor.id, caption, media_type, post_kind, media_url, s3_key, thumbnail_s3_key, target_platform, accountId, isImmediate ? 'posting' : status, Number(priority) || 0, schedule],
   );
   await activity.log({
     postId: result.insertId,
@@ -560,7 +571,7 @@ export async function create(actor = {}, data = {}) {
   // failed and surface the error to the caller.
   if (isImmediate) {
     try {
-      await triggerImmediatePost({ id: result.insertId, caption, media_type, s3_key, accountId, target_platform });
+      await triggerImmediatePost({ id: result.insertId, caption, media_type, post_kind, s3_key, accountId, target_platform });
     } catch (err) {
       await query("UPDATE post_pool SET status = 'failed', failed_reason = ? WHERE id = ?", [
         String(`n8n trigger failed: ${err.message}`).slice(0, 1000),
@@ -577,7 +588,7 @@ export async function create(actor = {}, data = {}) {
 // publishing. Mirrors the scheduled drain payload (data.post with a presigned
 // media URL + the page's decrypted creds) so the same posting nodes consume it;
 // `for_automation: false` routes n8n's IF to the publish branch (not generate).
-async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId, target_platform }) {
+async function triggerImmediatePost({ id, caption, media_type, post_kind = 'post', s3_key, accountId, target_platform }) {
   let media_download_url = null;
   if (s3_key) {
     try {
@@ -604,7 +615,7 @@ async function triggerImmediatePost({ id, caption, media_type, s3_key, accountId
     headers,
     body: JSON.stringify({
       for_automation: false,
-      data: { claimed: true, post: { id, caption, media_type, media_download_url, target_platform, page } },
+      data: { claimed: true, post: { id, caption, media_type, post_kind, media_download_url, target_platform, page } },
     }),
     signal: AbortSignal.timeout(30 * 1000),
   });
@@ -635,6 +646,7 @@ export async function retryNow(id, actor = {}) {
       id: post.id,
       caption: post.caption,
       media_type: post.media_type,
+      post_kind: post.post_kind,
       s3_key: post.s3_key,
       accountId: post.account_id,
       target_platform: post.target_platform,

@@ -16,26 +16,43 @@ function ChevronIcon({ direction }) {
   );
 }
 
+const SQL_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+const TZ_SUFFIX_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function parseActivityDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    const normalized = SQL_DATETIME_RE.test(raw) && !TZ_SUFFIX_RE.test(raw) ? `${raw.replace(' ', 'T')}Z` : raw;
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 const fmt = (d) => {
-  if (!d) return '-';
-  const date = new Date(d);
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+  const date = parseActivityDate(d);
+  return date ? date.toLocaleString() : '-';
 };
 
-// Relative for the last week; absolute timestamp once older or in the future.
+// Relative for nearby timestamps; absolute timestamp once more than a week away.
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const fmtWhen = (d) => {
-  if (!d) return '-';
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return '-';
+  const date = parseActivityDate(d);
+  if (!date) return '-';
   const diff = Date.now() - date.getTime();
-  if (diff < 0 || diff >= WEEK_MS) return date.toLocaleString();
-  const min = Math.floor(diff / 60000);
+  const absDiff = Math.abs(diff);
+  if (absDiff >= WEEK_MS) return date.toLocaleString();
+  const min = Math.floor(absDiff / 60000);
   if (min < 1) return 'Just now';
-  if (min < 60) return `${min}m ago`;
+  const suffix = diff < 0 ? '' : ' ago';
+  const prefix = diff < 0 ? 'in ' : '';
+  if (min < 60) return `${prefix}${min}m${suffix}`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
+  if (hr < 24) return `${prefix}${hr}h${suffix}`;
+  return `${prefix}${Math.floor(hr / 24)}d${suffix}`;
 };
 
 // Map an action to one of the existing status badge styles.

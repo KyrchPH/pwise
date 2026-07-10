@@ -46,8 +46,9 @@ export async function unlockAccount(id) {
   return data.data; // { id, unlocked }
 }
 
-// Replace a user's module access. modules = array of module ids.
-export async function setModuleAccess(id, modules) {
-  const { data } = await api.patch(`/admin/users/${id}/access`, { modules });
-  return data.data; // { id, module_access }
+// Replace a user's module access. Pass a roleId to bind the account to a role
+// (its access is applied + kept live); pass modules for a custom (unbound) set.
+export async function setModuleAccess(id, modules, roleId = null) {
+  const { data } = await api.patch(`/admin/users/${id}/access`, { modules, role_id: roleId });
+  return data.data; // { id, module_access, role_id }
 }

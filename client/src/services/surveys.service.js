@@ -27,3 +27,18 @@ export async function summary(range = 28, accountId = null) {
   const { data } = await api.get('/surveys/summary', { params });
   return data.data;
 }
+
+// Admin: send a test survey (Settings → Customer surveys) to verify the pipe works.
+// `to` blank → the server sends to the admin's own email. Returns { test } where test
+// is { token, to, state, sentAt, respondedAt, satisfaction, nps, comment, devLink? }.
+export async function sendTestSurvey({ to, accountId, sender } = {}) {
+  const { data } = await api.post('/surveys/test', { to, accountId, sender });
+  return data.data.test;
+}
+
+// Admin: the page's most recent test survey and its live status → { test } | { test: null }.
+export async function getTestSurvey(accountId = null) {
+  const params = accountId != null ? { accountId } : {};
+  const { data } = await api.get('/surveys/test', { params });
+  return data.data.test;
+}

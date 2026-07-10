@@ -3,7 +3,6 @@ export const APP_MODULES = [
   { id: 'analytics', label: 'Analytics' },
   { id: 'insights', label: 'Insights' },
   { id: 'post-pool', label: 'Contents' },
-  { id: 'upload', label: 'Upload' },
   { id: 'products', label: 'Shop' },
   { id: 'messages', label: 'Messaging' },
   { id: 'connections', label: 'Connections' },

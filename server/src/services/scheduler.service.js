@@ -120,6 +120,7 @@ export async function claimNextBatch({ userId = null, limit = 10 } = {}) {
       id: p.id,
       caption: p.caption,
       media_type: p.media_type,
+      post_kind: p.post_kind,
       media_download_url: p.media_download_url,
       target_platform: p.target_platform,
       page: p.page,

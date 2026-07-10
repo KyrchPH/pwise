@@ -148,6 +148,7 @@ export async function register({ name, email, password, token } = {}, ctx = {}) 
 
   const invite = await invitesService.findUsable(token); // throws if missing/used/expired
   const inviteModules = moduleAccessForUser(invite);
+  const inviteRoleId = invite.role_id ?? null; // live link to an access_roles preset, if any
 
   // A soft-deleted account still owns its email (it's UNIQUE). Re-registering that
   // email with a valid invite REVIVES the same row — same user id, so the person's
@@ -167,8 +168,8 @@ export async function register({ name, email, password, token } = {}, ctx = {}) 
       // deleted admin can't come back as admin through a non-admin invite link.
       userId = reviveId;
       await conn.query(
-        "UPDATE users SET name = ?, password_hash = ?, module_access = ?, role = 'user', is_active = 1, deleted_at = NULL WHERE id = ?",
-        [name, hash, serializeModuleAccess(inviteModules), userId],
+        "UPDATE users SET name = ?, password_hash = ?, module_access = ?, role_id = ?, role = 'user', is_active = 1, deleted_at = NULL WHERE id = ?",
+        [name, hash, serializeModuleAccess(inviteModules), inviteRoleId, userId],
       );
       // The 1:1 settings row already exists from the original signup; keep/refresh it.
       await conn.query(
@@ -177,8 +178,8 @@ export async function register({ name, email, password, token } = {}, ctx = {}) 
       );
     } else {
       const [result] = await conn.query(
-        'INSERT INTO users (name, email, password_hash, module_access) VALUES (?, ?, ?, ?)',
-        [name, email, hash, serializeModuleAccess(inviteModules)],
+        'INSERT INTO users (name, email, password_hash, module_access, role_id) VALUES (?, ?, ?, ?, ?)',
+        [name, email, hash, serializeModuleAccess(inviteModules), inviteRoleId],
       );
       userId = result.insertId;
       await conn.query('INSERT INTO posting_settings (user_id, owner_email) VALUES (?, ?)', [userId, email]);

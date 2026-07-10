@@ -21,6 +21,10 @@ const METRIC_NOUN = {
   shares: 'shares',
   views: 'views',
   reactions: 'reactions',
+  sales: 'in sales',
+  promoters: 'promoters',
+  neutral: 'neutral',
+  detractors: 'detractors',
 };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -75,6 +79,38 @@ function MetricIcon({ metric, size = 22 }) {
         <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
       </>
     ),
+    // Sales — a price tag.
+    sales: (
+      <>
+        <path d="M20.59 13.41 12 22l-9-9V3h10l7.59 7.59a2 2 0 0 1 0 2.82z" />
+        <line x1="7" y1="7" x2="7.01" y2="7" />
+      </>
+    ),
+    // NPS buckets — a smiley whose mouth curve signals sentiment.
+    promoters: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+        <line x1="9" y1="9" x2="9.01" y2="9" />
+        <line x1="15" y1="9" x2="15.01" y2="9" />
+      </>
+    ),
+    neutral: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <line x1="8" y1="15" x2="16" y2="15" />
+        <line x1="9" y1="9" x2="9.01" y2="9" />
+        <line x1="15" y1="9" x2="15.01" y2="9" />
+      </>
+    ),
+    detractors: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M16 16s-1.5-2-4-2-4 2-4 2" />
+        <line x1="9" y1="9" x2="9.01" y2="9" />
+        <line x1="15" y1="9" x2="15.01" y2="9" />
+      </>
+    ),
   };
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -91,7 +127,7 @@ function CheckIcon() {
   );
 }
 
-export default function GoalCard({ goal, page, onEdit }) {
+export default function GoalCard({ goal, page, onEdit, canEdit = true }) {
   const { status, percent, current_value: current, target_value: target, metric } = goal;
   const noun = METRIC_NOUN[metric] || metric;
   const desc = [page?.account_name, PERIOD_LABEL[goal.period], fmtRange(goal.start_date, goal.end_date)]
@@ -131,9 +167,11 @@ export default function GoalCard({ goal, page, onEdit }) {
         )}
       </div>
 
-      <button type="button" className="task-row__action" onClick={() => onEdit?.(goal)}>
-        Edit
-      </button>
+      {canEdit && (
+        <button type="button" className="task-row__action" onClick={() => onEdit?.(goal)}>
+          Edit
+        </button>
+      )}
     </div>
   );
 }

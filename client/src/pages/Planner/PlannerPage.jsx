@@ -4,11 +4,11 @@ import { apiError } from '../../services/api.js';
 import { useCachedResource, invalidateCache } from '../../hooks/useCachedResource.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePages } from '../../context/PageContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { Button, Spinner, FilterIcon } from '../../components/ui.jsx';
-import LottiePlayer from '../../components/LottiePlayer.jsx';
-import calendarAnimation from '../../assets/lotties/calendar.json';
 import GoalCard from './GoalCard.jsx';
 import GoalFormModal from './GoalFormModal.jsx';
+import PlanFormModal from './PlanFormModal.jsx';
 
 const STATUS_FILTERS = [
   { value: 'all', label: 'All' },
@@ -26,40 +26,139 @@ const PERIOD_FILTERS = [
   { value: 'yearly', label: 'Yearly' },
 ];
 
-const EMPTY_SUMMARY = { overall_percent: 0, total: 0, counts: { ongoing: 0, completed: 0, expired: 0 } };
+const ROLE_LABEL = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
+
+function initialsOf(name) {
+  return (name || '?')
+    .split(' ')
+    .map((p) => p[0] || '')
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
+
+function MemberAvatars({ members = [] }) {
+  const shown = members.slice(0, 4);
+  const extra = members.length - shown.length;
+  return (
+    <span className="plan-avatars" aria-label={`${members.length} member${members.length === 1 ? '' : 's'}`}>
+      {shown.map((m) => (
+        <span key={m.id} className="agentchat-avatar plan-avatars__item" title={`${m.name} · ${ROLE_LABEL[m.role] || m.role}`}>
+          {initialsOf(m.name)}
+        </span>
+      ))}
+      {extra > 0 && <span className="agentchat-avatar plan-avatars__item plan-avatars__more">+{extra}</span>}
+    </span>
+  );
+}
+
+// A single plan with its nested goals and role-gated actions.
+function PlanSection({ plan, pageById, hasPages, statusFilter, periodFilter, onNewGoal, onEditGoal, onEditPlan }) {
+  const canManage = plan.role === 'owner';
+  const canEditGoals = plan.role === 'owner' || plan.role === 'editor';
+  const { total, counts } = plan.summary;
+  const completed = counts.completed;
+  const completedPct = total ? Math.round((completed / total) * 100) : 0;
+
+  const goals = plan.goals.filter(
+    (g) =>
+      (statusFilter === 'all' || g.status === statusFilter) &&
+      (periodFilter === 'all' || g.period === periodFilter),
+  );
+
+  return (
+    <section className="plan-card">
+      <header className="plan-card__head">
+        <div className="plan-card__ident">
+          <div className="plan-card__titlerow">
+            <h2 className="plan-card__name">{plan.name}</h2>
+            <span className={`plan-role-tag plan-role-tag--${plan.role}`}>{ROLE_LABEL[plan.role] || plan.role}</span>
+          </div>
+          {plan.description && <p className="plan-card__desc">{plan.description}</p>}
+        </div>
+        <div className="plan-card__aside">
+          <MemberAvatars members={plan.members} />
+          {canManage && (
+            <div className="plan-card__actions">
+              <Button variant="ghost" size="sm" onClick={() => onEditPlan(plan)}>Share</Button>
+              <Button size="sm" className="btn--flat" disabled={!hasPages} onClick={() => onNewGoal(plan)}>+ Goal</Button>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <div className="plan-card__progress">
+        <div
+          className="plan-bar"
+          role="progressbar"
+          aria-valuenow={completedPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="plan-bar__fill" style={{ width: `${completedPct}%` }} />
+        </div>
+        <span className="plan-card__count">
+          {total === 0 ? 'No goals yet' : `${completed} of ${total} goals completed`}
+        </span>
+      </div>
+
+      {plan.goals.length === 0 ? (
+        <div className="planner-empty planner-empty--sm">
+          {canManage
+            ? hasPages
+              ? 'No goals yet. Add your first goal to this plan.'
+              : 'Connect a Facebook page first — every goal tracks progress for a page.'
+            : 'No goals in this plan yet.'}
+        </div>
+      ) : goals.length === 0 ? (
+        <div className="planner-empty planner-empty--sm">No goals match these filters.</div>
+      ) : (
+        <div className="planner-list">
+          {goals.map((g) => (
+            <GoalCard
+              key={g.id}
+              goal={g}
+              page={pageById[g.account_id]}
+              canEdit={canEditGoals}
+              onEdit={(goal) => onEditGoal(plan, goal)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function PlannerPage() {
   const toast = useToast();
+  const { user } = useAuth();
   const { pages, activeId } = usePages();
-  const { data, loading, error, refresh } = useCachedResource('planner-goals', planner.list);
+  const { data, loading, error, refresh } = useCachedResource('planner-plans', planner.listPlans);
 
+  const [connections, setConnections] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
   const [periodFilter, setPeriodFilter] = useState('all');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filterRef = useRef(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState('');
+
+  // Plan modal (create / edit + share).
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState(null);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [memberBusy, setMemberBusy] = useState(null);
+
+  // Goal modal (scoped to a plan).
+  const [goalModal, setGoalModal] = useState({ open: false, planId: null, goal: null });
+  const [savingGoal, setSavingGoal] = useState(false);
 
   useEffect(() => {
     if (error) toast.error(apiError(error));
   }, [error, toast]);
 
-  // Progress is recomputed server-side on every load, so stamp "last updated" when
-  // fresh data arrives (mirrors the reference plan's refresh timestamp).
+  // Load the share picker's candidate list once.
   useEffect(() => {
-    if (!data) return;
-    setLastUpdated(
-      new Date().toLocaleString([], {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
-    );
-  }, [data]);
+    planner.listConnections().then(setConnections).catch(() => {});
+  }, []);
 
   // Close the filter popover on outside-click / Esc.
   useEffect(() => {
@@ -78,9 +177,9 @@ export default function PlannerPage() {
     };
   }, [filtersOpen]);
 
-  const goals = data?.goals || [];
-  const summary = data?.summary || EMPTY_SUMMARY;
+  const plans = data?.plans || [];
   const hasPages = pages.length > 0;
+  const filtersActive = statusFilter !== 'all' || periodFilter !== 'all';
 
   const pageById = useMemo(() => {
     const map = {};
@@ -88,70 +187,107 @@ export default function PlannerPage() {
     return map;
   }, [pages]);
 
-  const filtered = goals.filter(
-    (g) =>
-      (statusFilter === 'all' || g.status === statusFilter) &&
-      (periodFilter === 'all' || g.period === periodFilter),
-  );
+  const editingPlan = editingPlanId ? plans.find((p) => p.id === editingPlanId) || null : null;
+  const goalPlan = goalModal.planId ? plans.find((p) => p.id === goalModal.planId) || null : null;
+  const goalCanDelete = goalPlan?.role === 'owner';
 
-  const filtersActive = statusFilter !== 'all' || periodFilter !== 'all';
-
-  // Plan hero: progress toward completing every goal (matches the "X of Y tasks
-  // completed" bar in the reference), plus a motivational headline.
-  const total = summary.total;
-  const completed = summary.counts.completed;
-  const ongoing = summary.counts.ongoing;
-  const completedPct = total ? Math.round((completed / total) * 100) : 0;
-  const headline =
-    total === 0
-      ? 'Create your first goal to start tracking progress.'
-      : ongoing > 0
-        ? `Keep going — ${ongoing} goal${ongoing === 1 ? '' : 's'} still in progress.`
-        : completed === total
-          ? 'Every goal completed — great work! 🎉'
-          : 'No active goals right now.';
-
-  const openCreate = () => {
-    setEditing(null);
-    setModalOpen(true);
+  // ── Plan actions ──────────────────────────────────────────────────────────
+  const openCreatePlan = () => {
+    setEditingPlanId(null);
+    setPlanModalOpen(true);
   };
-  const openEdit = (goal) => {
-    setEditing(goal);
-    setModalOpen(true);
+  const openEditPlan = (plan) => {
+    setEditingPlanId(plan.id);
+    setPlanModalOpen(true);
   };
-  const closeModal = () => {
-    setModalOpen(false);
-    setEditing(null);
+  const closePlanModal = () => {
+    setPlanModalOpen(false);
+    setEditingPlanId(null);
   };
 
-  const handleSubmit = async (payload) => {
-    setSaving(true);
+  const reload = async () => {
+    invalidateCache('planner-plans');
+    await refresh();
+  };
+
+  const handlePlanSubmit = async (payload) => {
+    setSavingPlan(true);
     try {
-      if (editing) {
-        await planner.update(editing.id, payload);
-        toast.success('Goal updated.');
+      if (editingPlanId) {
+        await planner.updatePlan(editingPlanId, payload);
+        toast.success('Plan updated.');
       } else {
-        await planner.create(payload);
-        toast.success('Goal created.');
+        await planner.createPlan(payload);
+        toast.success('Plan created.');
       }
-      closeModal();
-      invalidateCache('planner-goals');
-      await refresh();
+      closePlanModal();
+      await reload();
     } catch (e) {
       toast.error(apiError(e));
     } finally {
-      setSaving(false);
+      setSavingPlan(false);
     }
   };
 
-  const handleDelete = async (goal) => {
+  const handlePlanDelete = async (plan) => {
+    if (!window.confirm(`Delete plan “${plan.name}” and all of its goals?`)) return;
+    try {
+      await planner.deletePlan(plan.id);
+      toast.success('Plan deleted.');
+      closePlanModal();
+      await reload();
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  };
+
+  // Live member management (edit mode). Refreshes so the modal shows fresh members.
+  const runMember = async (fn, userId) => {
+    setMemberBusy(userId);
+    try {
+      await fn();
+      await reload();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setMemberBusy(null);
+    }
+  };
+  const handleAddMember = (userId, role) => runMember(() => planner.addMember(editingPlanId, { user_id: userId, role }), userId);
+  const handleSetRole = (userId, role) => runMember(() => planner.setMemberRole(editingPlanId, userId, role), userId);
+  const handleRemoveMember = (userId) => runMember(() => planner.removeMember(editingPlanId, userId), userId);
+
+  // ── Goal actions ──────────────────────────────────────────────────────────
+  const openCreateGoal = (plan) => setGoalModal({ open: true, planId: plan.id, goal: null });
+  const openEditGoal = (plan, goal) => setGoalModal({ open: true, planId: plan.id, goal });
+  const closeGoalModal = () => setGoalModal({ open: false, planId: null, goal: null });
+
+  const handleGoalSubmit = async (payload) => {
+    setSavingGoal(true);
+    try {
+      if (goalModal.goal) {
+        await planner.updateGoal(goalModal.goal.id, payload);
+        toast.success('Goal updated.');
+      } else {
+        await planner.createGoal(goalModal.planId, payload);
+        toast.success('Goal created.');
+      }
+      closeGoalModal();
+      await reload();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingGoal(false);
+    }
+  };
+
+  const handleGoalDelete = async (goal) => {
     if (!window.confirm(`Delete “${goal.title}”?`)) return;
     try {
-      await planner.remove(goal.id);
+      await planner.removeGoal(goal.id);
       toast.success('Goal deleted.');
-      closeModal();
-      invalidateCache('planner-goals');
-      await refresh();
+      closeGoalModal();
+      await reload();
     } catch (e) {
       toast.error(apiError(e));
     }
@@ -164,14 +300,12 @@ export default function PlannerPage() {
       <div className="page-head">
         <div>
           <h1 className="page-head__title">Planner</h1>
-          <div className="page-head__sub">Set measurable goals for your pages and track progress toward each target.</div>
+          <div className="page-head__sub">Group goals into plans and share each plan with your connections.</div>
         </div>
-        <Button onClick={openCreate} disabled={!hasPages}>+ New goal</Button>
+        <Button onClick={openCreatePlan}>+ New plan</Button>
       </div>
 
       <div className="card card--pad planner-panel">
-        {/* Filter toggle — above the overall progress section, top-right.
-            Pressing it opens a dropdown listing the Status + Cadence options. */}
         <div className="planner-panel__toolbar">
           <div className="planner-filter-menu" ref={filterRef}>
             <button
@@ -231,66 +365,53 @@ export default function PlannerPage() {
           </div>
         </div>
 
-        {/* Plan hero — overall progress toward completing every goal. */}
-        <div className="plan-hero">
-          <div className="plan-hero__main">
-            <div className="plan-hero__title">Our Goals</div>
-            <p className="plan-hero__sub">Track progress toward every target you’ve set for your pages.</p>
-            <div className="plan-hero__headline">{headline}</div>
-            <div
-              className="plan-bar"
-              role="progressbar"
-              aria-valuenow={completedPct}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div className="plan-bar__fill" style={{ width: `${completedPct}%` }} />
-              {total > 0 && <span className="plan-bar__marker" aria-hidden="true" />}
-            </div>
-            <div className="plan-hero__foot">
-              <div className="plan-hero__footline">
-                <span className="plan-hero__count">
-                  {total === 0 ? 'No goals yet' : `${completed} of ${total} goals completed`}
-                </span>
-                {total > 0 && <span className="plan-bar__flag">Goal</span>}
-              </div>
-              {lastUpdated && <span className="plan-hero__updated">Last updated {lastUpdated}</span>}
-            </div>
-          </div>
-          <div className="plan-hero__art" aria-hidden="true">
-            <LottiePlayer animationData={calendarAnimation} className="plan-hero__lottie" />
-          </div>
-        </div>
-
-        {/* Goals */}
-        {!hasPages ? (
+        {plans.length === 0 ? (
           <div className="planner-empty">
-            Connect a Facebook page first — every goal tracks progress for a specific page.
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="planner-empty">
-            {goals.length === 0
-              ? 'No goals yet. Create your first goal to start tracking.'
-              : 'No goals match these filters.'}
+            No plans yet. Create your first plan to start setting goals and sharing them with your connections.
           </div>
         ) : (
-          <div className="planner-list">
-            {filtered.map((g) => (
-              <GoalCard key={g.id} goal={g} page={pageById[g.account_id]} onEdit={openEdit} />
+          <div className="plan-list">
+            {plans.map((plan) => (
+              <PlanSection
+                key={plan.id}
+                plan={plan}
+                pageById={pageById}
+                hasPages={hasPages}
+                statusFilter={statusFilter}
+                periodFilter={periodFilter}
+                onNewGoal={openCreateGoal}
+                onEditGoal={openEditGoal}
+                onEditPlan={openEditPlan}
+              />
             ))}
           </div>
         )}
       </div>
 
+      <PlanFormModal
+        open={planModalOpen}
+        onClose={closePlanModal}
+        onSubmit={handlePlanSubmit}
+        onDelete={handlePlanDelete}
+        plan={editingPlan}
+        connections={connections}
+        saving={savingPlan}
+        currentUserId={user?.id}
+        onAddMember={handleAddMember}
+        onSetRole={handleSetRole}
+        onRemoveMember={handleRemoveMember}
+        memberBusy={memberBusy}
+      />
+
       <GoalFormModal
-        open={modalOpen}
-        onClose={closeModal}
-        onSubmit={handleSubmit}
-        onDelete={handleDelete}
+        open={goalModal.open}
+        onClose={closeGoalModal}
+        onSubmit={handleGoalSubmit}
+        onDelete={goalCanDelete ? handleGoalDelete : undefined}
         pages={pages}
         defaultAccountId={activeId ?? pages[0]?.id}
-        goal={editing}
-        saving={saving}
+        goal={goalModal.goal}
+        saving={savingGoal}
       />
     </>
   );

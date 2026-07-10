@@ -693,6 +693,168 @@
           "name": "PWise: Service Token"
         }
       }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-reel",
+              "leftValue": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.post_kind : $('Split posts').item.json.data.post.post_kind }}",
+              "rightValue": "reel",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a59214bf-1940-4fa8-9865-8cd1d0762730",
+      "name": "Is reel?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        264,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ {{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.fb_page_id : $('Split posts').item.json.data.post.page.fb_page_id }} }}/video_reels",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "upload_phase",
+              "value": "start"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dd6f3df6-dfaf-46f3-9f80-2ad1629ffc00",
+      "name": "Reel: start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        464,
+        180
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.upload_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=OAuth {{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            },
+            {
+              "name": "file_url",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.media_download_url : $('Split posts').item.json.data.post.media_download_url }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "73aba212-013b-433c-9ea2-fac7f73c5a4f",
+      "name": "Reel: transfer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        664,
+        180
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ {{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.fb_page_id : $('Split posts').item.json.data.post.page.fb_page_id }} }}/video_reels",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "upload_phase",
+              "value": "finish"
+            },
+            {
+              "name": "video_id",
+              "value": "={{ $('Reel: start').item.json.video_id }}"
+            },
+            {
+              "name": "video_state",
+              "value": "PUBLISHED"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.caption : $('Split posts').item.json.data.post.caption }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.page.access_token : $('Split posts').item.json.data.post.page.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5c737575-794b-4497-b3dc-b667b9ba3a60",
+      "name": "Reel: finish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        864,
+        180
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pwise-api.sixpent.com/api/scheduler/posts/{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.id : $('Split posts').item.json.data.post.id }}/posted",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"platform_post_id\": \"{{ $('Reel: start').item.json.video_id }}\", \"response_message\": \"reel posted via n8n\", \"target_platform\": \"{{ $('Post to n8n').isExecuted ? $('Parse body').item.json.data.post.target_platform : $('Split posts').item.json.data.post.target_platform }}\" }",
+        "options": {}
+      },
+      "id": "61f9e872-aa2e-4ebc-bc59-6761a4ca7799",
+      "name": "Mark posted (reel)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1064,
+        180
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BJMGhtNiuA8INSYm",
+          "name": "PWise: Service Token"
+        }
+      }
     }
   ],
   "connections": {
@@ -871,7 +1033,7 @@
       "main": [
         [
           {
-            "node": "Post video to Facebook",
+            "node": "Is reel?",
             "type": "main",
             "index": 0
           }
@@ -981,6 +1143,89 @@
         [
           {
             "node": "Notify app: render failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is reel?": {
+      "main": [
+        [
+          {
+            "node": "Reel: start",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post video to Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reel: start": {
+      "main": [
+        [
+          {
+            "node": "Reel: transfer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reel: transfer": {
+      "main": [
+        [
+          {
+            "node": "Reel: finish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reel: finish": {
+      "main": [
+        [
+          {
+            "node": "Mark posted (reel)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark posted (reel)": {
+      "main": [
+        [
+          {
+            "node": "Assign Email Output",
             "type": "main",
             "index": 0
           }

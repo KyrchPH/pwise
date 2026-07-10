@@ -117,6 +117,46 @@ function thumbnailFromVideo(file, maxSize, quality) {
 }
 
 /**
+ * Read intrinsic metadata (duration in seconds + pixel dimensions) from a video
+ * File, entirely in the browser. Resolves `{ duration, width, height }` — with any
+ * field null if it can't be decoded — so callers can gate reel eligibility
+ * (length / aspect ratio) without a server round-trip. Non-video files resolve to
+ * all-null; a decode that stalls is bounded by the same timeout as thumbnailing.
+ */
+export function readVideoMetadata(file) {
+  const EMPTY = { duration: null, width: null, height: null };
+  return new Promise((resolve) => {
+    if (!isVideo(file)) {
+      resolve(EMPTY);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    let settled = false;
+    const finish = (meta) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      video.removeAttribute('src');
+      video.load?.();
+      resolve(meta);
+    };
+    video.preload = 'metadata';
+    video.muted = true;
+    video.onloadedmetadata = () =>
+      finish({
+        duration: Number.isFinite(video.duration) ? video.duration : null,
+        width: video.videoWidth || null,
+        height: video.videoHeight || null,
+      });
+    video.onerror = () => finish(EMPTY);
+    const timer = setTimeout(() => finish(EMPTY), VIDEO_TIMEOUT_MS);
+    video.src = url;
+  });
+}
+
+/**
  * Build an optimized (downscaled, JPEG) thumbnail Blob for an image or video File,
  * entirely in the browser. For videos the frame is captured just after the start
  * (the "first frame"). Returns null for unsupported types or on any failure, so

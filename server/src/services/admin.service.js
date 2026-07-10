@@ -8,6 +8,7 @@ import {
   normalizeModuleAccess,
   serializeModuleAccess,
 } from '../config/modules.js';
+import * as rolesService from './roles.service.js';
 import ApiError from '../utils/ApiError.js';
 
 async function activeUserById(id) {
@@ -29,10 +30,12 @@ async function assertNotSuperAdminTarget(id) {
 // failed_login_attempts drive the "Locked" badge and the Unlock action.
 export async function listUsers() {
   const rows = await query(
-    `SELECT id, name, email, role, is_active, deleted_at, created_at, module_access,
-            locked_until, failed_login_attempts
-     FROM users
-     ORDER BY created_at DESC`,
+    `SELECT u.id, u.name, u.email, u.role, u.is_active, u.deleted_at, u.created_at, u.module_access,
+            u.role_id, ar.name AS role_name,
+            u.locked_until, u.failed_login_attempts
+     FROM users u
+     LEFT JOIN access_roles ar ON ar.id = u.role_id
+     ORDER BY u.created_at DESC`,
   );
   return rows.map((row) => ({ ...row, module_access: isAdminRole(row.role) ? MODULE_IDS : moduleAccessForUser(row) }));
 }
@@ -104,20 +107,32 @@ export async function transferSuperAdmin(actor, id) {
   }
 }
 
-// Replace a user's module access. Admin-only modules (e.g. Accounts) are never
-// grantable here. Admins already have full access by role, so editing their list
-// has no effect — the UI only offers this for non-admin users.
-export async function setModuleAccess(id, modules) {
+// Replace a user's module access. When `roleId` is given the user is bound to that
+// role (role_id set, access copied from the role); otherwise it's a custom set and
+// role_id is cleared. Admin-only modules (e.g. Accounts) are never grantable here.
+// Admins already have full access by role, so editing their list has no effect —
+// the UI only offers this for non-admin users.
+export async function setModuleAccess(id, { modules, roleId } = {}) {
   const rows = await query('SELECT id, deleted_at FROM users WHERE id = ?', [id]);
   const target = rows[0];
   if (!target || target.deleted_at) throw ApiError.notFound('user not found');
-  const requested = normalizeModuleAccess(modules);
+
+  let boundRoleId = null;
+  let requested;
+  if (roleId != null && roleId !== '') {
+    boundRoleId = Number(roleId);
+    requested = await rolesService.moduleAccessForRole(boundRoleId); // throws 404 if the role is gone
+  } else {
+    requested = normalizeModuleAccess(modules);
+  }
   if (!requested || requested.length === 0) throw ApiError.badRequest('select at least one module');
   const adminOnly = requested.filter((mid) => APP_MODULES.find((m) => m.id === mid)?.adminOnly);
   if (adminOnly.length) throw ApiError.badRequest("admin-only modules can't be granted");
-  await query('UPDATE users SET module_access = ? WHERE id = ? AND deleted_at IS NULL', [
+
+  await query('UPDATE users SET module_access = ?, role_id = ? WHERE id = ? AND deleted_at IS NULL', [
     serializeModuleAccess(requested),
+    boundRoleId,
     id,
   ]);
-  return { id: Number(id), module_access: requested };
+  return { id: Number(id), module_access: requested, role_id: boundRoleId };
 }

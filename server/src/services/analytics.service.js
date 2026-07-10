@@ -83,6 +83,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
   if (accountId == null) {
     const empty = {};
     for (const m of PAGE_METRICS) empty[m] = [];
+    empty.post_views = [];
     return { rangeDays, followers: null, pageName: null, series: empty, ranking: [] };
   }
 
@@ -91,6 +92,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
   }
 
   const sinceDate = new Date(Date.now() - rangeDays * 86400 * 1000).toISOString().slice(0, 10);
+  const untilDate = new Date().toISOString().slice(0, 10);
   const where = ['captured_on >= ?'];
   const params = [sinceDate];
   if (accountId != null) {
@@ -110,6 +112,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
     if (!series[r.metric]) series[r.metric] = [];
     series[r.metric].push({ period: r.date, value: Number(r.value) });
   }
+  series.post_views = await postViewsSeries(accountId, sinceDate, untilDate);
 
   const profile = await fb.fetchPageProfile({ token, fbPageId }).catch(() => null);
 
@@ -120,13 +123,13 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
     rankParams.push(accountId);
   }
   const ranking = await query(
-    `SELECT id, caption, media_type, posted_at,
+    `SELECT id, caption, media_type, post_kind, posted_at,
             reactions_count, comments_count, shares_count, views_count,
             (COALESCE(reactions_count, 0) + COALESCE(comments_count, 0) + COALESCE(shares_count, 0)) AS engagement
        FROM post_pool
       WHERE ${rankWhere.join(' AND ')}
       ORDER BY engagement DESC, posted_at DESC
-      LIMIT 8`,
+      LIMIT 10`,
     rankParams,
   );
 
@@ -140,6 +143,18 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
 }
 
 // ── Insights ("Performance") tab ──────────────────────────────────────────────
+async function postViewsSeries(accountId, sinceDate, untilDate) {
+  if (accountId == null) return [];
+  const daily = await query(
+    `SELECT DATE_FORMAT(posted_at, '%Y-%m-%d') AS period, SUM(COALESCE(views_count, 0)) AS n
+       FROM post_pool
+      WHERE account_id = ? AND status = 'posted' AND posted_at IS NOT NULL AND posted_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, sinceDate],
+  );
+  return daily.length ? fillDailySeries(daily, sinceDate, untilDate) : [];
+}
+
 const DAY_MS = 86400 * 1000;
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 // % change vs the previous window. null = "no prior baseline" (client shows no delta).
@@ -706,7 +721,7 @@ export async function contentPerformance({ rangeDays = 28, accountId = null } = 
 
   const pageRow = await query('SELECT account_name FROM platform_accounts WHERE id = ? LIMIT 1', [accountId]);
   const rows = await query(
-    `SELECT id, caption, media_type, thumbnail_s3_key, posted_at, platform_post_id,
+    `SELECT id, caption, media_type, post_kind, thumbnail_s3_key, posted_at, platform_post_id,
             COALESCE(reactions_count, 0) AS reactions_count,
             COALESCE(comments_count, 0)  AS comments_count,
             COALESCE(shares_count, 0)    AS shares_count,
@@ -736,6 +751,7 @@ export async function contentPerformance({ rangeDays = 28, accountId = null } = 
         id: p.id,
         caption: p.caption,
         mediaType: p.media_type,
+        postKind: p.post_kind,
         thumbnailUrl,
         postedAt: p.posted_at,
         platformPostId: p.platform_post_id,

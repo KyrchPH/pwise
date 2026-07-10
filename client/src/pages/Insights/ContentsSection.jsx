@@ -1,18 +1,27 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import CreateContentMenu from '../../components/CreateContentMenu.jsx';
 import * as analytics from '../../services/analytics.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { usePages } from '../../context/PageContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { Button, Card, Spinner } from '../../components/ui.jsx';
+import { Card, Spinner } from '../../components/ui.jsx';
 
 const fmtExact = (n) => (Number(n) || 0).toLocaleString('en-US');
 const fmtPublished = (v) =>
   v
     ? new Date(v).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : '—';
-const typeLabel = (t) => (t === 'video' ? 'Video' : t === 'image' ? 'Photo' : t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Post');
+const typeLabel = (t) =>
+  t === 'reel' || t === 'reels'
+    ? 'Reels'
+    : t === 'video'
+      ? 'Video'
+      : t === 'image' || t === 'photo'
+        ? 'Photo'
+        : t
+          ? t.charAt(0).toUpperCase() + t.slice(1)
+          : 'Text';
 
 // Media-type filter options (post_pool only stores image | video).
 const MEDIA_FILTERS = [
@@ -129,9 +138,7 @@ export default function ContentsSection({ range }) {
           </svg>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by ID or caption" aria-label="Search by ID or caption" />
         </label>
-        <Button as={Link} to="/upload" size="sm" className="cperf-create btn--flat">
-          + Create post
-        </Button>
+        <CreateContentMenu size="sm" className="cperf-create" />
       </div>
 
       {rows.length === 0 ? (
@@ -170,7 +177,7 @@ export default function ContentsSection({ range }) {
                       <span className="cperf-post__text">
                         <span className="cperf-caption">{p.caption?.trim() || `Post #${p.id}`}</span>
                         <span className="cperf-sub">
-                          <span className="cperf-type">{typeLabel(p.mediaType)}</span>
+                          <span className="cperf-type">{typeLabel(p.postKind === 'reel' ? 'reel' : p.mediaType)}</span>
                           <span className="cperf-sub__dot">·</span>
                           <span>#{p.id}</span>
                         </span>

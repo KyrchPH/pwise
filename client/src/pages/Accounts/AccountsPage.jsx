@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as adminService from '../../services/admin.service.js';
+import * as rolesService from '../../services/roles.service.js';
 import { apiError } from '../../services/api.js';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -12,7 +13,7 @@ import {
   labelForModule,
   normalizeModuleAccess,
 } from '../../config/modules.js';
-import { Card, Button, Spinner, EmptyState, Modal } from '../../components/ui.jsx';
+import { Card, Button, Spinner, EmptyState, Modal, Field } from '../../components/ui.jsx';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString() : '—');
 
@@ -52,6 +53,19 @@ function AccessPills({ access }) {
   );
 }
 
+// Table cell for the "Access" column: a bound account/link shows its role name as a
+// single pill; an unbound (custom) one shows its module pills.
+function AccessCell({ roleName, access }) {
+  if (roleName) {
+    return (
+      <div className="module-pills module-pills--inline">
+        <span className="module-pill module-pill--role">{roleName}</span>
+      </div>
+    );
+  }
+  return <AccessPills access={access} />;
+}
+
 // Full (wrapping) access list — used inside the account details dialog.
 function AccessPillsFull({ access }) {
   return (
@@ -82,7 +96,46 @@ function groupedModules(modules) {
   })).filter((section) => section.modules.length > 0);
 }
 
-function ModuleAccessPicker({ modules, selected, disabled, onToggle, coreHint = 'Always available' }) {
+// The role chooser sits above the module groups: pick a role to apply its preset
+// (the account/link then stays bound to it), or "Custom access" to hand-pick modules.
+// `roles` undefined → chooser hidden (used by the role create/edit dialog itself).
+function RoleChooser({ roles, roleId, disabled, onSelectRole }) {
+  return (
+    <div className="role-choose">
+      <div className="module-access__group-title">Roles</div>
+      <div className="role-choose__list">
+        {roles.map((role) => (
+          <button
+            type="button"
+            key={role.id}
+            className={`role-choose__chip${roleId === role.id ? ' is-active' : ''}`}
+            disabled={disabled}
+            onClick={() => onSelectRole(role)}
+          >
+            <span className="role-choose__name">{role.name}</span>
+            <span className="role-choose__count">{role.module_access.length} modules</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`role-choose__chip role-choose__chip--custom${roleId == null ? ' is-active' : ''}`}
+          disabled={disabled}
+          onClick={() => onSelectRole(null)}
+        >
+          <span className="role-choose__name">Custom access</span>
+          <span className="role-choose__count">Hand-pick modules</span>
+        </button>
+      </div>
+      <p className="role-choose__hint">
+        {roleId != null
+          ? 'Bound to a role — access updates automatically whenever the role changes. Toggle any module below to switch to Custom.'
+          : 'Hand-pick modules below, or choose a role above to apply a preset.'}
+      </p>
+    </div>
+  );
+}
+
+function ModuleAccessPicker({ modules, selected, disabled, onToggle, coreHint = 'Always available', roles, roleId, onSelectRole }) {
   const selectedCount = modules.filter((module) => selected.includes(module.id)).length;
   return (
     <div className="module-access__picker">
@@ -93,6 +146,10 @@ function ModuleAccessPicker({ modules, selected, disabled, onToggle, coreHint = 
         </div>
         <span className="module-access__summary-note">Dashboard stays on as the safe landing page.</span>
       </div>
+
+      {roles && roles.length > 0 && (
+        <RoleChooser roles={roles} roleId={roleId} disabled={disabled} onSelectRole={onSelectRole} />
+      )}
 
       <div className="module-access__groups">
         {groupedModules(modules).map((section) => (
@@ -160,15 +217,24 @@ export default function AccountsPage() {
   const [generating, setGenerating] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
+  const [linkRoleId, setLinkRoleId] = useState(null); // role bound to the login link being generated
   const [link, setLink] = useState('');
   const [details, setDetails] = useState(null); // account whose details dialog is open
   const [menuId, setMenuId] = useState(null); // account whose options dropdown is open
   const [editUser, setEditUser] = useState(null); // user whose module access is being edited
   const [editModules, setEditModules] = useState([]);
+  const [editRoleId, setEditRoleId] = useState(null); // role bound to the account being edited
   const [savingAccess, setSavingAccess] = useState(false);
+  // Role management (create/edit a role preset).
+  const [roleModal, setRoleModal] = useState(null); // null | { mode:'create' } | { mode:'edit', role }
+  const [roleName, setRoleName] = useState('');
+  const [roleModules, setRoleModules] = useState([]);
+  const [savingRole, setSavingRole] = useState(false);
 
   const { data, loading, error, refresh } = useCachedResource('accounts', () =>
-    Promise.all([adminService.listUsers(), adminService.listInvites()]).then(([users, invites]) => ({ users, invites })),
+    Promise.all([adminService.listUsers(), adminService.listInvites(), rolesService.listRoles()]).then(
+      ([users, invites, roles]) => ({ users, invites, roles }),
+    ),
   );
 
   useEffect(() => {
@@ -190,17 +256,33 @@ export default function AccountsPage() {
     };
   }, [menuId]);
 
-  const { users = [], invites = [] } = data || {};
+  const { users = [], invites = [], roles = [] } = data || {};
   const availableModules = invitableModulesForUser(user);
   const currentUserIsSuperAdmin = isSuperAdminRole(user?.role);
 
+  // Only offer role ids the picker actually renders (available to this admin).
+  const availableIds = availableModules.map((m) => m.id);
+
   const openAccessDialog = () => {
-    setSelectedModules(availableModules.map((module) => module.id));
+    setSelectedModules(availableIds);
+    setLinkRoleId(null);
     setAccessOpen(true);
+  };
+
+  // Picking a role fills the checkboxes with its access; "Custom" (null) keeps the
+  // current selection editable. Modules are clamped to what this admin can grant.
+  const selectLinkRole = (role) => {
+    if (!role) {
+      setLinkRoleId(null);
+      return;
+    }
+    setLinkRoleId(role.id);
+    setSelectedModules(role.module_access.filter((id) => availableIds.includes(id)));
   };
 
   const toggleModule = (module) => {
     if (module.core) return;
+    setLinkRoleId(null); // hand-tweaking diverges from any bound role → Custom
     setSelectedModules((current) =>
       current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
     );
@@ -209,16 +291,26 @@ export default function AccountsPage() {
   // Edit an existing user's module access. Pre-checks their current grantable
   // modules (core is always on); admin-only modules aren't offered.
   const openEditAccess = (u) => {
-    const editableIds = availableModules.map((m) => m.id);
     const current = normalizeModuleAccess(u.module_access) || [];
-    const next = editableIds.filter((id) => current.includes(id));
+    const next = availableIds.filter((id) => current.includes(id));
     if (!next.includes('dashboard')) next.push('dashboard');
     setEditUser(u);
     setEditModules(next);
+    setEditRoleId(u.role_id ?? null); // pre-select the account's current role, if any
+  };
+
+  const selectEditRole = (role) => {
+    if (!role) {
+      setEditRoleId(null);
+      return;
+    }
+    setEditRoleId(role.id);
+    setEditModules(role.module_access.filter((id) => availableIds.includes(id)));
   };
 
   const toggleEditModule = (module) => {
     if (module.core) return;
+    setEditRoleId(null); // hand-tweaking diverges from any bound role → Custom
     setEditModules((current) =>
       current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
     );
@@ -231,10 +323,15 @@ export default function AccountsPage() {
     }
     setSavingAccess(true);
     try {
-      const res = await adminService.setModuleAccess(editUser.id, editModules);
+      const res = await adminService.setModuleAccess(editUser.id, editModules, editRoleId);
+      const boundRole = editRoleId != null ? roles.find((r) => r.id === editRoleId) : null;
       toast.success(`Updated access for ${editUser.name}`);
       // Keep the details dialog in sync if it's showing this user.
-      setDetails((cur) => (cur && cur.id === editUser.id ? { ...cur, module_access: res.module_access } : cur));
+      setDetails((cur) =>
+        cur && cur.id === editUser.id
+          ? { ...cur, module_access: res.module_access, role_id: res.role_id, role_name: boundRole?.name ?? null }
+          : cur,
+      );
       setEditUser(null);
       refresh();
     } catch (e) {
@@ -251,7 +348,7 @@ export default function AccountsPage() {
     }
     setGenerating(true);
     try {
-      const invite = await adminService.createInvite({ modules: selectedModules });
+      const invite = await adminService.createInvite({ modules: selectedModules, role_id: linkRoleId });
       setLink(invite.link);
       setAccessOpen(false);
       try {
@@ -265,6 +362,70 @@ export default function AccountsPage() {
       toast.error(apiError(e));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // --- Role management (create / edit / delete a role preset) ---------------
+  const openCreateRole = () => {
+    setRoleName('');
+    setRoleModules(availableIds); // start from everything grantable, then trim
+    setRoleModal({ mode: 'create' });
+  };
+
+  const openEditRole = (role) => {
+    const next = availableIds.filter((id) => role.module_access.includes(id));
+    if (!next.includes('dashboard')) next.push('dashboard');
+    setRoleName(role.name);
+    setRoleModules(next);
+    setRoleModal({ mode: 'edit', role });
+  };
+
+  const toggleRoleModule = (module) => {
+    if (module.core) return;
+    setRoleModules((current) =>
+      current.includes(module.id) ? current.filter((id) => id !== module.id) : [...current, module.id],
+    );
+  };
+
+  const saveRole = async () => {
+    const name = roleName.trim();
+    if (!name) {
+      toast.error('Give the role a name');
+      return;
+    }
+    if (roleModules.length === 0) {
+      toast.error('Select at least one module');
+      return;
+    }
+    setSavingRole(true);
+    try {
+      if (roleModal.mode === 'edit') {
+        await rolesService.updateRole(roleModal.role.id, { name, modules: roleModules });
+        toast.success(`Updated role “${name}”`);
+      } else {
+        await rolesService.createRole({ name, modules: roleModules });
+        toast.success(`Created role “${name}”`);
+      }
+      setRoleModal(null);
+      refresh();
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSavingRole(false);
+    }
+  };
+
+  const removeRole = async (role) => {
+    const note = role.member_count
+      ? ` ${role.member_count} account${role.member_count === 1 ? '' : 's'} on it will keep their current access but become Custom.`
+      : '';
+    if (!window.confirm(`Delete the role “${role.name}”?${note}`)) return;
+    try {
+      await rolesService.deleteRole(role.id);
+      toast.success('Role deleted');
+      refresh();
+    } catch (e) {
+      toast.error(apiError(e));
     }
   };
 
@@ -422,7 +583,7 @@ export default function AccountsPage() {
                           <span className={`badge badge--${roleBadgeClass(u.role)}`}>{roleLabel(u.role)}</span>
                         </td>
                         <td data-label="Access">
-                          <AccessPills access={u.module_access} />
+                          <AccessCell roleName={u.role_name} access={u.module_access} />
                         </td>
                         <td data-label="Status">{statusBadge(u)}</td>
                         <td className="cell-muted" data-label="Joined">{fmt(u.created_at)}</td>
@@ -530,6 +691,60 @@ export default function AccountsPage() {
             </div>
           </Card>
 
+          <Card style={{ marginBottom: 16 }}>
+            <div className="card__head">
+              <div className="card__title">Roles ({roles.length})</div>
+              <Button variant="subtle" size="sm" onClick={openCreateRole}>
+                + Create role
+              </Button>
+            </div>
+            {roles.length === 0 ? (
+              <EmptyState
+                icon="🧩"
+                title="No roles yet"
+                message="Create a role to grant a preset of module access in one click when inviting or editing accounts."
+              />
+            ) : (
+              <div className="table-wrap">
+                <table className="table table--stack">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Access</th>
+                      <th>Accounts</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roles.map((role) => (
+                      <tr key={role.id}>
+                        <td data-label="Name">
+                          <span className="module-pill module-pill--role">{role.name}</span>
+                        </td>
+                        <td data-label="Access">
+                          <AccessPills access={role.module_access} />
+                        </td>
+                        <td className="cell-muted" data-label="Accounts">
+                          {role.member_count}
+                        </td>
+                        <td>
+                          <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
+                            <Button variant="ghost" size="sm" onClick={() => openEditRole(role)}>
+                              Edit
+                            </Button>
+                            <Button variant="danger" size="sm" onClick={() => removeRole(role)}>
+                              Delete
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
           <Card>
             <div className="card__head">
               <div className="card__title">Invite links ({invites.length})</div>
@@ -564,7 +779,7 @@ export default function AccountsPage() {
                             )}
                           </td>
                           <td data-label="Access">
-                            <AccessPills access={inv.module_access} />
+                            <AccessCell roleName={inv.role_name} access={inv.module_access} />
                           </td>
                           <td className="cell-muted" data-label="Used by">{inv.used_by_email || '—'}</td>
                           <td className="cell-muted" data-label="Created">{fmt(inv.created_at)}</td>
@@ -635,6 +850,12 @@ export default function AccountsPage() {
               <span className="acct-details__label">Joined</span>
               <span>{fmt(details.created_at)}</span>
             </div>
+            {details.role_name && (
+              <div className="acct-details__row">
+                <span className="acct-details__label">Role preset</span>
+                <span className="module-pill module-pill--role">{details.role_name}</span>
+              </div>
+            )}
             <div className="acct-details__block">
               <span className="acct-details__label">Access</span>
               <AccessPillsFull access={details.module_access} />
@@ -670,6 +891,9 @@ export default function AccountsPage() {
             disabled={generating}
             onToggle={toggleModule}
             coreHint="Required safe landing page"
+            roles={roles}
+            roleId={linkRoleId}
+            onSelectRole={selectLinkRole}
           />
         </div>
       </Modal>
@@ -701,6 +925,49 @@ export default function AccountsPage() {
             selected={editModules}
             disabled={savingAccess}
             onToggle={toggleEditModule}
+            roles={roles}
+            roleId={editRoleId}
+            onSelectRole={selectEditRole}
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!roleModal}
+        title={roleModal?.mode === 'edit' ? 'Edit role' : 'Create role'}
+        onClose={() => (!savingRole ? setRoleModal(null) : undefined)}
+        className="modal--module-access"
+        dismissable={!savingRole}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRoleModal(null)} disabled={savingRole}>
+              Cancel
+            </Button>
+            <Button onClick={saveRole} disabled={savingRole || !roleName.trim() || roleModules.length === 0}>
+              {savingRole ? 'Saving…' : roleModal?.mode === 'edit' ? 'Save role' : 'Create role'}
+            </Button>
+          </>
+        }
+      >
+        <div className="module-access">
+          <Field label="Role name" hint="Shown when binding accounts and login links to this role.">
+            <input
+              className="input"
+              value={roleName}
+              maxLength={80}
+              placeholder="e.g. Sales, Content Editor"
+              onChange={(e) => setRoleName(e.target.value)}
+              disabled={savingRole}
+            />
+          </Field>
+          <p className="module-access__intro">
+            Choose the modules this role grants. Editing a role updates every account and unused login link bound to it.
+          </p>
+          <ModuleAccessPicker
+            modules={availableModules}
+            selected={roleModules}
+            disabled={savingRole}
+            onToggle={toggleRoleModule}
           />
         </div>
       </Modal>

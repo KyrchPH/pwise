@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { subscribeWiseUi } from '../utils/wiseUiBus.js';
@@ -12,23 +12,41 @@ import { Button, Dropdown, Modal } from './ui.jsx';
 const MAX_NOTES = 6;
 const NOTE_MIN_GAP = 8; // px a note keeps from the viewport corners
 const DRAG_THRESHOLD = 5;
+const CHAIN_GAP = 0; // docked notes sit flush against the one above (no gap)
+const CHAIN_SNAP_DIST = 46; // how close (px) a dropped note's top must be to another note's bottom to dock
 
 // Sticky-note palettes: pastel backgrounds + readable text colors. Constants
-// (not theme vars) so a note keeps its chosen look in both themes.
+// (not theme vars) so a note keeps its chosen look in both themes. A wide set of
+// light, airy tints so notes can be told apart at a glance.
 const BG_COLORS = [
   { value: '#fff3a6', label: 'Yellow' },
-  { value: '#d5f4de', label: 'Mint' },
-  { value: '#d9ecff', label: 'Sky' },
+  { value: '#fdfbc4', label: 'Lemon' },
+  { value: '#ffe9c7', label: 'Peach' },
+  { value: '#ffddd2', label: 'Coral' },
   { value: '#ffdfec', label: 'Pink' },
+  { value: '#ffe3ef', label: 'Blush' },
+  { value: '#d5f4de', label: 'Mint' },
+  { value: '#e6f5d4', label: 'Sage' },
+  { value: '#d3f5f2', label: 'Aqua' },
+  { value: '#d9ecff', label: 'Sky' },
+  { value: '#e2e7ff', label: 'Periwinkle' },
   { value: '#eee4ff', label: 'Lilac' },
+  { value: '#f4e9ff', label: 'Lavender' },
+  { value: '#fbf5e6', label: 'Cream' },
   { value: '#ffffff', label: 'White' },
 ];
 const FG_COLORS = [
   { value: '#123a57', label: 'Navy' },
   { value: '#111111', label: 'Black' },
+  { value: '#334155', label: 'Slate' },
   { value: '#7a4b00', label: 'Brown' },
+  { value: '#b45309', label: 'Orange' },
   { value: '#b3261e', label: 'Red' },
+  { value: '#a3155e', label: 'Magenta' },
+  { value: '#6b21a8', label: 'Purple' },
+  { value: '#3730a3', label: 'Indigo' },
   { value: '#0b57d0', label: 'Blue' },
+  { value: '#0f6b6b', label: 'Teal' },
   { value: '#0f7b40', label: 'Green' },
 ];
 // A dropdown option showing the colour itself next to its name.
@@ -48,13 +66,17 @@ function storageKey(userId) {
 }
 function loadState(userId) {
   const key = storageKey(userId);
-  if (!key) return { notes: [], hidden: false };
+  if (!key) return { notes: [], hidden: false, drawerEdge: 'left' };
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || 'null');
-    if (!parsed || !Array.isArray(parsed.notes)) return { notes: [], hidden: false };
-    return { notes: parsed.notes.slice(0, MAX_NOTES), hidden: !!parsed.hidden };
+    if (!parsed || !Array.isArray(parsed.notes)) return { notes: [], hidden: false, drawerEdge: 'left' };
+    return {
+      notes: parsed.notes.slice(0, MAX_NOTES),
+      hidden: !!parsed.hidden,
+      drawerEdge: parsed.drawerEdge === 'right' ? 'right' : 'left',
+    };
   } catch {
-    return { notes: [], hidden: false };
+    return { notes: [], hidden: false, drawerEdge: 'left' };
   }
 }
 function saveState(userId, state) {
@@ -97,6 +119,15 @@ export function sanitizeNoteHtml(html) {
   return doc.body.innerHTML;
 }
 
+// Plain-text preview of a note's body, for the drawer list (no HTML rendered there).
+export function notePreviewText(html) {
+  try {
+    return new DOMParser().parseFromString(sanitizeNoteHtml(html || ''), 'text/html').body.textContent.replace(/\s+/g, ' ').trim();
+  } catch {
+    return '';
+  }
+}
+
 function clipboardHasImage(data) {
   if (!data) return false;
   const items = Array.from(data.items || []);
@@ -110,6 +141,57 @@ function clipboardHasImage(data) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+// ── Note chaining helpers ─────────────────────────────────────────────────────
+// A note may dock beneath another via `attachedTo` (the id of the note directly
+// above it), forming single-child chains. These pure helpers walk that structure.
+
+// The bottom-most note of the chain that starts at `id` (its own id if it has no
+// note docked below it). Guards against cycles in stored/edited data.
+function chainTail(notes, id) {
+  let tail = id;
+  const seen = new Set([id]);
+  for (;;) {
+    const child = notes.find((n) => n.attachedTo === tail);
+    if (!child || seen.has(child.id)) return tail;
+    seen.add(child.id);
+    tail = child.id;
+  }
+}
+
+// Every note at or below `rootId` in the chain (including rootId). Used to keep a
+// note from docking onto itself or one of its own descendants (which would loop).
+function chainDescendants(notes, rootId) {
+  const set = new Set([rootId]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const n of notes) {
+      if (n.attachedTo != null && set.has(n.attachedTo) && !set.has(n.id)) {
+        set.add(n.id);
+        added = true;
+      }
+    }
+  }
+  return set;
+}
+
+// How many notes sit above `id` in its chain (0 for a root). Used for z-ordering so
+// a docked note paints over the one above it — hiding that note's drop shadow at the
+// flush seam so the chain reads as one connected block.
+function chainDepth(notes, id) {
+  let depth = 0;
+  let cur = notes.find((n) => n.id === id);
+  const seen = new Set();
+  while (cur && cur.attachedTo != null && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const parent = notes.find((n) => n.id === cur.attachedTo);
+    if (!parent) break;
+    depth += 1;
+    cur = parent;
+  }
+  return depth;
 }
 
 function Icon({ children, size = 14 }) {
@@ -183,6 +265,15 @@ const ListIcon = () => (
     <path d="M3 6h.01" />
     <path d="M3 12h.01" />
     <path d="M3 18h.01" />
+  </Icon>
+);
+const TrashIcon = () => (
+  <Icon>
+    <path d="M3 6h18" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
   </Icon>
 );
 
@@ -406,9 +497,45 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingNote, setEditingNote] = useState(null);
   const [drag, setDrag] = useState(null); // { id, x, y } while a note is dragged
+  const [snapTarget, setSnapTarget] = useState(null); // id of the note a drag would dock beneath
+  const [sizes, setSizes] = useState({}); // id -> { w, h }, measured — drives chain stacking
   const [, setViewportTick] = useState(0); // re-render on resize so clamped anchors stay on-screen
-  const menuRef = useRef(null);
-  const { notes, hidden } = state;
+  const [focusedId, setFocusedId] = useState(null); // note briefly highlighted after being tapped in the drawer
+  const [drawerDragX, setDrawerDragX] = useState(null); // px translateX while the drawer is dragged, null otherwise
+  const drawerRef = useRef(null);
+  const focusTimerRef = useRef(null);
+  const noteEls = useRef(new Map()); // id -> DOM node, for measuring + hit-testing during drags
+  const sizesRef = useRef({}); // mirror of `sizes` for the measure effect's comparisons
+  const { notes, hidden, drawerEdge = 'left' } = state;
+
+  // Measure each rendered note so docked notes can stack below their parent's real
+  // height (which varies with content + minimize). Runs before paint so positions
+  // never flash; the change-guard keeps it from looping on stable content.
+  useLayoutEffect(() => {
+    const next = { ...sizesRef.current };
+    let changed = false;
+    for (const n of notes) {
+      const el = noteEls.current.get(n.id);
+      if (!el) continue;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const prev = next[n.id];
+      if (!prev || prev.w !== w || prev.h !== h) {
+        next[n.id] = { w, h };
+        changed = true;
+      }
+    }
+    for (const id of Object.keys(next)) {
+      if (!notes.some((n) => n.id === id)) {
+        delete next[id];
+        changed = true;
+      }
+    }
+    if (changed) {
+      sizesRef.current = next;
+      setSizes(next);
+    }
+  });
 
   // Per-user notes: reset on identity change, then mirror every change back.
   useEffect(() => {
@@ -416,7 +543,7 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
   }, [user?.id]);
   useEffect(() => {
     if (state.userId && state.userId === user?.id) {
-      saveState(state.userId, { notes: state.notes, hidden: state.hidden });
+      saveState(state.userId, { notes: state.notes, hidden: state.hidden, drawerEdge: state.drawerEdge });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
@@ -438,12 +565,12 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
       }));
     }), []);
 
-  // The menu dismisses on outside press / Escape. Presses on the launcher are
-  // left alone — its own click toggles the menu.
+  // The drawer dismisses on outside press / Escape. Presses on the launcher are
+  // left alone — its own click toggles the drawer.
   useEffect(() => {
     if (!menuOpen) return undefined;
     const onDown = (event) => {
-      if (menuRef.current?.contains(event.target)) return;
+      if (drawerRef.current?.contains(event.target)) return;
       if (anchorRef?.current?.contains(event.target)) return;
       onMenuClose();
     };
@@ -460,7 +587,93 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
 
   const updateNote = (id, patch) =>
     setState((s) => ({ ...s, notes: s.notes.map((n) => (n.id === id ? { ...n, ...patch } : n)) }));
-  const deleteNote = (id) => setState((s) => ({ ...s, notes: s.notes.filter((n) => n.id !== id) }));
+  // Deleting a note heals its chain: whatever was docked below it re-docks onto the
+  // note it was docked to. If it was the chain's root, the note below takes its edge
+  // anchor so the remaining stack stays put instead of jumping.
+  const deleteNote = (id) =>
+    setState((s) => {
+      const removed = s.notes.find((n) => n.id === id);
+      const newParent = removed?.attachedTo ?? null;
+      return {
+        ...s,
+        notes: s.notes
+          .filter((n) => n.id !== id)
+          .map((n) =>
+            n.attachedTo === id
+              ? {
+                  ...n,
+                  attachedTo: newParent,
+                  ...(newParent == null ? { edge: removed?.edge || 'right', offset: removed?.offset ?? NOTE_MIN_GAP } : {}),
+                }
+              : n,
+          ),
+      };
+    });
+
+  // Closing a note from its own card only takes it OFF the screen — the note itself is
+  // kept (marked `dismissed`) so it can be reopened from the drawer. Deleting is a
+  // separate, explicit action there. Like delete, it heals the chain: the note is
+  // detached and anything docked below it re-docks onto its former parent.
+  const dismissNote = (id) =>
+    setState((s) => {
+      const removed = s.notes.find((n) => n.id === id);
+      const newParent = removed?.attachedTo ?? null;
+      return {
+        ...s,
+        notes: s.notes.map((n) => {
+          if (n.id === id) return { ...n, dismissed: true, minimized: false, attachedTo: null };
+          if (n.attachedTo === id) {
+            return {
+              ...n,
+              attachedTo: newParent,
+              ...(newParent == null ? { edge: removed?.edge || 'right', offset: removed?.offset ?? NOTE_MIN_GAP } : {}),
+            };
+          }
+          return n;
+        }),
+      };
+    });
+
+  // The note (if any) a note dropped at `dropRect` should dock beneath: one whose
+  // bottom edge the drop lands near and horizontally overlaps. Excludes the dragged
+  // note and its own descendants so a note can't dock onto its own chain.
+  const findSnapTarget = (dragId, dropRect) => {
+    const blocked = chainDescendants(notes, dragId);
+    let bestId = null;
+    let bestDist = Infinity;
+    for (const n of notes) {
+      if (blocked.has(n.id)) continue;
+      const el = noteEls.current.get(n.id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const overlapsX = dropRect.left < r.right && dropRect.right > r.left;
+      if (!overlapsX) continue;
+      const dist = Math.abs(dropRect.top - r.bottom);
+      if (dropRect.top >= r.top && dist <= CHAIN_SNAP_DIST && dist < bestDist) {
+        bestId = n.id;
+        bestDist = dist;
+      }
+    }
+    return bestId;
+  };
+
+  // Dock `dragId` directly beneath `targetId`. If the target already had a note
+  // below it, that note re-docks onto the bottom of the dragged note's own chain,
+  // so the drop inserts cleanly without ever giving one note two children.
+  const attachNoteToChain = (dragId, targetId) =>
+    setState((s) => {
+      const displaced = s.notes.find((n) => n.attachedTo === targetId && n.id !== dragId);
+      const dragTail = chainTail(s.notes, dragId);
+      return {
+        ...s,
+        hidden: false,
+        notes: s.notes.map((n) => {
+          if (n.id === dragId) return { ...n, attachedTo: targetId };
+          if (displaced && n.id === displaced.id) return { ...n, attachedTo: dragTail };
+          return n;
+        }),
+      };
+    });
 
   const openEditor = () => {
     if (notes.length >= MAX_NOTES) {
@@ -497,6 +710,21 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
     onMenuClose?.();
   };
 
+  // Tapping a note in the drawer surfaces it on screen: reveal hidden notes, expand
+  // it if minimized, bring it to the front, and flash a highlight so the eye lands
+  // on it. The drawer stays open so several notes can be surfaced in a row.
+  const focusNote = (id) => {
+    setState((s) => ({
+      ...s,
+      hidden: false,
+      notes: s.notes.map((n) => (n.id === id ? { ...n, minimized: false, dismissed: false } : n)),
+    }));
+    setFocusedId(id);
+    clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = setTimeout(() => setFocusedId(null), 1600);
+  };
+  useEffect(() => () => clearTimeout(focusTimerRef.current), []);
+
   const closeEditor = () => {
     setEditorOpen(false);
     setEditingNote(null);
@@ -511,7 +739,9 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
     addNote({ title, html, bg, fg });
   };
 
-  // Drag a note by its header; on release it attaches to the nearest screen edge.
+  // Drag a note by its header. As it moves it previews docking beneath another
+  // note; on release it either docks there (chaining) or, failing that, attaches to
+  // the nearest screen edge. A note carries everything docked below it as it moves.
   const startNoteDrag = (event, note) => {
     if (event.button != null && event.button !== 0) return;
     if (event.target.closest('.wise-note__actions')) return; // buttons still click
@@ -524,22 +754,35 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
     const start = { x: event.clientX, y: event.clientY };
     let moved = false;
 
+    const dropRectAt = (cx, cy) => {
+      const left = cx - grabX;
+      const top = cy - grabY;
+      return { left, top, right: left + rect.width, bottom: top + rect.height };
+    };
+
     const onMove = (e) => {
       if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_THRESHOLD) return;
       moved = true;
       setDrag({ id: note.id, x: e.clientX - grabX, y: e.clientY - grabY });
+      setSnapTarget(findSnapTarget(note.id, dropRectAt(e.clientX, e.clientY)));
     };
     const onUp = (e) => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       setDrag(null);
+      const target = moved ? findSnapTarget(note.id, dropRectAt(e.clientX, e.clientY)) : null;
+      setSnapTarget(null);
       if (!moved) return;
+      if (target) {
+        attachNoteToChain(note.id, target); // dock beneath the highlighted note
+        return;
+      }
+      // No dock target — detach from any chain and stick to the nearest screen edge.
       const x = e.clientX - grabX;
       const y = e.clientY - grabY;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      // Attach to whichever edge the note was dropped closest to.
       const distances = [
         ['left', x],
         ['right', vw - (x + rect.width)],
@@ -548,7 +791,7 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
       ];
       const [edge] = distances.reduce((best, d) => (d[1] < best[1] ? d : best));
       const offset = edge === 'left' || edge === 'right' ? Math.round(y) : Math.round(x);
-      updateNote(note.id, { edge, offset: Math.max(NOTE_MIN_GAP, offset) });
+      updateNote(note.id, { edge, offset: Math.max(NOTE_MIN_GAP, offset), attachedTo: null });
     };
 
     window.addEventListener('pointermove', onMove);
@@ -556,69 +799,203 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
     window.addEventListener('pointercancel', onUp);
   };
 
-  // Anchored position for a note: flush against its edge, clamped so the header
-  // always stays reachable even after a resize.
-  const noteStyle = (note) => {
-    if (drag && drag.id === note.id) {
-      return { left: drag.x, top: drag.y, right: 'auto', bottom: 'auto' };
-    }
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    if (note.edge === 'left') return { left: 0, top: clamp(note.offset, NOTE_MIN_GAP, vh - 56) };
-    if (note.edge === 'right') return { right: 0, top: clamp(note.offset, NOTE_MIN_GAP, vh - 56) };
-    if (note.edge === 'top') return { top: 0, left: clamp(note.offset, NOTE_MIN_GAP, vw - 200) };
-    return { bottom: 0, left: clamp(note.offset, NOTE_MIN_GAP, vw - 200) };
+  // Drag the whole notes drawer horizontally by its header; on release it snaps to
+  // whichever vertical screen edge (left / right) its center is nearest. The chosen
+  // edge is remembered per user (persisted with the notes state).
+  const startDrawerDrag = (event) => {
+    if (event.button != null && event.button !== 0) return;
+    if (event.target.closest('button')) return; // header buttons still click
+    const aside = drawerRef.current;
+    if (!aside) return;
+    event.preventDefault();
+    const width = aside.offsetWidth;
+    const baseLeft = drawerEdge === 'left' ? 0 : Math.max(0, window.innerWidth - width);
+    const startX = event.clientX;
+    let moved = false;
+
+    const onMove = (e) => {
+      const dx = e.clientX - startX;
+      if (!moved && Math.abs(dx) < DRAG_THRESHOLD) return;
+      moved = true;
+      setDrawerDragX(dx);
+    };
+    const onUp = (e) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      setDrawerDragX(null);
+      if (!moved) return;
+      const center = baseLeft + (e.clientX - startX) + width / 2;
+      const edge = center < window.innerWidth / 2 ? 'left' : 'right';
+      setState((s) => ({ ...s, drawerEdge: edge }));
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
-  // Menu placement beside the launcher lottie, kept on-screen.
-  const menuStyle = (() => {
-    const rect = anchorRef?.current?.getBoundingClientRect();
-    if (!rect) return { display: 'none' };
+  // Resolve an absolute { left, top } for every note. Chain roots anchor to their
+  // screen edge (as before); docked notes sit CHAIN_GAP below their parent's real
+  // bottom, left-aligned. The note being dragged (and its chain) follows the pointer.
+  const positions = (() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const left = rect.left > vw / 2 ? rect.left - 196 : rect.right + 8;
-    return { left: clamp(left, 8, vw - 196), top: clamp(rect.top + 8, 8, vh - 110) };
+    const byId = new Map(notes.map((n) => [n.id, n]));
+    const sizeOf = (id) => sizes[id] || { w: 260, h: 132 };
+    const cache = new Map();
+    const rootPos = (n) => {
+      const { w, h } = sizeOf(n.id);
+      if (n.edge === 'left') return { left: 0, top: clamp(n.offset, NOTE_MIN_GAP, vh - 56) };
+      if (n.edge === 'right') return { left: Math.max(0, vw - w), top: clamp(n.offset, NOTE_MIN_GAP, vh - 56) };
+      if (n.edge === 'top') return { left: clamp(n.offset, NOTE_MIN_GAP, vw - 40), top: 0 };
+      return { left: clamp(n.offset, NOTE_MIN_GAP, vw - 40), top: Math.max(0, vh - h) };
+    };
+    const resolve = (id, seen) => {
+      if (cache.has(id)) return cache.get(id);
+      const n = byId.get(id);
+      if (!n) return { left: 0, top: 0 };
+      let p;
+      if (drag && drag.id === id) {
+        p = { left: drag.x, top: drag.y }; // dragged note (and its chain) tracks the pointer
+      } else if (n.attachedTo && byId.has(n.attachedTo) && !seen.has(n.attachedTo)) {
+        const parent = resolve(n.attachedTo, new Set(seen).add(id));
+        p = { left: parent.left, top: parent.top + sizeOf(n.attachedTo).h + CHAIN_GAP };
+      } else {
+        p = rootPos(n);
+      }
+      cache.set(id, p);
+      return p;
+    };
+    const out = {};
+    for (const n of notes) out[n.id] = resolve(n.id, new Set([n.id]));
+    return out;
   })();
 
   return (
     <>
       {menuOpen && (
-        <div className="wise-notes-menu" style={menuStyle} ref={menuRef} role="menu" aria-label="Wise Notes">
-          <button
-            type="button"
-            role="menuitem"
-            className="wise-notes-menu__item"
-            disabled={!notes.length}
-            onClick={() => {
-              setState((s) => ({ ...s, hidden: !s.hidden }));
-              onMenuClose();
-            }}
+        <aside
+          className={`wise-notes-drawer wise-notes-drawer--${drawerEdge}${drawerDragX != null ? ' is-dragging' : ''}`}
+          ref={drawerRef}
+          role="dialog"
+          aria-label="Wise Notes"
+          style={drawerDragX != null ? { transform: `translateX(${drawerDragX}px)` } : undefined}
+        >
+          <div
+            className="wise-notes-drawer__head"
+            onPointerDown={startDrawerDrag}
+            title="Drag to move the panel to the other edge"
           >
-            {hidden ? <EyeIcon /> : <EyeOffIcon />}
-            {hidden ? 'Show notes' : 'Hide notes'}
-            <span className="wise-notes-menu__count">{notes.length}/{MAX_NOTES}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="wise-notes-menu__item"
-            disabled={notes.length >= MAX_NOTES}
-            onClick={openEditor}
-            title={notes.length >= MAX_NOTES ? `Maximum of ${MAX_NOTES} notes` : undefined}
-          >
-            <PlusIcon />
-            Create a note
-            {notes.length >= MAX_NOTES && <span className="wise-notes-menu__count">max</span>}
-          </button>
-        </div>
+            <div className="wise-notes-drawer__titlewrap">
+              <span className="wise-notes-drawer__title">Notes</span>
+              <span className="wise-notes-drawer__count">{notes.length}/{MAX_NOTES}</span>
+            </div>
+            <div className="wise-notes-drawer__actions">
+              <button
+                type="button"
+                className="wise-notes-drawer__toggle"
+                disabled={!notes.length}
+                aria-pressed={!hidden}
+                onClick={() => setState((s) => ({ ...s, hidden: !s.hidden }))}
+                title={hidden ? 'Show notes on screen' : 'Hide notes from screen'}
+              >
+                {hidden ? <EyeOffIcon /> : <EyeIcon />}
+                {hidden ? 'Hidden' : 'Shown'}
+              </button>
+              <button
+                type="button"
+                className="wise-notes-drawer__create"
+                disabled={notes.length >= MAX_NOTES}
+                onClick={openEditor}
+                title={notes.length >= MAX_NOTES ? `Maximum of ${MAX_NOTES} notes` : 'Create a note'}
+              >
+                <PlusIcon />
+                New note
+              </button>
+              <button
+                type="button"
+                className="wise-notes-drawer__close"
+                onClick={onMenuClose}
+                aria-label="Close notes panel"
+                title="Close"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          </div>
+
+          <div className="wise-notes-drawer__list">
+            {notes.length === 0 ? (
+              <div className="wise-notes-drawer__empty">
+                <p>No notes yet.</p>
+                <Button className="btn--flat" size="sm" onClick={openEditor}>
+                  <PlusIcon />
+                  Create your first note
+                </Button>
+              </div>
+            ) : (
+              notes.map((note) => {
+                const preview = notePreviewText(note.html);
+                return (
+                  <div
+                    key={note.id}
+                    className={`wise-notes-drawer__item${note.dismissed ? ' is-off' : ''}${focusedId === note.id ? ' is-active' : ''}`}
+                    style={{ background: note.bg, color: note.fg }}
+                  >
+                    <button
+                      type="button"
+                      className="wise-notes-drawer__item-main"
+                      onClick={() => focusNote(note.id)}
+                      title={note.dismissed ? 'Show this note on screen' : 'Bring this note into focus'}
+                    >
+                      <span className="wise-notes-drawer__item-title">{note.title || 'Note'}</span>
+                      {preview && <span className="wise-notes-drawer__item-preview">{preview}</span>}
+                    </button>
+                    <div className="wise-notes-drawer__item-actions">
+                      {note.dismissed && <span className="wise-notes-drawer__item-tag">Hidden</span>}
+                      <button
+                        type="button"
+                        className="wise-notes-drawer__item-del"
+                        onClick={() => deleteNote(note.id)}
+                        title="Delete note permanently"
+                        aria-label="Delete note permanently"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </aside>
       )}
 
       {!hidden &&
-        notes.map((note) => (
+        notes.filter((note) => !note.dismissed).map((note) => {
+          // A docked note renders as a full, rounded card (not an edge strip); a
+          // chain root keeps its edge styling. The corners where two notes meet are
+          // squared (--has-below on the upper, --has-above on the lower) so a chain
+          // reads as one connected block with no rounding at the seams.
+          const docked = !!(note.attachedTo && notes.some((n) => n.id === note.attachedTo));
+          const hasBelow = notes.some((n) => n.attachedTo === note.id);
+          const edgeClass = docked ? 'wise-note--chained' : `wise-note--${note.edge}`;
+          const seamClass = `${docked ? ' wise-note--has-above' : ''}${hasBelow ? ' wise-note--has-below' : ''}`;
+          // Lower notes paint above higher ones (and the whole dragged chain floats
+          // above everything) so seams stay clean.
+          const inDrag = drag && chainDescendants(notes, drag.id).has(note.id);
+          const zIndex = 44 + chainDepth(notes, note.id) + (inDrag ? 200 : 0) + (focusedId === note.id ? 150 : 0);
+          return (
           <div
             key={note.id}
-            className={`wise-note wise-note--${note.edge}${note.minimized ? ' is-min' : ''}${drag?.id === note.id ? ' is-dragging' : ''}`}
-            style={{ ...noteStyle(note), background: note.bg, color: note.fg }}
+            ref={(el) => {
+              if (el) noteEls.current.set(note.id, el);
+              else noteEls.current.delete(note.id);
+            }}
+            data-note-id={note.id}
+            className={`wise-note ${edgeClass}${seamClass}${note.minimized ? ' is-min' : ''}${drag?.id === note.id ? ' is-dragging' : ''}${snapTarget === note.id ? ' is-snap-target' : ''}${focusedId === note.id ? ' is-focused' : ''}`}
+            style={{ ...positions[note.id], right: 'auto', bottom: 'auto', zIndex, background: note.bg, color: note.fg }}
             role="note"
             aria-label={note.title || 'Sticky note'}
           >
@@ -646,9 +1023,9 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
                 <button
                   type="button"
                   className="wise-note__btn"
-                  onClick={() => deleteNote(note.id)}
-                  title="Delete note"
-                  aria-label="Delete note"
+                  onClick={() => dismissNote(note.id)}
+                  title="Close note (keeps it in the list)"
+                  aria-label="Close note"
                 >
                   <CloseIcon />
                 </button>
@@ -660,7 +1037,8 @@ export default function WiseNotes({ menuOpen, onMenuClose, anchorRef }) {
               <div className="wise-note__body" dangerouslySetInnerHTML={{ __html: sanitizeNoteHtml(note.html) }} />
             )}
           </div>
-        ))}
+          );
+        })}
 
       {editorOpen && <NoteEditor note={editingNote} onClose={closeEditor} onSave={saveEditor} />}
     </>

@@ -44,9 +44,95 @@ const statusLabel = (v) => STATUS_OPTIONS.find((o) => o.value === v)?.label || v
 
 // Colour swatches offered in the ⋮ → Colour picker. `null` = clear (theme default).
 // Note (background) colours are soft fills; text colours are darker so they read
-// on both the default and the coloured backgrounds.
-const NOTE_COLORS = [null, '#fde68a', '#fed7aa', '#bbf7d0', '#bfdbfe', '#ddd6fe', '#fbcfe8', '#fecaca', '#e2e8f0'];
-const TEXT_COLORS = [null, '#0f172a', '#b45309', '#15803d', '#1d4ed8', '#7c3aed', '#be123c', '#64748b', '#ffffff'];
+// on both the default and the coloured backgrounds. Each palette runs a full rainbow
+// (warm → cool) ending in neutral greys, offered in two tiers: notes come in a light
+// and a deeper pastel; text in a deep and a vivid tone. Colours are matched by hex
+// value (not index), so reordering or extending these lists never breaks saved notes.
+const NOTE_COLORS = [
+  null,
+  // Light pastels
+  '#fecaca', // red
+  '#fecdd3', // rose
+  '#fed7aa', // orange
+  '#fde68a', // amber
+  '#fef08a', // yellow
+  '#d9f99d', // lime
+  '#bbf7d0', // green
+  '#a7f3d0', // emerald
+  '#99f6e4', // teal
+  '#a5f3fc', // cyan
+  '#bae6fd', // sky
+  '#bfdbfe', // blue
+  '#c7d2fe', // indigo
+  '#ddd6fe', // violet
+  '#e9d5ff', // purple
+  '#f5d0fe', // fuchsia
+  '#fbcfe8', // pink
+  '#e2e8f0', // slate
+  // Deeper pastels
+  '#fca5a5', // red
+  '#fda4af', // rose
+  '#fdba74', // orange
+  '#fcd34d', // amber
+  '#fde047', // yellow
+  '#bef264', // lime
+  '#86efac', // green
+  '#6ee7b7', // emerald
+  '#5eead4', // teal
+  '#67e8f9', // cyan
+  '#7dd3fc', // sky
+  '#93c5fd', // blue
+  '#a5b4fc', // indigo
+  '#c4b5fd', // violet
+  '#d8b4fe', // purple
+  '#f0abfc', // fuchsia
+  '#f9a8d4', // pink
+  '#cbd5e1', // slate
+];
+const TEXT_COLORS = [
+  null,
+  // Deep tones
+  '#be123c', // rose
+  '#b91c1c', // red
+  '#c2410c', // orange
+  '#b45309', // amber
+  '#a16207', // yellow
+  '#4d7c0f', // lime
+  '#15803d', // green
+  '#047857', // emerald
+  '#0f766e', // teal
+  '#0e7490', // cyan
+  '#0369a1', // sky
+  '#1d4ed8', // blue
+  '#4338ca', // indigo
+  '#7c3aed', // violet
+  '#7e22ce', // purple
+  '#a21caf', // fuchsia
+  '#be185d', // pink
+  // Vivid tones
+  '#f43f5e', // rose
+  '#ef4444', // red
+  '#f97316', // orange
+  '#f59e0b', // amber
+  '#ca8a04', // yellow
+  '#65a30d', // lime
+  '#22c55e', // green
+  '#10b981', // emerald
+  '#14b8a6', // teal
+  '#06b6d4', // cyan
+  '#0ea5e9', // sky
+  '#3b82f6', // blue
+  '#6366f1', // indigo
+  '#8b5cf6', // violet
+  '#a855f7', // purple
+  '#d946ef', // fuchsia
+  '#ec4899', // pink
+  // Neutrals
+  '#64748b', // slate
+  '#334155', // dark slate
+  '#0f172a', // near-black
+  '#ffffff', // white
+];
 
 const PlusIcon = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
@@ -207,7 +293,9 @@ export default function DayNotesModal({
 
   const openMenu = (e, note, kind) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const nearBottom = r.bottom + 230 > window.innerHeight;
+    // Estimate the tallest view (the colour picker) so a note near the bottom of the
+    // viewport opens the menu upward instead of getting clipped.
+    const nearBottom = r.bottom + 320 > window.innerHeight;
     setMenu({
       note,
       kind,
