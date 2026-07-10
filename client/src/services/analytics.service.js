@@ -16,3 +16,35 @@ export async function insights(range = 28) {
   const { data } = await api.get('/analytics/insights', { params: { range } });
   return data.data;
 }
+
+// All active connected pages in one report table:
+// { rangeDays, sinceDate, untilDate, rows: [{ accountName, follows, unfollows, visits, currentFollowers }] }.
+export async function allPagesMetrics(range = 28) {
+  const { data } = await api.get('/analytics/all-pages-metrics', { params: { range } });
+  return data.data;
+}
+
+// Insights "Overview" digest: { rangeDays, pageName, followers, sinceDate, untilDate,
+// tiles, topPosts }. Each tile: { key, title, info, total, changePct, series, available }.
+export async function highlights(range = 28) {
+  const { data } = await api.get('/analytics/highlights', { params: { range } });
+  return data.data;
+}
+
+// Messaging ("Contacts") model: { rangeDays, pageName, sinceDate, untilDate,
+// totalContacts, conversationsStarted, newContacts, returningContacts, series }.
+// Each metric: { total, changePct, channels: [{ origin, value, changePct }] }.
+// `series` is { totalContacts, conversationsStarted } → [{ period, value }].
+export async function messaging(range = 28) {
+  const { data } = await api.get('/analytics/messaging', { params: { range } });
+  return data.data;
+}
+
+// Contents ("Contents") tab: published posts for the active page within the range with
+// per-post engagement. Returns { rangeDays, pageName, sinceDate, untilDate, posts }, where
+// each post is { id, caption, mediaType, thumbnailUrl, postedAt, platformPostId, views,
+// reactions, comments, shares, interactions }.
+export async function contents(range = 28) {
+  const { data } = await api.get('/analytics/contents', { params: { range } });
+  return data.data;
+}

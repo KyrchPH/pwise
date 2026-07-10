@@ -19,6 +19,7 @@ export const createAgreement = asyncHandler(async (req, res) => {
     selectedDiscountIds: b.selectedDiscountIds,
     language: b.language,
     delivery: b.delivery || {},
+    conversationId: b.conversationId ?? null,
   });
   sendSuccess(res, { agreement }, 201);
 });

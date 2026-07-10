@@ -428,6 +428,166 @@ export async function getUserProfile(token, psid) {
   }
 }
 
+// ── Stories (Facebook Page Stories + Instagram Stories) ─────────────────────
+// Stories are published straight from the API server (no n8n): they carry no
+// caption, so there's nothing for the generate branch to do, and the multi-step
+// upload flows below don't map onto the single publish webhook. All media URLs
+// must be publicly reachable (our presigned S3 URLs are). Every helper throws an
+// ApiError whose message is safe to store as the story's failed_reason.
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A Graph error message worth showing the user (e.g. a missing permission or an
+// unsupported media format), never a bare "unknown error" wall.
+const graphMsg = (error, fallback) => error?.message || fallback;
+
+// Publish a photo story on a Facebook Page: upload the photo UNPUBLISHED first,
+// then create the story from the photo id. Returns { storyId } (the story post id).
+export async function publishPhotoStory({ photoUrl, token, fbPageId } = {}) {
+  const pageId = fbPageId || env.facebook.pageId;
+  if (!pageId) throw new ApiError(503, 'Facebook page is not configured');
+  const up = await graph(`${pageId}/photos`, {
+    method: 'POST',
+    fields: { url: String(photoUrl), published: 'false' },
+    token,
+  });
+  if (!up.ok || !up.data.id) {
+    throw new ApiError(422, `Facebook rejected the photo upload: ${graphMsg(up.error, 'no photo id returned')}`);
+  }
+  const story = await graph(`${pageId}/photo_stories`, {
+    method: 'POST',
+    fields: { photo_id: String(up.data.id) },
+    token,
+  });
+  if (!story.ok || !story.data.post_id) {
+    throw new ApiError(422, `Facebook rejected the photo story: ${graphMsg(story.error, 'no story id returned')}`);
+  }
+  return { storyId: String(story.data.post_id) };
+}
+
+// Publish a video story on a Facebook Page — three phases: start an upload
+// session, hand Meta the hosted file URL (it downloads server-side), finish.
+// After finish the video still processes asynchronously, so poll its status
+// until it's ready (an early 'error' fails fast with Meta's reason).
+export async function publishVideoStory({ videoUrl, token, fbPageId } = {}) {
+  const pageId = fbPageId || env.facebook.pageId;
+  if (!pageId) throw new ApiError(503, 'Facebook page is not configured');
+
+  const start = await graph(`${pageId}/video_stories`, {
+    method: 'POST',
+    fields: { upload_phase: 'start' },
+    token,
+  });
+  if (!start.ok || !start.data.video_id || !start.data.upload_url) {
+    throw new ApiError(422, `Facebook couldn't start the story upload: ${graphMsg(start.error, 'no upload session returned')}`);
+  }
+  const { video_id: videoId, upload_url: uploadUrl } = start.data;
+
+  // Hosted-file upload: Meta pulls the video from `file_url` itself. This call can
+  // take a while for larger clips, so it gets its own (generous) timeout instead of
+  // the 20s graph() one.
+  let uploadRes;
+  try {
+    uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: `OAuth ${tokenOrThrow(token)}`, file_url: String(videoUrl) },
+      signal: AbortSignal.timeout(120 * 1000),
+    });
+  } catch (err) {
+    throw new ApiError(422, `Uploading the story video to Facebook failed: ${err.message}`);
+  }
+  const uploadData = await uploadRes.json().catch(() => ({}));
+  if (!uploadRes.ok || uploadData.error || uploadData.success === false) {
+    throw new ApiError(422, `Facebook rejected the story video upload: ${graphMsg(uploadData.error, `HTTP ${uploadRes.status}`)}`);
+  }
+
+  const finish = await graph(`${pageId}/video_stories`, {
+    method: 'POST',
+    fields: { upload_phase: 'finish', video_id: String(videoId) },
+    token,
+  });
+  if (!finish.ok || finish.data.success === false) {
+    throw new ApiError(422, `Facebook couldn't publish the video story: ${graphMsg(finish.error, 'finish phase failed')}`);
+  }
+  const storyId = finish.data.post_id ? String(finish.data.post_id) : String(videoId);
+
+  // Processing poll — bounded. 'error' fails with Meta's reason; still-processing
+  // after the window is treated as posted (finish already succeeded, and Meta
+  // almost always completes shortly after).
+  for (let i = 0; i < 12; i += 1) {
+    const st = await graph(String(videoId), { fields: { fields: 'status' }, token });
+    const videoStatus = st.ok ? st.data.status?.video_status : null;
+    if (videoStatus === 'error') {
+      const detail = st.data.status?.processing_phase?.errors?.[0]?.message;
+      throw new ApiError(422, `Facebook couldn't process the story video${detail ? `: ${detail}` : ''}`);
+    }
+    if (videoStatus === 'ready' || videoStatus === 'published' || videoStatus == null) break;
+    await sleep(5000);
+  }
+  return { storyId };
+}
+
+// Publish an Instagram story on the page's linked professional account: create a
+// STORIES media container, wait for it to finish processing, then publish it.
+// Uses the page access token (same as IG messaging); needs the
+// instagram_content_publish permission. Returns { storyId } (the IG media id).
+export async function publishInstagramStory({ igUserId, mediaType, mediaUrl, token } = {}) {
+  if (!igUserId) throw new ApiError(422, 'This page has no linked Instagram account');
+  const container = await graph(`${igUserId}/media`, {
+    method: 'POST',
+    fields: {
+      media_type: 'STORIES',
+      [mediaType === 'video' ? 'video_url' : 'image_url']: String(mediaUrl),
+    },
+    token,
+  });
+  if (!container.ok || !container.data.id) {
+    throw new ApiError(422, `Instagram rejected the story media: ${graphMsg(container.error, 'no container id returned')}`);
+  }
+  const creationId = String(container.data.id);
+
+  // Container processing poll — images are usually instant, videos take a while.
+  let ready = false;
+  for (let i = 0; i < 24; i += 1) {
+    const st = await graph(creationId, { fields: { fields: 'status_code' }, token });
+    const code = st.ok ? st.data.status_code : null;
+    if (code === 'FINISHED') {
+      ready = true;
+      break;
+    }
+    if (code === 'ERROR' || code === 'EXPIRED') {
+      throw new ApiError(422, 'Instagram couldn\'t process the story media — check the format (JPEG images; MP4/MOV video up to 60s).');
+    }
+    await sleep(5000);
+  }
+  if (!ready) throw new ApiError(422, 'Instagram is still processing the story media — it never became ready to publish.');
+
+  const publish = await graph(`${igUserId}/media_publish`, {
+    method: 'POST',
+    fields: { creation_id: creationId },
+    token,
+  });
+  if (!publish.ok || !publish.data.id) {
+    throw new ApiError(422, `Instagram couldn't publish the story: ${graphMsg(publish.error, 'no media id returned')}`);
+  }
+  return { storyId: String(publish.data.id) };
+}
+
+// Best-effort delete of a published story by its platform id. Facebook story
+// posts delete like any post; Instagram doesn't support deleting stories via
+// the API — treat "unsupported" the same as already-gone (the story expires on
+// its own within 24h anyway). Never throws.
+export async function deleteStory(platformStoryId, token) {
+  if (!platformStoryId) return { deleted: true };
+  try {
+    const { ok, error } = await graph(String(platformStoryId), { method: 'DELETE', token });
+    if (ok || isObjectGoneError(error?.message || '')) return { deleted: true };
+    return { deleted: false, error: error?.message || 'unknown error' };
+  } catch (e) {
+    return { deleted: false, error: e.message };
+  }
+}
+
 // Subscribe a Page to this app's webhooks for messaging, so its inbound messages
 // reach our /api/webhooks/messenger endpoint. Best-effort.
 export async function subscribeMessaging(token, pageId) {

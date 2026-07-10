@@ -2,7 +2,7 @@ import { query, getConnection } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { env } from '../config/env.js';
 import { emitMessagingEvent } from './messaging.events.js';
-import { moduleAccessForUser } from '../config/modules.js';
+import { canUseModule } from '../config/modules.js';
 import { decrypt } from '../utils/crypto.util.js';
 import * as tg from './telegram.service.js';
 import * as fb from './fb.service.js';
@@ -37,7 +37,7 @@ function audienceFor(conv) {
 }
 
 function hasMessagingAccess(user) {
-  return user?.role === 'admin' || moduleAccessForUser(user).includes('messages');
+  return canUseModule(user, 'messages');
 }
 
 /**
@@ -99,6 +99,7 @@ function rowToMessage(row) {
 function rowToConversation(c, messageRows, pending = null) {
   return {
     id: String(c.id),
+    createdAt: c.created_at || null,
     pageId: c.account_id != null ? String(c.account_id) : null,
     pageName: c.pa_name || c.page_name || '',
     customerName: c.customer_name || '',
@@ -129,13 +130,14 @@ function rowToConversation(c, messageRows, pending = null) {
 // Lightweight mutable fields the client merges after an action / SSE event.
 async function conversationPatch(id) {
   const rows = await query(
-    'SELECT id, summary, unread, customer_name, customer_avatar, handled_by, assigned_user_id, assigned_user_name, status, last_message_at, blocked, blocked_by_name, blocked_at FROM conversations WHERE id = ?',
+    'SELECT id, created_at, summary, unread, customer_name, customer_avatar, handled_by, assigned_user_id, assigned_user_name, status, last_message_at, blocked, blocked_by_name, blocked_at FROM conversations WHERE id = ?',
     [id],
   );
   if (!rows.length) return null;
   const c = rows[0];
   return {
     id: String(c.id),
+    createdAt: c.created_at || null,
     summary: c.summary || '',
     unread: Number(c.unread) || 0,
     customerName: c.customer_name || '',

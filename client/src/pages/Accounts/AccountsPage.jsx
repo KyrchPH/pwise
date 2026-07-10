@@ -4,17 +4,33 @@ import { apiError } from '../../services/api.js';
 import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { APP_MODULES, invitableModulesForUser, labelForModule, normalizeModuleAccess } from '../../config/modules.js';
+import {
+  APP_MODULES,
+  invitableModulesForUser,
+  isAdminRole,
+  isSuperAdminRole,
+  labelForModule,
+  normalizeModuleAccess,
+} from '../../config/modules.js';
 import { Card, Button, Spinner, EmptyState, Modal } from '../../components/ui.jsx';
 
 const fmt = (d) => (d ? new Date(d).toLocaleString() : '—');
 
-const allModuleIds = APP_MODULES.map((m) => m.id);
+const grantableModules = APP_MODULES.filter((m) => !m.adminOnly);
+const allModuleIds = grantableModules.map((m) => m.id);
+const MODULE_GROUP_LABELS = {
+  workspace: 'Workspace',
+  communication: 'Communication',
+  planning: 'Planning',
+  system: 'System',
+};
+const MODULE_GROUP_ORDER = Object.keys(MODULE_GROUP_LABELS);
 
 function accessLabels(access) {
   const ids = normalizeModuleAccess(access) || allModuleIds;
-  if (ids.length === allModuleIds.length) return ['All modules'];
-  return ids.map(labelForModule);
+  const visibleIds = ids.filter((id) => allModuleIds.includes(id));
+  if (allModuleIds.every((id) => visibleIds.includes(id))) return ['All modules'];
+  return visibleIds.map(labelForModule);
 }
 
 // Access modules on a single line; the rest collapse into a "+N more" pill (the
@@ -58,6 +74,61 @@ function GearIcon() {
   );
 }
 
+function groupedModules(modules) {
+  return MODULE_GROUP_ORDER.map((group) => ({
+    group,
+    label: MODULE_GROUP_LABELS[group],
+    modules: modules.filter((module) => (module.group || 'system') === group),
+  })).filter((section) => section.modules.length > 0);
+}
+
+function ModuleAccessPicker({ modules, selected, disabled, onToggle, coreHint = 'Always available' }) {
+  const selectedCount = modules.filter((module) => selected.includes(module.id)).length;
+  return (
+    <div className="module-access__picker">
+      <div className="module-access__summary">
+        <div>
+          <span className="module-access__eyebrow">Selected access</span>
+          <strong>{selectedCount} of {modules.length} modules enabled</strong>
+        </div>
+        <span className="module-access__summary-note">Dashboard stays on as the safe landing page.</span>
+      </div>
+
+      <div className="module-access__groups">
+        {groupedModules(modules).map((section) => (
+          <section className="module-access__group" key={section.group}>
+            <div className="module-access__group-title">{section.label}</div>
+            <div className="module-access__list">
+              {section.modules.map((module) => {
+                const checked = selected.includes(module.id);
+                return (
+                  <label
+                    className={`module-access__item${checked ? ' is-checked' : ''}${module.core ? ' is-locked' : ''}`}
+                    key={module.id}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={module.core || disabled}
+                      onChange={() => onToggle(module)}
+                    />
+                    <span className="module-access__check" aria-hidden="true" />
+                    <span className="module-access__copy">
+                      <span className="module-access__name">{module.label}</span>
+                      <span className="module-access__hint">{module.core ? coreHint : module.description}</span>
+                    </span>
+                    <span className="module-access__state">{module.core ? 'Required' : checked ? 'On' : 'Off'}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // True while a brute-force lockout is still in effect (locked_until in the future).
 function isLocked(u) {
   return !!u.locked_until && new Date(u.locked_until).getTime() > Date.now();
@@ -73,9 +144,19 @@ function statusBadge(u) {
   );
 }
 
+function roleLabel(role) {
+  if (isSuperAdminRole(role)) return 'Super admin';
+  if (isAdminRole(role)) return 'Admin';
+  return 'User';
+}
+
+function roleBadgeClass(role) {
+  return isAdminRole(role) ? 'posted' : 'draft';
+}
+
 export default function AccountsPage() {
   const toast = useToast();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [generating, setGenerating] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
   const [selectedModules, setSelectedModules] = useState([]);
@@ -111,6 +192,7 @@ export default function AccountsPage() {
 
   const { users = [], invites = [] } = data || {};
   const availableModules = invitableModulesForUser(user);
+  const currentUserIsSuperAdmin = isSuperAdminRole(user?.role);
 
   const openAccessDialog = () => {
     setSelectedModules(availableModules.map((module) => module.id));
@@ -200,6 +282,46 @@ export default function AccountsPage() {
       await adminService.setActive(u.id, !u.is_active);
       toast.success(u.is_active ? 'Account deactivated' : 'Account activated');
       refresh();
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  };
+
+  const toggleAdminRole = async (u) => {
+    if (isSuperAdminRole(u.role)) {
+      toast.error('Transfer the super admin role before changing this account.');
+      return;
+    }
+    const nextRole = isAdminRole(u.role) ? 'user' : 'admin';
+    const message =
+      nextRole === 'admin'
+        ? `Add ${u.email} as an admin?`
+        : `Remove ${u.email} as an admin? They will lose access to admin-only pages.`;
+    if (!window.confirm(message)) return;
+    try {
+      const res = await adminService.setRole(u.id, nextRole);
+      const nextLabel = roleLabel(res.role);
+      toast.success(`${u.name || u.email} is now ${nextLabel}.`);
+      setDetails((cur) => (cur && cur.id === u.id ? { ...cur, role: res.role } : cur));
+      refresh();
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  };
+
+  const transferSuperAdminRole = async (u) => {
+    if (
+      !window.confirm(
+        `Transfer the Super Admin role to ${u.email}? You will remain an admin, but only they will be able to transfer it again.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await adminService.transferSuperAdmin(u.id);
+      toast.success(`Super Admin role transferred to ${u.name || u.email}.`);
+      setDetails((cur) => (cur && cur.id === u.id ? { ...cur, role: 'super_admin' } : cur));
+      await Promise.all([refresh(), refreshUser?.()]);
     } catch (e) {
       toast.error(apiError(e));
     }
@@ -297,7 +419,7 @@ export default function AccountsPage() {
                         <td data-label="Name">{u.name}</td>
                         <td className="cell-muted" data-label="Email">{u.email}</td>
                         <td data-label="Role">
-                          <span className={`badge badge--${u.role === 'admin' ? 'posted' : 'draft'}`}>{u.role}</span>
+                          <span className={`badge badge--${roleBadgeClass(u.role)}`}>{roleLabel(u.role)}</span>
                         </td>
                         <td data-label="Access">
                           <AccessPills access={u.module_access} />
@@ -321,7 +443,33 @@ export default function AccountsPage() {
                               </button>
                               {menuId === u.id && (
                                 <div className="card-menu" role="menu">
-                                  {u.role !== 'admin' && (
+                                  {!isSuperAdminRole(u.role) && (
+                                    <button
+                                      type="button"
+                                      className="card-menu__item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        toggleAdminRole(u);
+                                      }}
+                                    >
+                                      {isAdminRole(u.role) ? 'Remove as an admin' : 'Add as an admin'}
+                                    </button>
+                                  )}
+                                  {currentUserIsSuperAdmin && !isSuperAdminRole(u.role) && (
+                                    <button
+                                      type="button"
+                                      className="card-menu__item"
+                                      role="menuitem"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        transferSuperAdminRole(u);
+                                      }}
+                                    >
+                                      Transfer Super Admin Role
+                                    </button>
+                                  )}
+                                  {!isAdminRole(u.role) && (
                                     <button
                                       type="button"
                                       className="card-menu__item"
@@ -451,7 +599,7 @@ export default function AccountsPage() {
         onClose={() => setDetails(null)}
         footer={
           <>
-            {details && details.role !== 'admin' && details.id !== user.id && !details.deleted_at && (
+            {details && !isAdminRole(details.role) && details.id !== user.id && !details.deleted_at && (
               <Button
                 variant="subtle"
                 onClick={() => {
@@ -477,7 +625,7 @@ export default function AccountsPage() {
             </div>
             <div className="acct-details__row">
               <span className="acct-details__label">Role</span>
-              <span className={`badge badge--${details.role === 'admin' ? 'posted' : 'draft'}`}>{details.role}</span>
+              <span className={`badge badge--${roleBadgeClass(details.role)}`}>{roleLabel(details.role)}</span>
             </div>
             <div className="acct-details__row">
               <span className="acct-details__label">Status</span>
@@ -516,34 +664,19 @@ export default function AccountsPage() {
           <p className="module-access__intro">
             Choose the modules this login link can unlock. Modules you do not have are not available to grant.
           </p>
-          <div className="module-access__list">
-            {availableModules.map((module) => {
-              const checked = selectedModules.includes(module.id);
-              return (
-                <label className={`module-access__item${checked ? ' is-checked' : ''}`} key={module.id}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={module.core || generating}
-                    onChange={() => toggleModule(module)}
-                  />
-                  <span className="module-access__check" aria-hidden="true" />
-                  <span>
-                    <span className="module-access__name">{module.label}</span>
-                    <span className="module-access__hint">
-                      {module.core ? 'Required safe landing page' : 'Allow access after signup'}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+          <ModuleAccessPicker
+            modules={availableModules}
+            selected={selectedModules}
+            disabled={generating}
+            onToggle={toggleModule}
+            coreHint="Required safe landing page"
+          />
         </div>
       </Modal>
 
       <Modal
         open={!!editUser}
-        title={editUser ? `Module access — ${editUser.name}` : 'Module access'}
+        title="Module access"
         onClose={() => (!savingAccess ? setEditUser(null) : undefined)}
         className="modal--module-access"
         dismissable={!savingAccess}
@@ -552,7 +685,7 @@ export default function AccountsPage() {
             <Button variant="ghost" onClick={() => setEditUser(null)} disabled={savingAccess}>
               Cancel
             </Button>
-            <Button onClick={saveAccess} disabled={savingAccess || editModules.length === 0}>
+            <Button className="btn--flat" onClick={saveAccess} disabled={savingAccess || editModules.length === 0}>
               {savingAccess ? 'Saving…' : 'Save'}
             </Button>
           </>
@@ -563,28 +696,12 @@ export default function AccountsPage() {
             Choose which modules {editUser?.name || 'this user'} can open. Changes take effect the next time they reload
             the app.
           </p>
-          <div className="module-access__list">
-            {availableModules.map((module) => {
-              const checked = editModules.includes(module.id);
-              return (
-                <label className={`module-access__item${checked ? ' is-checked' : ''}`} key={module.id}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={module.core || savingAccess}
-                    onChange={() => toggleEditModule(module)}
-                  />
-                  <span className="module-access__check" aria-hidden="true" />
-                  <span>
-                    <span className="module-access__name">{module.label}</span>
-                    <span className="module-access__hint">
-                      {module.core ? 'Always available' : 'Can open this module'}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+          <ModuleAccessPicker
+            modules={availableModules}
+            selected={editModules}
+            disabled={savingAccess}
+            onToggle={toggleEditModule}
+          />
         </div>
       </Modal>
     </>

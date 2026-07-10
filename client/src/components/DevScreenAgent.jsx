@@ -1,8 +1,22 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import profilePhoto from '../assets/images/profile.png';
 import { useAuth } from '../context/AuthContext.jsx';
 import { askWiseAssistant, getWiseAssistantHistory, apiError } from '../services/wise_assistant.service.js';
+import {
+  allowedRoutesForUser,
+  checkNavigation,
+  describeStorage,
+  executeNotes,
+  executePin,
+  executeSidebar,
+  executeUiAction,
+  resolvePageTarget,
+  storageSnapshot,
+} from '../utils/wiseAssistantActions.js';
+import { useTheme } from '../context/ThemeContext.jsx';
+import { usePages } from '../context/PageContext.jsx';
+import WiseNotes from './WiseNotes.jsx';
 
 const GREETINGS = [
   'Hey there.',
@@ -73,7 +87,11 @@ const prefersReducedMotion = () =>
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const DEFAULT_CORNER = 'bottom-right';
 const CORNER_KEY = 'pwise.wiseAssistant.corner';
+const NOTES_POSITION_KEY = 'pwise.wiseAssistant.notesPosition';
 const DRAG_THRESHOLD = 6; // px the pointer must travel before a press becomes a drag
+const NOTES_EDGE_PADDING = 14;
+const NOTES_ATTACH_GAP = 8;
+const NOTES_VERTICAL_SLOT_X_OFFSET = 44;
 
 function loadCorner() {
   try {
@@ -88,6 +106,150 @@ function saveCorner(corner) {
     localStorage.setItem(CORNER_KEY, corner);
   } catch {
     /* storage unavailable — non-fatal */
+  }
+}
+
+function notesSize() {
+  if (typeof window === 'undefined') return 132;
+  return window.innerWidth <= 560 ? 92 : 132;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+function clampNotesPosition(position) {
+  if (typeof window === 'undefined') return position;
+  const size = notesSize();
+  return {
+    x: clamp(position.x, NOTES_EDGE_PADDING, window.innerWidth - size - NOTES_EDGE_PADDING),
+    y: clamp(position.y, NOTES_EDGE_PADDING, window.innerHeight - size - NOTES_EDGE_PADDING),
+  };
+}
+
+function notesSlotSize() {
+  if (typeof window === 'undefined') return 156;
+  return window.innerWidth <= 560 ? 110 : 156;
+}
+
+function clampNotesSlot(slot) {
+  if (typeof window === 'undefined') return slot;
+  const size = notesSlotSize();
+  return {
+    x: clamp(slot.x, NOTES_EDGE_PADDING, window.innerWidth - size - NOTES_EDGE_PADDING),
+    y: clamp(slot.y, NOTES_EDGE_PADDING, window.innerHeight - size - NOTES_EDGE_PADDING),
+    width: size,
+    height: size,
+  };
+}
+
+function notesSlotFromCenter(x, y) {
+  const size = notesSlotSize();
+  return clampNotesSlot({ x: x - size / 2, y: y - size / 2 });
+}
+
+function notesPositionForSlot(slot) {
+  const size = notesSize();
+  return clampNotesPosition({
+    x: slot.x + (slot.width - size) / 2,
+    y: slot.y + (slot.height - size) / 2,
+  });
+}
+
+function assistantDockRect(corner = DEFAULT_CORNER) {
+  if (typeof window === 'undefined') return null;
+  const rect = typeof document === 'undefined' ? null : document.querySelector('.dev-agent')?.getBoundingClientRect();
+  if (rect && rect.width > 0 && rect.height > 0) return rect;
+
+  const isMobile = window.innerWidth <= 560;
+  const size = isMobile ? 62 : 100;
+  const inset = isMobile ? 10 : 20;
+  const [vertical, horizontal] = corner.split('-');
+  const left = horizontal === 'left' ? inset : window.innerWidth - inset - size;
+  const top = isMobile || vertical === 'top' ? inset : window.innerHeight - inset - size;
+  return {
+    left,
+    top,
+    right: left + size,
+    bottom: top + size,
+    width: size,
+    height: size,
+  };
+}
+
+function notesAttachmentSlots(corner = DEFAULT_CORNER) {
+  if (typeof window === 'undefined') return [];
+  const slotSize = notesSlotSize();
+  const rect = assistantDockRect(corner);
+  if (!rect) return [];
+
+  const [vertical, horizontal] = corner.split('-');
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  const verticalSlotY = vertical === 'top'
+    ? rect.bottom + NOTES_ATTACH_GAP
+    : rect.top - slotSize - NOTES_ATTACH_GAP;
+  const horizontalSlotX = horizontal === 'left'
+    ? rect.right + NOTES_ATTACH_GAP
+    : rect.left - slotSize - NOTES_ATTACH_GAP;
+
+  return [
+    clampNotesSlot({ x: centerX - slotSize / 2 + NOTES_VERTICAL_SLOT_X_OFFSET, y: verticalSlotY, width: slotSize, height: slotSize }),
+    clampNotesSlot({ x: horizontalSlotX, y: centerY - slotSize / 2, width: slotSize, height: slotSize }),
+  ];
+}
+
+function snapNotesPosition(position, corner = DEFAULT_CORNER) {
+  if (typeof window === 'undefined') return position;
+  const size = notesSize();
+  const clamped = clampNotesPosition(position);
+  const centerX = clamped.x + size / 2;
+  const centerY = clamped.y + size / 2;
+  const slots = notesAttachmentSlots(corner);
+  if (!slots.length) return clamped;
+
+  const nearest = slots.reduce((best, slot) => {
+    const dx = slot.x + slot.width / 2 - centerX;
+    const dy = slot.y + slot.height / 2 - centerY;
+    const distance = dx * dx + dy * dy;
+    return distance < best.distance ? { slot, distance } : best;
+  }, { slot: slots[0], distance: Infinity }).slot;
+
+  return notesPositionForSlot(nearest);
+}
+
+function defaultNotesPosition(corner = DEFAULT_CORNER) {
+  if (typeof window === 'undefined') return null;
+  const isMobile = window.innerWidth <= 560;
+  const size = notesSize();
+  const robotSize = isMobile ? 62 : 100;
+  const inset = isMobile ? 10 : 20;
+  const x = corner.endsWith('left') ? NOTES_EDGE_PADDING : window.innerWidth - size - NOTES_EDGE_PADDING;
+  const y = isMobile
+    ? inset + robotSize + 10
+    : corner.startsWith('top')
+      ? inset + robotSize + 16
+      : window.innerHeight - inset - robotSize - size - 16;
+
+  return snapNotesPosition({ x, y }, corner);
+}
+
+function loadNotesPosition(corner = DEFAULT_CORNER) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(NOTES_POSITION_KEY) || 'null');
+    if (!parsed || !Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return null;
+    return snapNotesPosition(parsed, corner);
+  } catch {
+    return null;
+  }
+}
+
+function saveNotesPosition(position) {
+  try {
+    localStorage.setItem(NOTES_POSITION_KEY, JSON.stringify(position));
+  } catch {
+    /* storage unavailable */
   }
 }
 
@@ -243,14 +405,19 @@ function CollapseIcon() {
 
 export default function DevScreenAgent() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuth();
+  const { theme, toggle: toggleTheme } = useTheme();
+  const { pages, activeId, switchPage } = usePages();
   const hostRef = useRef(null);
+  const notesRef = useRef(null);
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const messagesRef = useRef(null);
   const lastGreetingRef = useRef(-1);
   const hideTimerRef = useRef(null);
   const replyTimerRef = useRef(null);
+  const actionTimerRef = useRef(null); // delays action execution until the answer has typed out
   const interactedRef = useRef(false); // true once the user sends a message — guards the async restore
   const [ready, setReady] = useState(false);
   const [greeting, setGreeting] = useState('');
@@ -267,17 +434,26 @@ export default function DevScreenAgent() {
   const [drag, setDrag] = useState(null); // { x, y } px while dragging, else null
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false); // swallow the click that trails a drag
+  const [notesPosition, setNotesPosition] = useState(() => loadNotesPosition(corner) || defaultNotesPosition(corner));
+  const [notesDragging, setNotesDragging] = useState(false);
+  const [notesMenuOpen, setNotesMenuOpen] = useState(false); // Wise Notes options menu
+  const notesDragRef = useRef(null);
   const [entered, setEntered] = useState(false); // one-shot: drives the slide-in entrance
 
   useEffect(() => {
-    if (!hostRef.current) return undefined;
+    if (!hostRef.current || !notesRef.current) return undefined;
 
     let live = true;
     let animation = null;
+    let notesAnimation = null;
 
-    Promise.all([import('lottie-web'), import('../assets/lotties/assistant.json')])
-      .then(([lottieModule, animationModule]) => {
-        if (!live || !hostRef.current) return;
+    Promise.all([
+      import('lottie-web'),
+      import('../assets/lotties/assistant.json'),
+      import('../assets/lotties/notes.json'),
+    ])
+      .then(([lottieModule, animationModule, notesModule]) => {
+        if (!live || !hostRef.current || !notesRef.current) return;
 
         animation = lottieModule.default.loadAnimation({
           container: hostRef.current,
@@ -285,6 +461,16 @@ export default function DevScreenAgent() {
           loop: true,
           autoplay: true,
           animationData: animationModule.default,
+          rendererSettings: {
+            preserveAspectRatio: 'xMidYMid meet',
+          },
+        });
+        notesAnimation = lottieModule.default.loadAnimation({
+          container: notesRef.current,
+          renderer: 'svg',
+          loop: true,
+          autoplay: true,
+          animationData: notesModule.default,
           rendererSettings: {
             preserveAspectRatio: 'xMidYMid meet',
           },
@@ -299,7 +485,9 @@ export default function DevScreenAgent() {
       live = false;
       clearTimeout(hideTimerRef.current);
       clearTimeout(replyTimerRef.current);
+      clearTimeout(actionTimerRef.current);
       animation?.destroy();
+      notesAnimation?.destroy();
     };
   }, []);
 
@@ -483,6 +671,65 @@ export default function DevScreenAgent() {
     window.addEventListener('pointercancel', onUp);
   };
 
+  // Drag moves the notes lottie; a press that never passes the movement
+  // threshold is a click and toggles the Wise Notes options menu instead.
+  const startNotesDrag = (event) => {
+    if (event.button != null && event.button !== 0) return; // primary button / touch only
+    event.preventDefault();
+    event.stopPropagation();
+
+    const notes = notesRef.current;
+    if (!notes) return;
+    const rect = notes.getBoundingClientRect();
+    notesDragRef.current = {
+      grabX: event.clientX - rect.left,
+      grabY: event.clientY - rect.top,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+
+    const nextPosition = (e) => {
+      const d = notesDragRef.current;
+      if (!d) return null;
+      return clampNotesPosition({ x: e.clientX - d.grabX, y: e.clientY - d.grabY });
+    };
+    const onMove = (e) => {
+      const d = notesDragRef.current;
+      if (!d) return;
+      if (!d.moved) {
+        if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return;
+        d.moved = true;
+        setNotesDragging(true);
+        setNotesMenuOpen(false); // a drag never leaves the menu behind
+      }
+      const next = nextPosition(e);
+      if (next) setNotesPosition(next);
+    };
+    const onUp = (e) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      const d = notesDragRef.current;
+      const next = d && d.moved ? clampNotesPosition({ x: e.clientX - d.grabX, y: e.clientY - d.grabY }) : null;
+      notesDragRef.current = null;
+      setNotesDragging(false);
+      if (!d) return;
+      if (!d.moved) {
+        setNotesMenuOpen((o) => !o); // a plain press — show the options
+        return;
+      }
+      if (!next) return;
+      const snapped = snapNotesPosition(next, corner);
+      setNotesPosition(snapped);
+      saveNotesPosition(snapped);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
   const handleTriggerClick = () => {
     if (suppressClickRef.current) return; // just finished a drag — ignore the click
     toggleOpen();
@@ -505,6 +752,81 @@ export default function DevScreenAgent() {
       return;
     }
     setTyping({ id, full, count: 0 });
+  };
+
+  // A short status line from an executed action ("Filled **Email**.", a storage
+  // listing, an access-denied explanation). Plain chat messages, so they persist in
+  // the cache and travel as history context like everything else.
+  const pushAgentNote = (text) =>
+    setMessages((list) => [...list, { id: `act-${Date.now()}-${list.length}`, role: 'agent', text }]);
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Execute the (server-sanitized) actions that came with an answer, one at a time,
+  // narrating each into the chat. Client-side auth is re-checked here: navigation
+  // runs through checkNavigation (module/admin access), UI ops through the
+  // executor's guards — and the route guards in App.jsx remain the backstop.
+  const runActions = async (actions) => {
+    if (!Array.isArray(actions)) return;
+    for (const action of actions.slice(0, 5)) {
+      try {
+        if (action.type === 'navigate') {
+          const check = checkNavigation(user, action.path);
+          if (!check.ok) {
+            pushAgentNote(check.message);
+            continue;
+          }
+          navigate(action.path);
+          pushAgentNote(`Took you to **${check.route.label}**.`);
+          await wait(700); // let the new page mount before any UI action lands on it
+        } else if (action.type === 'reload') {
+          pushAgentNote('Reloading the page…');
+          await wait(900); // give the chat cache a beat to persist the note
+          window.location.reload();
+          return;
+        } else if (action.type === 'read_storage') {
+          pushAgentNote(describeStorage(action.key));
+        } else if (action.type === 'ui') {
+          const result = executeUiAction(action);
+          pushAgentNote(result.message);
+          await wait(350);
+        } else if (action.type === 'theme') {
+          // ThemeContext exposes the current theme + a toggle; flip only if the
+          // requested theme differs (so "dark mode" when already dark is a no-op).
+          const want = action.value === 'dark' || action.value === 'light' ? action.value : null;
+          if (want && theme === want) {
+            pushAgentNote(`You're already on the **${want}** theme.`);
+          } else {
+            toggleTheme();
+            pushAgentNote(want ? `Switched to the **${want}** theme.` : 'Toggled the theme.');
+          }
+          await wait(200);
+        } else if (action.type === 'page') {
+          // Switch the active Facebook page — the one data-context change we allow.
+          const resolved = resolvePageTarget(pages, action.target);
+          if (!resolved.ok) {
+            pushAgentNote(resolved.message);
+          } else if (resolved.page.id === activeId) {
+            pushAgentNote(`**${resolved.page.account_name}** is already the active page.`);
+          } else {
+            await switchPage(resolved.page.id);
+            pushAgentNote(`Switched the active page to **${resolved.page.account_name}**.`);
+          }
+          await wait(400);
+        } else if (action.type === 'sidebar') {
+          pushAgentNote(executeSidebar(action.op || action.value).message);
+          await wait(250);
+        } else if (action.type === 'pin') {
+          pushAgentNote(executePin(user, action.target, action.op || action.value).message);
+          await wait(250);
+        } else if (action.type === 'notes') {
+          pushAgentNote(executeNotes(action.op || action.value).message);
+          await wait(250);
+        }
+      } catch {
+        pushAgentNote('That action failed on this screen — sorry.');
+      }
+    }
   };
 
   const submit = async (event) => {
@@ -536,8 +858,21 @@ export default function DevScreenAgent() {
           question: text,
           pathname,
           history,
+          context: {
+            storage: storageSnapshot(),
+            allowed_paths: allowedRoutesForUser(user),
+            page_title: document.title,
+          },
         });
         startTyping(`a-${Date.now()}`, result.answer);
+        if (result.actions?.length) {
+          // Run the actions once the answer has (roughly) finished typing out, so
+          // the user reads WHY before the app starts moving under them.
+          const answerMs =
+            !result.answer || prefersReducedMotion() ? 250 : TYPE_TICK_MS * TYPE_TARGET_TICKS + 400;
+          clearTimeout(actionTimerRef.current);
+          actionTimerRef.current = setTimeout(() => runActions(result.actions), answerMs);
+        }
       } catch (error) {
         startTyping(`a-${Date.now()}`, `Wise Assistant is unavailable right now: ${apiError(error)}`);
       }
@@ -612,9 +947,28 @@ export default function DevScreenAgent() {
 
   const [cornerV, cornerH] = corner.split('-'); // e.g. 'bottom' + 'right'
   const dragStyle = drag ? { left: drag.x, top: drag.y, right: 'auto', bottom: 'auto' } : undefined;
+  const notesStyle = notesPosition ? { left: notesPosition.x, top: notesPosition.y } : undefined;
 
   return (
     <div className="dev-agent-overlay">
+      <div
+        className={`dev-agent-notes is-${cornerV} is-${cornerH}${ready ? ' is-ready' : ''}${notesPosition ? ' is-free' : ''}${notesDragging ? ' is-dragging' : ''}`}
+        ref={notesRef}
+        style={notesStyle}
+        onPointerDown={startNotesDrag}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setNotesMenuOpen((o) => !o);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label="Wise Notes — press for options, drag to move"
+        aria-expanded={notesMenuOpen}
+        title="Wise Notes"
+      />
+      <WiseNotes menuOpen={notesMenuOpen} onMenuClose={() => setNotesMenuOpen(false)} anchorRef={notesRef} />
       <div
         ref={rootRef}
         className={`dev-agent is-${cornerV} is-${cornerH}${ready ? ' is-ready' : ''}${ready && !entered ? ' is-entering' : ''}${open ? ' is-open' : ''}${expanded ? ' is-expanded' : ''}${drag ? ' is-dragging' : ''}`}

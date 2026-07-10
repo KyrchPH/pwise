@@ -3,7 +3,9 @@ import { sendSuccess } from '../utils/response.util.js';
 import * as service from '../services/wise_assistant.service.js';
 
 export const ask = asyncHandler(async (req, res) => {
-  const result = await service.ask(req.user, req.body || {});
+  // req.sessionId feeds the short-lived read-only token the n8n agent uses to fetch
+  // this user's data back through the API (see wise_assistant.service.ask).
+  const result = await service.ask(req.user, req.sessionId, req.body || {});
   sendSuccess(res, result);
 });
 

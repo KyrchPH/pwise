@@ -13,7 +13,10 @@
       "name": "Wise Assistant Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-780, 0],
+      "position": [
+        -780,
+        0
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_WITH_HEADER_AUTH_CREDENTIAL_ID",
@@ -23,13 +26,16 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body ?? $json;\nconst question = String(body.question ?? '').trim();\nif (!question) {\n  throw new Error('question is required');\n}\n\nconst pathname = String(body.pathname ?? '/').trim() || '/';\nconst rawHistory = Array.isArray(body.history) ? body.history : [];\nconst history = rawHistory\n  .slice(-8)\n  .map((entry) => ({\n    role: entry?.role === 'user' ? 'user' : 'assistant',\n    text: String(entry?.text ?? '').trim().slice(0, 700),\n  }))\n  .filter((entry) => entry.text);\n\nreturn [{\n  json: {\n    question: question.slice(0, 1200),\n    pathname: pathname.slice(0, 255),\n    history,\n    user: body.user ?? null,\n    source: body.source ?? 'pwise-dev-overlay',\n    requested_at: body.requested_at ?? new Date().toISOString(),\n  },\n}];"
+        "jsCode": "const body = $json.body ?? $json;\nconst question = String(body.question ?? '').trim();\nif (!question) {\n  throw new Error('question is required');\n}\n\nconst pathname = String(body.pathname ?? '/').trim() || '/';\nconst rawHistory = Array.isArray(body.history) ? body.history : [];\nconst history = rawHistory\n  .slice(-8)\n  .map((entry) => ({\n    role: entry?.role === 'user' ? 'user' : 'assistant',\n    text: String(entry?.text ?? '').trim().slice(0, 700),\n  }))\n  .filter((entry) => entry.text);\n\n// Read-only data access back into the pwise API (short-lived, GET-only token the\n// server minted for this one question). Kept out of the prompt — only the HTTP\n// tool node reads it.\nconst assistantApi = body.assistant_api && body.assistant_api.base_url && body.assistant_api.token\n  ? { base_url: String(body.assistant_api.base_url).replace(/\\/+$/, ''), token: String(body.assistant_api.token) }\n  : null;\n\n// Where the user is + what they may reach (storage snapshot arrives pre-redacted).\nconst clientContext = body.client_context && typeof body.client_context === 'object' ? body.client_context : {};\n\nreturn [{\n  json: {\n    question: question.slice(0, 1200),\n    pathname: pathname.slice(0, 255),\n    history,\n    user: body.user ?? null,\n    client_context: {\n      storage: Array.isArray(clientContext.storage) ? clientContext.storage.slice(0, 40) : [],\n      allowed_paths: Array.isArray(clientContext.allowed_paths) ? clientContext.allowed_paths.slice(0, 64) : [],\n      page_title: String(clientContext.page_title ?? '').slice(0, 200),\n    },\n    assistant_api: assistantApi,\n    source: body.source ?? 'pwise-dev-overlay',\n    requested_at: body.requested_at ?? new Date().toISOString(),\n  },\n}];"
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000002",
       "name": "Normalize Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-520, 0]
+      "position": [
+        -520,
+        0
+      ]
     },
     {
       "parameters": {
@@ -40,7 +46,10 @@
       "name": "Load Supabase Context",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-250, 0],
+      "position": [
+        -250,
+        0
+      ],
       "credentials": {
         "postgres": {
           "id": "REPLACE_WITH_SUPABASE_POSTGRES_CREDENTIAL_ID",
@@ -50,13 +59,16 @@
     },
     {
       "parameters": {
-        "jsCode": "const question = String($json.question || '').trim();\nconst pathname = String($json.pathname || '/').trim() || '/';\nconst history = Array.isArray($json.history)\n  ? $json.history\n  : JSON.parse(String($json.history || '[]'));\nconst context = typeof $json.context === 'string' ? JSON.parse($json.context) : ($json.context || {});\n\nconst recentHistory = history.length\n  ? history.map((entry) => `${entry.role}: ${entry.text}`).join('\\n')\n  : 'No prior chat history.';\n\nconst contextJson = JSON.stringify(context, null, 2);\n\nconst systemPrompt = [\n  'You are Wise Assistant for the pwise web app.',\n  'Answer questions about layout, navigation, screen purpose, control location, and what the user should click or do.',\n  'Use the provided app context as the source of truth.',\n  'When the user asks where something is, describe the screen and visual location in plain UI terms.',\n  'When the user asks how to do something, give short actionable steps.',\n  'If the answer is not grounded in the provided context, say that the current assistant context does not include it.',\n  'Do not invent routes, buttons, or settings that are not in the context.',\n  'Keep answers concise and practical.',\n].join(' ');\n\nconst userPrompt = [\n  `Current route: ${pathname}`,\n  `User question: ${question}`,\n  'Recent chat history:',\n  recentHistory,\n  'App context JSON:',\n  contextJson,\n].join('\\n\\n');\n\nreturn [{\n  json: {\n    question,\n    pathname,\n    systemPrompt,\n    userPrompt,\n  },\n}];"
+        "jsCode": "const question = String($json.question || '').trim();\nconst pathname = String($json.pathname || '/').trim() || '/';\nconst history = Array.isArray($json.history)\n  ? $json.history\n  : JSON.parse(String($json.history || '[]'));\nconst context = typeof $json.context === 'string' ? JSON.parse($json.context) : ($json.context || {});\nconst user = $json.user || {};\nconst clientContext = $json.client_context || {};\nconst hasApi = Boolean($json.assistant_api && $json.assistant_api.token);\n\nconst recentHistory = history.length\n  ? history.map((entry) => `${entry.role}: ${entry.text}`).join('\\n')\n  : 'No prior chat history.';\n\nconst contextJson = JSON.stringify(context, null, 2);\nconst allowedPaths = Array.isArray(clientContext.allowed_paths) ? clientContext.allowed_paths : [];\nconst storage = Array.isArray(clientContext.storage) ? clientContext.storage : [];\n\nconst systemPrompt = [\n  'You are Wise Assistant for the pwise web app.',\n  'You answer questions about layout, navigation, screen purpose, and control location — and you can ACT for the user.',\n  'Use the provided app context as the source of truth. Do not invent routes, buttons, or settings that are not in the context.',\n  hasApi\n    ? \"For questions about the user's own live data (posts, orders, products, messages, insights, profile), call the pwise_api tool with a GET path such as /api/auth/me. It is read-only and scoped to this user; the server rejects everything else.\"\n    : 'Live data access is unavailable for this request — answer from the app context only.',\n  'Besides answering, you may return client-side actions the app executes after showing your answer. Allowed actions (at most 5):',\n  '- {\"type\":\"navigate\",\"path\":\"/privacy\"} — take the user to a page. ONLY paths listed under ALLOWED NAVIGATION; anything else is refused.',\n  '- {\"type\":\"reload\"} — reload the current page.',\n  '- {\"type\":\"read_storage\"} or {\"type\":\"read_storage\",\"key\":\"some-key\"} — show the user their app local storage (credential-like values stay masked).',\n  '- {\"type\":\"ui\",\"op\":\"fill\",\"target\":\"visible field label\",\"value\":\"text\"} — fill a field on the current page.',\n  '- {\"type\":\"ui\",\"op\":\"toggle\",\"target\":\"visible control label\"} or {\"type\":\"ui\",\"op\":\"click\",\"target\":\"...\"} — toggle/press a control on the current page. After a navigate action, subsequent ui actions run on the destination page. Targets are matched against visible labels/placeholders.',\n  '- {\"type\":\"theme\",\"value\":\"dark\"|\"light\"|\"toggle\"} — switch the color theme. Reliable app-state action; no menu to open.',\n  '- {\"type\":\"page\",\"target\":\"<connected page name>\"} — switch the ACTIVE Facebook page. This changes the data context app-wide, so only use it when the user explicitly asks to switch pages.',\n  '- {\"type\":\"sidebar\",\"op\":\"collapse\"|\"expand\"|\"toggle\"} — collapse or expand the left sidebar rail.',\n  '- {\"type\":\"pin\",\"target\":\"<sidebar item label>\",\"op\":\"pin\"|\"unpin\"|\"toggle\"} — pin/unpin a sidebar item to Quick Access. Only items the user can access.',\n  '- {\"type\":\"notes\",\"op\":\"show\"|\"hide\"|\"toggle\"} — show or hide the Wise Notes sticky notes.',\n  'HARD RULES:',\n  \"- Respect the user's access: never navigate to (or act on) pages outside ALLOWED NAVIGATION.\",\n  '- Never change user or account details (name, email, photo, password) and never operate controls on profile/account screens; the app blocks these anyway.',\n  '- Never fill or click credential, OTP, or file-upload controls, and never act outside the pwise app (no OS, no file explorer, no external sites).',\n  '- Never echo tokens or secrets, even when asked.',\n  '- Only act when the user asked for it (or it clearly completes their request); plain questions get answers, not surprise navigation.',\n  'OUTPUT FORMAT: respond with ONLY one JSON object, no markdown fences: {\"answer\":\"...\",\"actions\":[...]}. \"answer\" is the chat reply (markdown **bold**, `code`, and lists are fine). \"actions\" may be [].',\n].join('\\n');\n\nconst userPrompt = [\n  `Current route: ${pathname}`,\n  clientContext.page_title ? `Current page title: ${clientContext.page_title}` : '',\n  `User: ${JSON.stringify({ name: user.name || null, role: user.role || null, module_access: user.module_access ?? null })}`,\n  `ALLOWED NAVIGATION (the only navigate paths permitted): ${JSON.stringify(allowedPaths)}`,\n  `Local storage snapshot (already redacted): ${JSON.stringify(storage)}`,\n  `User question: ${question}`,\n  'Recent chat history:',\n  recentHistory,\n  'App context JSON:',\n  contextJson,\n].filter(Boolean).join('\\n\\n');\n\nreturn [{\n  json: {\n    question,\n    pathname,\n    systemPrompt,\n    userPrompt,\n  },\n}];"
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000004",
       "name": "Build Assistant Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [20, 0]
+      "position": [
+        20,
+        0
+      ]
     },
     {
       "parameters": {
@@ -66,7 +78,10 @@
       "name": "DeepSeek Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
       "typeVersion": 1,
-      "position": [300, 200],
+      "position": [
+        300,
+        200
+      ],
       "credentials": {
         "deepSeekApi": {
           "id": "REPLACE_WITH_DEEPSEEK_CREDENTIAL_ID",
@@ -86,52 +101,196 @@
       "name": "Wise Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [300, 0]
+      "position": [
+        300,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const answer = String($json.output ?? '').trim();\nif (!answer) {\n  throw new Error('DeepSeek did not return an assistant answer');\n}\n\nreturn [{\n  json: {\n    answer,\n    source: 'n8n',\n    model: 'deepseek-chat',\n  },\n}];"
+        "jsCode": "const raw = String($json.output ?? '').trim();\nif (!raw) {\n  throw new Error('DeepSeek did not return an assistant answer');\n}\n\n// The agent is told to reply with {\"answer\",\"actions\"} JSON. Be forgiving: strip\n// markdown fences, and if parsing still fails treat the whole text as the answer.\nfunction tryParse(text) {\n  try {\n    const parsed = JSON.parse(text);\n    return parsed && typeof parsed === 'object' ? parsed : null;\n  } catch {\n    return null;\n  }\n}\n\nlet cleaned = raw;\nconst fenced = cleaned.match(/^\\s*```(?:json)?\\s*([\\s\\S]*?)\\s*```\\s*$/i);\nif (fenced) cleaned = fenced[1].trim();\n\nlet parsed = tryParse(cleaned);\nif (!parsed) {\n  // Sometimes the JSON is embedded in prose — take the outermost object.\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start !== -1 && end > start) parsed = tryParse(cleaned.slice(start, end + 1));\n}\n\nconst answer = String((parsed && (parsed.answer ?? parsed.message)) ?? cleaned).trim();\nif (!answer) {\n  throw new Error('assistant reply had no answer text');\n}\n\n// Light shape filter here; the pwise server re-validates every action against its\n// allowlist before anything reaches the browser.\nconst KNOWN_TYPES = new Set(['navigate', 'reload', 'read_storage', 'ui']);\nconst actions = (parsed && Array.isArray(parsed.actions) ? parsed.actions : [])\n  .filter((a) => a && typeof a === 'object' && KNOWN_TYPES.has(a.type))\n  .slice(0, 5);\n\nreturn [{\n  json: {\n    answer,\n    actions,\n    source: 'n8n',\n    model: 'deepseek-chat',\n  },\n}];"
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000006",
       "name": "Format Assistant Answer",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [560, 0]
+      "position": [
+        560,
+        0
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ ({ answer: $json.answer, source: $json.source, model: $json.model }) }}",
+        "responseBody": "={{ ({ answer: $json.answer, actions: $json.actions, source: $json.source, model: $json.model }) }}",
         "options": {}
       },
       "id": "f0d51e11-7af4-4127-8d0a-000000000007",
       "name": "Respond to App",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [820, 0]
+      "position": [
+        820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "pwise_api: fetch the signed-in user's own data from the pwise REST API. Read-only GET. Give the full API path starting with /api/, e.g. /api/auth/me, /api/orders, /api/products?search=mug. The response is JSON ({ success, data }). Any non-GET or other user's data is rejected by the server.",
+        "method": "GET",
+        "url": "={{ $('Normalize Request').first().json.assistant_api ? $('Normalize Request').first().json.assistant_api.base_url : '' }}{path}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "=Bearer {{ $('Normalize Request').first().json.assistant_api ? $('Normalize Request').first().json.assistant_api.token : '' }}"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "path",
+              "description": "The pwise API path to GET, starting with /api/ (query string allowed). Example: /api/auth/me",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000009",
+      "name": "pwise API (read-only)",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        460,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Normalize Request').first().json.user ? ('wise-assistant:' + $('Normalize Request').first().json.user.id) : 'wise-assistant:anonymous' }}",
+        "contextWindowLength": 10
+      },
+      "id": "f0d51e11-7af4-4127-8d0a-000000000010",
+      "name": "Redis Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
+      "typeVersion": 1.5,
+      "position": [
+        160,
+        200
+      ],
+      "credentials": {
+        "redis": {
+          "id": "REPLACE_WITH_REDIS_CREDENTIAL_ID",
+          "name": "Redis"
+        }
+      }
     }
   ],
   "connections": {
     "Wise Assistant Webhook": {
-      "main": [[{ "node": "Normalize Request", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Normalize Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Normalize Request": {
-      "main": [[{ "node": "Load Supabase Context", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Load Supabase Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Load Supabase Context": {
-      "main": [[{ "node": "Build Assistant Prompt", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Build Assistant Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build Assistant Prompt": {
-      "main": [[{ "node": "Wise Agent", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Wise Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "DeepSeek Chat Model": {
-      "ai_languageModel": [[{ "node": "Wise Agent", "type": "ai_languageModel", "index": 0 }]]
+      "ai_languageModel": [
+        [
+          {
+            "node": "Wise Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Wise Agent": {
-      "main": [[{ "node": "Format Assistant Answer", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Assistant Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Format Assistant Answer": {
-      "main": [[{ "node": "Respond to App", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respond to App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pwise API (read-only)": {
+      "ai_tool": [
+        [
+          {
+            "node": "Wise Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Wise Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {},

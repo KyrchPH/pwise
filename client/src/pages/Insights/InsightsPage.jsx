@@ -7,6 +7,9 @@ import { usePages } from '../../context/PageContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { Card, Spinner, EmptyState } from '../../components/ui.jsx';
 import LineChart from '../../components/LineChart.jsx';
+import MessagingSection from './MessagingSection.jsx';
+import OverviewSection from './OverviewSection.jsx';
+import ContentsSection from './ContentsSection.jsx';
 
 const RANGES = [
   { days: 7, label: '7 days' },
@@ -54,6 +57,23 @@ function Delta({ pct }) {
   );
 }
 
+function RangeSeg({ range, onChange }) {
+  return (
+    <div className="seg">
+      {RANGES.map((r) => (
+        <button
+          key={r.days}
+          type="button"
+          className={`seg__btn ${range === r.days ? 'is-active' : ''}`}
+          onClick={() => onChange(r.days)}
+        >
+          {r.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function InfoIcon({ text }) {
   return (
     <span className="perf-info" title={text} aria-label={text}>
@@ -66,9 +86,12 @@ function InfoIcon({ text }) {
   );
 }
 
-// Export control: a small menu that downloads the card's daily series as CSV.
-function ExportMenu({ card, range }) {
+// Export control: a small menu that downloads a professional, detailed PDF report of the
+// card's data (description, headline stats, daily-trend chart, and day-by-day table).
+function ExportMenu({ card, range, meta }) {
+  const toast = useToast();
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const ref = useRef(null);
   const disabled = !card.available || !(card.series || []).length;
 
@@ -81,18 +104,29 @@ function ExportMenu({ card, range }) {
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  const downloadCsv = () => {
-    const esc = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
-    const rows = [['date', card.title], ...(card.series || []).map((p) => [p.period, p.value])];
-    const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${card.key}-${range}d.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setOpen(false);
+  const downloadPdf = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // Lazy-load the PDF builder (jsPDF) so it stays out of the main bundle, matching
+      // how the other analytics exports import it.
+      const { buildMetricCardPdf, loadLogo } = await import('../../utils/reportPdf.js');
+      const logo = await loadLogo();
+      const doc = buildMetricCardPdf({
+        card,
+        rangeDays: range,
+        pageName: meta?.pageName || null,
+        sinceDate: meta?.sinceDate || null,
+        untilDate: meta?.untilDate || null,
+        logo,
+      });
+      doc.save(`${card.key}-${range}d-report.pdf`);
+      setOpen(false);
+    } catch {
+      toast.error('Could not generate the report.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -110,14 +144,93 @@ function ExportMenu({ card, range }) {
       </button>
       {open && (
         <div className="perf-export__menu" role="menu">
-          <button type="button" className="perf-export__item" role="menuitem" onClick={downloadCsv}>Download CSV</button>
+          <button type="button" className="perf-export__item" role="menuitem" onClick={downloadPdf} disabled={busy}>
+            {busy ? 'Preparing…' : 'Download PDF report'}
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-function MetricCard({ card, range }) {
+// Page-level export: one detailed PDF covering every Performance card — headline
+// stats, an all-metrics summary table, daily-trend charts and a combined
+// day-by-day breakdown. Sits in the page head next to the range selector.
+function DownloadReportButton({ cards, range, meta }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const disabled = busy || !cards.some((c) => c.available);
+
+  const download = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // Lazy-load the PDF builder (jsPDF) so it stays out of the main bundle.
+      const { buildPerformanceReportPdf, loadLogo } = await import('../../utils/reportPdf.js');
+      const logo = await loadLogo();
+      const doc = buildPerformanceReportPdf({
+        cards,
+        rangeDays: range,
+        pageName: meta?.pageName || null,
+        from: meta?.untilDate ? subDaysIso(meta.untilDate, range - 1) : null,
+        to: meta?.untilDate || null,
+        logo,
+      });
+      doc.save(`performance-${range}d-report.pdf`);
+    } catch {
+      toast.error('Could not generate the report.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button type="button" className="perf-report-btn" onClick={download} disabled={disabled}>
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+      {busy ? 'Preparing…' : 'Download report'}
+    </button>
+  );
+}
+
+function AllPagesReportButton({ range }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const download = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const [report, pdf] = await Promise.all([
+        analytics.allPagesMetrics(range),
+        import('../../utils/reportPdf.js'),
+      ]);
+      const logo = await pdf.loadLogo();
+      const doc = pdf.buildAllPagesMetricsPdf({ ...report, logo });
+      doc.save(`all-pages-metrics-${report.sinceDate}_to_${report.untilDate}.pdf`);
+    } catch (e) {
+      toast.error(`Could not generate all-pages report: ${apiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button type="button" className="perf-report-btn perf-report-btn--secondary" onClick={download} disabled={busy}>
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+      {busy ? 'Preparing...' : 'All pages PDF'}
+    </button>
+  );
+}
+
+function MetricCard({ card, range, meta }) {
   const hasChart = card.available && (card.series || []).length >= 2;
   const showValue = card.available && card.total != null; // hide the "n/a" headline entirely
   return (
@@ -127,7 +240,7 @@ function MetricCard({ card, range }) {
           <span className="perf-card__title">{card.title}</span>
           {card.info && <InfoIcon text={card.info} />}
         </div>
-        <ExportMenu card={card} range={range} />
+        <ExportMenu card={card} range={range} meta={meta} />
       </div>
       <div className="perf-card__value-row">
         {showValue && <span className="perf-card__value">{cardValue(card)}</span>}
@@ -153,14 +266,15 @@ export default function InsightsPage() {
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const [range, setRange] = useState(28);
-  const view = searchParams.get('view') || 'performance';
-  const activeView = INSIGHT_SECTIONS[view] ? view : 'performance';
+  const view = searchParams.get('view') || 'overview';
+  const activeView = INSIGHT_SECTIONS[view] ? view : 'overview';
   const activeTitle = INSIGHT_SECTIONS[activeView];
 
-  const { data, loading, error } = useCachedResource(
-    activeId ? `insights:${range}:${activeId}` : `insights:${range}:none`,
-    () => analytics.insights(range),
-  );
+  // Overview, Messaging and Contents fetch their own data sources, so skip the Performance
+  // fetch there (a null key makes the hook a no-op — no wasted request, no wrong spinner).
+  const selfFetching = activeView === 'overview' || activeView === 'messaging' || activeView === 'contents';
+  const insightsKey = selfFetching ? null : activeId ? `insights:${range}:${activeId}` : `insights:${range}:none`;
+  const { data, loading, error } = useCachedResource(insightsKey, () => analytics.insights(range));
 
   useEffect(() => {
     if (error) toast.error(apiError(error));
@@ -169,6 +283,64 @@ export default function InsightsPage() {
   if (!activeId) {
     return <EmptyState icon="📈" title="No page selected" message="Choose a connected page to see its performance." />;
   }
+
+  // Overview — a digest of the other tabs, with its own data source.
+  if (activeView === 'overview') {
+    return (
+      <>
+        <div className="page-head">
+          <div>
+            <h1 className="page-head__title">Overview</h1>
+            <div className="page-head__sub">A snapshot of your Page&rsquo;s reach, audience and messaging.</div>
+          </div>
+          <div className="perf-head-actions">
+            <AllPagesReportButton range={range} />
+            <RangeSeg range={range} onChange={setRange} />
+          </div>
+        </div>
+        <OverviewSection range={range} />
+      </>
+    );
+  }
+
+  // Messaging ("Contacts") — its own layout and data source.
+  if (activeView === 'messaging') {
+    return (
+      <>
+        <div className="page-head">
+          <div>
+            <h1 className="page-head__title">Messaging</h1>
+            <div className="page-head__sub">Who&rsquo;s messaging your Page, and how that&rsquo;s trending.</div>
+          </div>
+          <div className="perf-head-actions">
+            <AllPagesReportButton range={range} />
+            <RangeSeg range={range} onChange={setRange} />
+          </div>
+        </div>
+        <MessagingSection range={range} />
+      </>
+    );
+  }
+
+  // Contents — a performance table of every post published in this period.
+  if (activeView === 'contents') {
+    return (
+      <>
+        <div className="page-head">
+          <div>
+            <h1 className="page-head__title">Contents</h1>
+            <div className="page-head__sub">How each post you published is performing.</div>
+          </div>
+          <div className="perf-head-actions">
+            <AllPagesReportButton range={range} />
+            <RangeSeg range={range} onChange={setRange} />
+          </div>
+        </div>
+        <ContentsSection range={range} />
+      </>
+    );
+  }
+
   if (loading && !data) return <Spinner label="Loading performance…" />;
 
   const cards = data?.cards || [];
@@ -179,14 +351,14 @@ export default function InsightsPage() {
           <div>
             <h1 className="page-head__title">{activeTitle}</h1>
             <div className="page-head__sub">
-              {data?.pageName ? `${data.pageName} Â· ` : ''}
+              {data?.pageName ? `${data.pageName} · ` : ''}
               {activeTitle} insights
             </div>
           </div>
         </div>
         <Card>
           <EmptyState
-            icon="ðŸ“ˆ"
+            icon="📈"
             title={`${activeTitle} insights`}
             message="This section is ready for its dedicated metrics."
           />
@@ -195,6 +367,7 @@ export default function InsightsPage() {
     );
   }
   const rangeText = data?.untilDate ? `${fmtLong(subDaysIso(data.untilDate, range - 1))} – ${fmtLong(data.untilDate)}` : '';
+  const cardMeta = { pageName: data?.pageName, sinceDate: data?.sinceDate, untilDate: data?.untilDate };
 
   return (
     <>
@@ -206,23 +379,16 @@ export default function InsightsPage() {
             {rangeText || 'Your page performance vs the previous period.'}
           </div>
         </div>
-        <div className="seg">
-          {RANGES.map((r) => (
-            <button
-              key={r.days}
-              type="button"
-              className={`seg__btn ${range === r.days ? 'is-active' : ''}`}
-              onClick={() => setRange(r.days)}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div className="perf-head-actions">
+          <AllPagesReportButton range={range} />
+          <DownloadReportButton cards={cards} range={range} meta={cardMeta} />
+          <RangeSeg range={range} onChange={setRange} />
         </div>
       </div>
 
       <div className="perf-grid mt-lg">
         {cards.map((card) => (
-          <MetricCard key={card.key} card={card} range={range} />
+          <MetricCard key={card.key} card={card} range={range} meta={cardMeta} />
         ))}
       </div>
     </>

@@ -5,6 +5,7 @@ import { notFound, errorHandler } from './middleware/error.middleware.js';
 import revalidate from './middleware/cache.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import postPoolRoutes from './routes/post_pool.routes.js';
+import storiesRoutes from './routes/stories.routes.js';
 import uploadRoutes from './routes/upload.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import logsRoutes from './routes/logs.routes.js';
@@ -31,6 +32,8 @@ import plannerRoutes from './routes/planner.routes.js';
 import orderRoutes from './routes/order.routes.js';
 import receiptRoutes from './routes/receipt.routes.js';
 import publicAgreementRoutes from './routes/public_agreements.routes.js';
+import publicSurveyRoutes from './routes/public_surveys.routes.js';
+import surveysRoutes from './routes/surveys.routes.js';
 
 /**
  * Builds the Express application: a data/auth/upload API for the frontend,
@@ -54,6 +57,9 @@ export function createApp() {
   // routes only; auth + upload are left uncached.
   app.use('/api/auth', authRoutes);
   app.use('/api/post-pool', revalidate, postPoolRoutes);
+  // Contents → Stories (24h Facebook/Instagram stories). The client re-polls while
+  // a story is publishing, so the ETag revalidate keeps those polls cheap.
+  app.use('/api/stories', revalidate, storiesRoutes);
   app.use('/api/upload', uploadRoutes);
   app.use('/api/settings', revalidate, settingsRoutes);
   app.use('/api/logs', revalidate, logsRoutes);
@@ -72,6 +78,10 @@ export function createApp() {
   // Public agreement viewer (customer opens a shared token link, no JWT) — MUST be mounted
   // before the authed /api/orders router so it isn't gated (mirrors the fb-oauth callback).
   app.use('/api/public/agreements', publicAgreementRoutes);
+  // Public customer survey (opened from the survey email's token link, no JWT).
+  app.use('/api/public/surveys', publicSurveyRoutes);
+  // Team-facing survey aggregates — day-lagged reads, so browser revalidation is fine.
+  app.use('/api/surveys', revalidate, surveysRoutes);
   // Shop → Orders + the checkout agreement flow. Real-time (SSE + confirm writes), uncached.
   app.use('/api/orders', orderRoutes);
   // Shop → Receipts carry rotating presigned URLs, so left uncached (like the vault).

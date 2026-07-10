@@ -39,6 +39,20 @@ const fmtDateLong = (d) => new Date(d).toLocaleDateString(undefined, { month: 's
 const fmtDateShort = (d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const fmtDateTime = (d) =>
   new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const fmtDurationMs = (ms) => {
+  const mins = Math.round(num(ms) / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h ? `${h}h ${m}m` : `${m}m`;
+};
+// Format a metric value honouring an Insights card's `format` ('percent' | 'duration' | count).
+const fmtMetricValue = (v, format) => {
+  if (v == null || v === '') return '—';
+  if (format === 'percent') return `${v}%`;
+  if (format === 'duration') return fmtDurationMs(v);
+  return fmtInt(v);
+};
+const pctStr = (p) => (p == null ? '—' : `${p > 0 ? '+' : ''}${p}%`);
 
 // jsPDF's standard fonts (Helvetica) only render WinAnsi/Latin-1, so emoji and fancy
 // Unicode letters come out as garbage. Fold compatible forms to plain text (𝐋 → L,
@@ -50,11 +64,16 @@ const pdfSafe = (s) =>
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 
-// A period string ('YYYY-MM-DD' | 'YYYY-MM' | ISO hour) → short axis label.
-function labelForPeriod(period) {
+// A period string ('YYYY-MM-DD' | 'YYYY-MM' | ISO hour) → a local Date, parsed at local
+// midnight so day-granular periods don't shift a day across the UTC boundary.
+function periodDate(period) {
   const s = String(period);
-  const d = s.includes('T') ? new Date(s) : s.length > 7 ? new Date(`${s}T00:00:00`) : new Date(`${s}-01T00:00:00`);
-  return Number.isNaN(d.getTime()) ? s : fmtDateShort(d);
+  return s.includes('T') ? new Date(s) : s.length > 7 ? new Date(`${s}T00:00:00`) : new Date(`${s}-01T00:00:00`);
+}
+// A period string → short axis label.
+function labelForPeriod(period) {
+  const d = periodDate(period);
+  return Number.isNaN(d.getTime()) ? String(period) : fmtDateShort(d);
 }
 
 // Load any image URL as a data URL (+ natural size). Best-effort — returns null on
@@ -243,6 +262,31 @@ function drawStatCards(doc, ctx, cards) {
     doc.text(String(c.value), cx + 10, ctx.y + 37);
   });
   ctx.y += ch + 16;
+}
+
+// A soft callout box with a left accent bar and wrapped body text — used for a
+// metric's plain-language description so the report explains what it's showing.
+function drawNote(doc, ctx, text) {
+  const W = pageW(doc);
+  const boxW = W - 2 * M;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  const lines = doc.splitTextToSize(pdfSafe(text), boxW - 26);
+  const boxH = 15 + lines.length * 12;
+  ensureSpace(doc, ctx, boxH + 14);
+  doc.setFillColor(...COLORS.zebra);
+  doc.setDrawColor(...COLORS.border);
+  doc.setLineWidth(0.5);
+  doc.roundedRect(M, ctx.y, boxW, boxH, 5, 5, 'FD');
+  doc.setFillColor(...COLORS.primary);
+  doc.rect(M + 0.5, ctx.y + 4, 3, boxH - 8, 'F');
+  doc.setTextColor(...COLORS.dark);
+  let ty = ctx.y + 18;
+  lines.forEach((ln) => {
+    doc.text(ln, M + 14, ty);
+    ty += 12;
+  });
+  ctx.y += boxH + 16;
 }
 
 // Vector line chart drawn from points [{ period, value }] into a bordered box.
@@ -653,6 +697,452 @@ export function buildPageAnalyticsPdf({ start, end, pageName, logo, followers, s
     });
     ctx.y = doc.lastAutoTable.finalY + 16;
   }
+
+  drawFooters(doc);
+  return doc;
+}
+
+/**
+ * All-pages metrics report: one compact table across every active connected page.
+ * The shape intentionally mirrors the user's spreadsheet reference without
+ * generating a spreadsheet: Account / Follows / Unfollow / Visit / Current Followers.
+ */
+export function buildAllPagesMetricsPdf({ rangeDays, sinceDate, untilDate, rows = [], logo }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape' });
+  const rangeLabel =
+    sinceDate && untilDate ? `${fmtDateLong(periodDate(sinceDate))} - ${fmtDateLong(periodDate(untilDate))}` : `Last ${rangeDays} days`;
+  const ctx = {
+    title: 'All pages metrics report',
+    subtitle: `${rangeLabel} - Last ${rangeDays} days`,
+    pageName: 'All connected pages',
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...COLORS.muted);
+  doc.text('Follows, Unfollow and Visit are summed for the selected range. Current Followers is the live page count at export time.', M, ctx.y);
+  ctx.y += 18;
+
+  const fmtCell = (value) => (value == null ? '----' : fmtInt(value));
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    tableWidth: 'wrap',
+    head: [['ACCOUNT', 'Follows', 'Unfollow', 'Visit', 'Current Followers']],
+    body: rows.map((row) => [
+      pdfSafe(row.accountName) || `Page #${row.accountId}`,
+      fmtCell(row.follows),
+      fmtCell(row.unfollows),
+      fmtCell(row.visits),
+      fmtCell(row.currentFollowers),
+    ]),
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 5, lineColor: [28, 39, 51], lineWidth: 0.35, textColor: [0, 0, 0] },
+    headStyles: { fillColor: [255, 255, 255], textColor: COLORS.primary, fontStyle: 'bold', fontSize: 9, lineColor: [28, 39, 51], lineWidth: 0.5 },
+    alternateRowStyles: { fillColor: [255, 255, 255] },
+    columnStyles: {
+      0: { cellWidth: 270 },
+      1: { halign: 'right', cellWidth: 100 },
+      2: { halign: 'right', cellWidth: 100 },
+      3: { halign: 'right', cellWidth: 100 },
+      4: { halign: 'right', cellWidth: 130 },
+    },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 16;
+
+  if (!rows.length) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(...COLORS.muted);
+    doc.text('No active connected pages were available for this report.', M, ctx.y);
+  }
+
+  drawFooters(doc);
+  return doc;
+}
+
+/**
+ * Full Performance-tab report: every Insights card in one detailed document.
+ * Headline stat cards (mirroring the four charts the screen leads with), an
+ * all-metrics summary table (total / vs previous period / daily average / best
+ * day), a daily-trend chart per metric with history, a combined day-by-day
+ * breakdown table with a totals footer, and a metric-definitions appendix so
+ * the report is self-explanatory.
+ * `cards` are the Insights cards: { key, title, info, total, changePct, series, available, format? }.
+ */
+export function buildPerformanceReportPdf({ cards = [], rangeDays, pageName, from, to, logo }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const rangeLabel = from && to ? `${fmtDateLong(periodDate(from))} – ${fmtDateLong(periodDate(to))}` : `Last ${rangeDays} days`;
+  const ctx = {
+    title: 'Performance report',
+    subtitle: `${rangeLabel}    ·    Last ${rangeDays} days`,
+    pageName,
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+
+  const fmtVal = (c, v) => fmtMetricValue(v, c.format);
+  // Per-card derived stats from its daily series.
+  const detailed = cards
+    .filter((c) => c && c.available)
+    .map((c) => {
+      const series = (c.series || []).filter((p) => p && p.period != null);
+      const sum = series.reduce((a, p) => a + num(p.value), 0);
+      let peak = null;
+      for (const p of series) if (peak == null || num(p.value) > num(peak.value)) peak = p;
+      return { c, series, sum, avg: series.length ? Math.round((sum / series.length) * 10) / 10 : null, peak };
+    });
+
+  // Headline cards — the first four metrics, mirroring the Performance screen.
+  const headline = detailed.slice(0, 4);
+  if (headline.length) {
+    drawStatCards(doc, ctx, headline.map(({ c }) => ({ label: c.title, value: fmtVal(c, c.total), color: COLORS.primary })));
+  }
+
+  // All-metrics summary (unavailable metrics still listed, marked "No data").
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    head: [['Metric', 'Total', 'vs previous', 'Daily average', 'Best day']],
+    body: cards.map((c) => {
+      if (!c.available) return [c.title, 'No data', '—', '—', '—'];
+      const d = detailed.find((x) => x.c === c);
+      return [
+        c.title,
+        fmtVal(c, c.total),
+        pctStr(c.changePct),
+        d.avg != null ? fmtVal(c, d.avg) : '—',
+        d.peak ? `${fmtDateLong(periodDate(d.peak.period))} (${fmtVal(c, d.peak.value)})` : '—',
+      ];
+    }),
+    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 22;
+
+  const sectionTitle = (text) => {
+    ensureSpace(doc, ctx, 40);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...COLORS.dark);
+    doc.text(text, M, ctx.y);
+    ctx.y += 14;
+  };
+
+  // Daily trend charts — one per metric with enough history to draw a line.
+  const charted = detailed.filter((d) => d.series.length >= 2);
+  if (charted.length) {
+    sectionTitle('Daily trends');
+    charted.forEach((d) => drawLineChart(doc, ctx, { points: d.series, color: [31, 155, 230], title: d.c.title }));
+  }
+
+  // Combined day-by-day breakdown: one row per date, one column per metric.
+  const daily = detailed.filter((d) => d.series.length);
+  if (daily.length) {
+    const dates = [...new Set(daily.flatMap((d) => d.series.map((p) => String(p.period))))].sort();
+    const byDate = daily.map((d) => new Map(d.series.map((p) => [String(p.period), p.value])));
+    sectionTitle('Day-by-day breakdown');
+    const numeric = {};
+    for (let i = 1; i <= daily.length; i += 1) numeric[i] = { halign: 'right' };
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [['Date', ...daily.map((d) => d.c.title)]],
+      body: dates.map((date) => [
+        fmtDateLong(periodDate(date)),
+        ...daily.map((d, i) => (byDate[i].has(date) ? fmtVal(d.c, byDate[i].get(date)) : '—')),
+      ]),
+      foot: [[{ content: 'Total', styles: { halign: 'left' } }, ...daily.map((d) => fmtVal(d.c, d.sum))]],
+      footStyles: { fillColor: COLORS.foot, textColor: COLORS.dark, fontStyle: 'bold', halign: 'right' },
+      showFoot: 'lastPage',
+      columnStyles: { 0: { cellWidth: 74 }, ...numeric },
+    });
+    ctx.y = doc.lastAutoTable.finalY + 22;
+  }
+
+  // Appendix: what each metric measures (mirrors the in-app info tooltips).
+  const defined = cards.filter((c) => c.info);
+  if (defined.length) {
+    sectionTitle('Metric definitions');
+    autoTable(doc, {
+      ...tableOptions(doc, ctx),
+      startY: ctx.y,
+      head: [['Metric', 'What it measures']],
+      body: defined.map((c) => [c.title, pdfSafe(c.info)]),
+      columnStyles: { 0: { cellWidth: 130 } },
+    });
+    ctx.y = doc.lastAutoTable.finalY + 16;
+  }
+
+  drawFooters(doc);
+  return doc;
+}
+
+/**
+ * Single-metric report for one Insights → Performance card. Replaces the old CSV export
+ * with a professional, self-explanatory document: a plain-language description of the
+ * metric, headline stat cards (period total, change vs the previous period, daily average,
+ * best day), a daily-trend line chart, and a day-by-day breakdown table with a running
+ * cumulative and a totals footer.
+ * `card` is one Insights card: { key, title, info, total, changePct, series:[{period,value}], available, format? }.
+ */
+export function buildMetricCardPdf({ card, rangeDays, pageName, sinceDate, untilDate, logo }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const series = (card.series || []).filter((p) => p && p.period != null);
+  const rangeLabel =
+    sinceDate && untilDate ? `${fmtDateLong(periodDate(sinceDate))} – ${fmtDateLong(periodDate(untilDate))}` : `Last ${rangeDays} days`;
+  const ctx = {
+    title: `${card.title} report`,
+    subtitle: `${rangeLabel}    ·    Last ${rangeDays} days`,
+    pageName,
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+
+  // Plain-language description of the metric (mirrors the in-app info tooltip).
+  if (card.info) drawNote(doc, ctx, card.info);
+
+  // Derived stats from the daily series.
+  const vals = series.map((p) => num(p.value));
+  const seriesSum = vals.reduce((a, v) => a + v, 0);
+  const total = card.total != null ? card.total : seriesSum;
+  const days = series.length;
+  const avg = days ? seriesSum / days : 0;
+  const avgRounded = Math.round(avg * 10) / 10;
+  let peak = null;
+  for (const p of series) if (peak == null || num(p.value) > num(peak.value)) peak = p;
+  const fmtVal = (v) => fmtMetricValue(v, card.format);
+
+  drawStatCards(doc, ctx, [
+    { label: `Total (${rangeDays}d)`, value: fmtVal(total), color: COLORS.primary },
+    {
+      label: 'vs previous period',
+      value: pctStr(card.changePct),
+      color:
+        card.changePct == null
+          ? COLORS.muted
+          : card.changePct > 0
+            ? METRIC_META.shares.color // green — up
+            : card.changePct < 0
+              ? METRIC_META.reactions.color // red — down
+              : COLORS.dark,
+    },
+    { label: 'Daily average', value: fmtVal(avgRounded) },
+    { label: 'Best day', value: peak ? fmtVal(peak.value) : '—' },
+  ]);
+
+  // A one-line highlights sentence beneath the cards.
+  if (peak) {
+    ensureSpace(doc, ctx, 18);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...COLORS.muted);
+    doc.text(
+      pdfSafe(`Best day ${fmtDateLong(periodDate(peak.period))} (${fmtVal(peak.value)})    ·    ${days} day${days === 1 ? '' : 's'} of data`),
+      M,
+      ctx.y,
+    );
+    ctx.y += 18;
+  }
+
+  // Daily trend chart (needs at least two points to draw a line).
+  if (series.length >= 2) drawLineChart(doc, ctx, { points: series, color: [31, 155, 230], title: 'Daily trend' });
+
+  // Day-by-day breakdown with a running cumulative and a totals footer.
+  ensureSpace(doc, ctx, 40);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...COLORS.dark);
+  doc.text('Day-by-day breakdown', M, ctx.y);
+  ctx.y += 12;
+
+  let running = 0;
+  const body = series.map((p) => {
+    running += num(p.value);
+    return [fmtDateLong(periodDate(p.period)), fmtVal(p.value), fmtVal(running)];
+  });
+
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    head: [['Date', card.title, 'Cumulative']],
+    body: body.length ? body : [['No daily data for this period.', '—', '—']],
+    columnStyles: { 0: { cellWidth: 'auto' }, 1: { halign: 'right', cellWidth: 130 }, 2: { halign: 'right', cellWidth: 130 } },
+    foot: body.length ? [[{ content: 'Total', styles: { halign: 'left' } }, fmtVal(total), '']] : undefined,
+    footStyles: { fillColor: COLORS.foot, textColor: COLORS.dark, fontStyle: 'bold', halign: 'right' },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 16;
+
+  drawFooters(doc);
+  return doc;
+}
+
+const NPS_PDF_COLORS = {
+  promoter: [47, 180, 87],
+  passive: [242, 176, 54],
+  detractor: [224, 93, 85],
+};
+
+const fmtNpsScore = (score) => (score == null || Number.isNaN(Number(score)) ? '--' : fmtInt(Math.round(Number(score))));
+const fmtNullablePct = (value) => (value == null ? '--' : `${fmtInt(value)}%`);
+const fmtCsat = (value) => (value == null || Number.isNaN(Number(value)) ? '--' : `${Number(value).toFixed(1).replace(/\.0$/, '')}/5`);
+const npsPdfScoreColor = (score) => {
+  const value = Number(score);
+  if (!Number.isFinite(value)) return COLORS.muted;
+  if (value >= 50) return NPS_PDF_COLORS.promoter;
+  if (value >= 0) return NPS_PDF_COLORS.passive;
+  return NPS_PDF_COLORS.detractor;
+};
+const npsPdfStatus = (score) => {
+  const value = Number(score);
+  if (Number.isFinite(value) && value >= 9) return 'Promoter';
+  if (Number.isFinite(value) && value >= 7) return 'Neutral';
+  return 'Detractor';
+};
+const npsPdfAgentOwner = (comment = {}) => pdfSafe(comment.agentOwnerName || comment.agentName || 'Unassigned') || 'Unassigned';
+
+function drawNpsMixBar(doc, ctx, { promoters = 0, passives = 0, detractors = 0, sample = 0 }) {
+  const W = pageW(doc);
+  const boxW = W - 2 * M;
+  ensureSpace(doc, ctx, 92);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...COLORS.dark);
+  doc.text('NPS response mix', M, ctx.y);
+
+  const barY = ctx.y + 16;
+  const barH = 16;
+  doc.setFillColor(...COLORS.zebra);
+  doc.setDrawColor(...COLORS.border);
+  doc.roundedRect(M, barY, boxW, barH, 6, 6, 'FD');
+
+  const segments = [
+    { label: 'Detractors', value: num(detractors), color: NPS_PDF_COLORS.detractor },
+    { label: 'Passives', value: num(passives), color: NPS_PDF_COLORS.passive },
+    { label: 'Promoters', value: num(promoters), color: NPS_PDF_COLORS.promoter },
+  ];
+
+  if (sample > 0) {
+    let x = M;
+    segments.forEach((segment, index) => {
+      if (segment.value <= 0) return;
+      const width = index === segments.length - 1 ? M + boxW - x : boxW * (segment.value / sample);
+      doc.setFillColor(...segment.color);
+      doc.rect(x, barY, Math.max(0, width), barH, 'F');
+      x += width;
+    });
+  }
+
+  const legendY = barY + 38;
+  const colW = boxW / 3;
+  segments.forEach((segment, index) => {
+    const pct = sample > 0 ? Math.round((segment.value / sample) * 100) : 0;
+    const x = M + index * colW;
+    doc.setFillColor(...segment.color);
+    doc.circle(x + 3, legendY - 3, 3, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...COLORS.dark);
+    doc.text(`${segment.label}: ${fmtInt(segment.value)} (${pct}%)`, x + 12, legendY);
+  });
+
+  ctx.y = legendY + 20;
+}
+
+export function buildNpsMetricsPdf({ metrics = {}, comments = [], pageName, reportOwnerName, rangeDays, rangeLabel, rangePhrase, logo }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const period = rangePhrase ? rangePhrase.replace(/^last/i, 'Last') : `Last ${rangeDays} days`;
+  const ctx = {
+    title: 'NPS metrics report',
+    subtitle: `${rangeLabel || `${rangeDays} days`} - ${period}`,
+    pageName,
+    logo,
+    generatedAt: fmtDateTime(new Date()),
+  };
+  ctx.y = drawHeader(doc, ctx);
+
+  const nps = metrics.nps || {};
+  const csat = metrics.csat || {};
+  const sample = num(nps.sample);
+  const score = nps.score == null ? null : Number(nps.score);
+  const agentOwners = [...new Set(comments.map((comment) => npsPdfAgentOwner(comment)).filter(Boolean))];
+  const reportOwner = pdfSafe(reportOwnerName)
+    || (agentOwners.length === 1 ? agentOwners[0] : agentOwners.length > 1 ? agentOwners.join(', ') : 'Unassigned');
+
+  drawStatCards(doc, ctx, [
+    { label: 'NPS score', value: fmtNpsScore(score), color: npsPdfScoreColor(score) },
+    { label: 'NPS responses', value: fmtInt(sample), color: npsPdfScoreColor(score) },
+    { label: 'Response rate', value: fmtNullablePct(metrics.responseRatePct), color: COLORS.primary },
+    { label: 'CSAT avg', value: fmtCsat(csat.avg), color: [124, 58, 237] },
+  ]);
+
+  drawNote(doc, ctx, 'NPS score is the percentage of promoters minus the percentage of detractors for the selected survey responses. Passives are shown in the mix but do not change the score.');
+
+  drawNpsMixBar(doc, ctx, {
+    promoters: nps.promoters,
+    passives: nps.passives,
+    detractors: nps.detractors,
+    sample,
+  });
+
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    head: [['Metric', 'Value']],
+    body: [
+      ['Agent / owner', reportOwner],
+      ['Surveys sent', fmtInt(metrics.sent)],
+      ['Surveys sent yesterday', fmtInt(metrics.sentYesterday)],
+      ['Responses', fmtInt(metrics.responded)],
+      ['Response rate', fmtNullablePct(metrics.responseRatePct)],
+      ['CSAT sample', fmtInt(csat.sample)],
+      ['NPS sample', fmtInt(sample)],
+    ],
+    columnStyles: { 0: { cellWidth: 150 } },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 22;
+
+  const series = Array.isArray(metrics.series) ? metrics.series : [];
+  if (series.length >= 2) {
+    drawLineChart(doc, ctx, { points: series, color: COLORS.primary, title: 'Surveys sent per day' });
+  }
+
+  ensureSpace(doc, ctx, 40);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...COLORS.dark);
+  doc.text('Latest NPS feedback', M, ctx.y);
+  ctx.y += 12;
+
+  autoTable(doc, {
+    ...tableOptions(doc, ctx),
+    startY: ctx.y,
+    head: [['Date', 'Conversation ID', 'Agent / owner', 'Status', 'NPS', 'CSAT', 'Feedback']],
+    body: comments.length
+      ? comments.map((comment) => [
+        comment.day || '--',
+        comment.conversationCid || '--',
+        npsPdfAgentOwner(comment),
+        comment.status || npsPdfStatus(comment.nps),
+        comment.nps == null ? '--' : `${comment.nps}/10`,
+        comment.satisfaction == null ? '--' : `${comment.satisfaction}/5`,
+        pdfSafe(comment.comment || '--').slice(0, 180),
+      ])
+      : [['No written NPS feedback in this period.', '--', '--', '--', '--', '--', '--']],
+    columnStyles: {
+      0: { cellWidth: 50 },
+      1: { cellWidth: 94 },
+      2: { cellWidth: 108 },
+      3: { cellWidth: 54 },
+      4: { halign: 'right', cellWidth: 34 },
+      5: { halign: 'right', cellWidth: 34 },
+      6: { cellWidth: 'auto' },
+    },
+  });
+  ctx.y = doc.lastAutoTable.finalY + 16;
 
   drawFooters(doc);
   return doc;

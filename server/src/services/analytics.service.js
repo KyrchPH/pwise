@@ -1,23 +1,20 @@
 import { query } from '../config/db.js';
 import * as fb from './fb.service.js';
 import * as accounts from './platform_accounts.service.js';
+import { createDownloadUrl } from './s3.service.js';
 
-// Daily page-level metrics we warehouse — confirmed available on the page (the
-// retired page_fans/page_fan_adds/demographics names are intentionally absent).
+// Daily page-level metrics we warehouse. Around 2026-06-17 Meta retired the whole
+// page-level impressions/reach family (page_impressions*, page_posts_impressions*)
+// on every Graph version, so those names are gone from this list: "Views" is now
+// computed from our own per-post records (post_pool.views_count, see postViewsStat)
+// and "Viewers" (unique reach) has no replacement at all. page_views_total is also
+// retired but kept as a cheap probe so the metric auto-heals if Meta revives it.
+// Historical impressions rows remain in page_insight_daily and still feed charts.
 export const PAGE_METRICS = [
-  'page_impressions_unique', // page reach
-  'page_posts_impressions', // post impressions
-  'page_posts_impressions_unique', // post reach
   'page_post_engagements', // engagement
   'page_daily_follows_unique', // new follows
   'page_daily_unfollows_unique', // unfollows
-];
-
-// Fetched in their OWN request, NOT the batch above: some Graph API versions no
-// longer serve these, and a single unknown metric fails the whole batched
-// insights call. Best-effort — the metric simply stays absent when Meta drops it.
-export const ISOLATED_METRICS = [
-  'page_views_total', // page visits
+  'page_views_total', // page visits (retired — probed best-effort)
 ];
 
 async function upsertDaily(accountId, metric, points = []) {
@@ -32,30 +29,24 @@ async function upsertDaily(accountId, metric, points = []) {
 }
 
 // Pull `days` of metrics for ONE page from Meta and store them tagged with its
-// account id. `page` = { accountId, token, fbPageId }. Best-effort.
+// account id. `page` = { accountId, token, fbPageId }. Every metric is fetched in
+// its OWN request: a single retired name 400s a whole batched insights call, which
+// is exactly how the warehouse silently stopped filling for three weeks when Meta
+// dropped the impressions metrics. Best-effort per metric.
 export async function refreshPageInsights(days = 30, page = {}) {
   const until = Math.floor(Date.now() / 1000);
   const since = until - days * 86400;
-  let series;
-  try {
-    series = await fb.fetchPageInsights(PAGE_METRICS, since, until, { token: page.token, fbPageId: page.fbPageId });
-  } catch {
-    return { ok: false };
-  }
-  for (const metric of Object.keys(series)) {
-    await upsertDaily(page.accountId ?? null, metric, series[metric]);
-  }
-  // Best-effort, isolated: pull each ISOLATED metric on its own so a rejection
-  // (Meta no longer serving it) can't fail the batched request above.
-  for (const metric of ISOLATED_METRICS) {
+  let served = 0;
+  for (const metric of PAGE_METRICS) {
     try {
-      const extra = await fb.fetchPageInsights([metric], since, until, { token: page.token, fbPageId: page.fbPageId });
-      for (const m of Object.keys(extra)) await upsertDaily(page.accountId ?? null, m, extra[m]);
+      const series = await fb.fetchPageInsights([metric], since, until, { token: page.token, fbPageId: page.fbPageId });
+      for (const m of Object.keys(series)) await upsertDaily(page.accountId ?? null, m, series[m]);
+      served += 1;
     } catch {
-      /* metric unavailable on this Graph version — skip */
+      /* metric retired or transient error — never let one metric sink the others */
     }
   }
-  return { ok: true, metrics: Object.keys(series).length };
+  return { ok: served > 0, metrics: served };
 }
 
 // Refresh every connected, active page — used by the n8n hourly snapshot job.
@@ -91,7 +82,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
   // (which would surface another page's or orphaned data when nothing is connected).
   if (accountId == null) {
     const empty = {};
-    for (const m of [...PAGE_METRICS, ...ISOLATED_METRICS]) empty[m] = [];
+    for (const m of PAGE_METRICS) empty[m] = [];
     return { rangeDays, followers: null, pageName: null, series: empty, ranking: [] };
   }
 
@@ -114,7 +105,7 @@ export async function overview({ rangeDays = 28, accountId = null, token = null,
     params,
   );
   const series = {};
-  for (const m of [...PAGE_METRICS, ...ISOLATED_METRICS]) series[m] = [];
+  for (const m of PAGE_METRICS) series[m] = [];
   for (const r of rows) {
     if (!series[r.metric]) series[r.metric] = [];
     series[r.metric].push({ period: r.date, value: Number(r.value) });
@@ -157,6 +148,21 @@ function changePct(cur, prev) {
   return Math.round(((cur - prev) / prev) * 1000) / 10;
 }
 
+// Expand a sparse daily result ([{ period:'YYYY-MM-DD', n }]) into a continuous
+// day-by-day series across [startIso, endIso], filling missing days with 0 so a
+// chart's x-axis spans the whole selected period (not just days that had data).
+// UTC-stepped to stay consistent with isoDay's UTC day boundaries.
+function fillDailySeries(rows, startIso, endIso) {
+  const byDay = new Map(rows.map((r) => [r.period, Number(r.n)]));
+  const end = Date.parse(`${endIso}T00:00:00Z`);
+  const out = [];
+  for (let t = Date.parse(`${startIso}T00:00:00Z`); t <= end; t += DAY_MS) {
+    const iso = new Date(t).toISOString().slice(0, 10);
+    out.push({ period: iso, value: byDay.get(iso) || 0 });
+  }
+  return out;
+}
+
 // Current-window total, % change vs the previous window, and the current-window daily series
 // for one warehoused metric. Metrics never served by Meta have no rows → available:false.
 function metricStat(byMetric, metric, midDate) {
@@ -183,6 +189,37 @@ function netFollowsStat(byMetric, midDate) {
   const c = winSum(true);
   return { total: c, changePct: changePct(c, winSum(false)), series, available: true };
 }
+
+// "Views" from our own records: per-post view counts warehoused on post_pool by the
+// hourly engagement sync, attributed to each post's publish date (same source as the
+// Contents tab). Meta retired the page-level impressions metrics (see PAGE_METRICS),
+// so this is the durable replacement. Always available — our records are authoritative
+// even when the answer is zero.
+async function postViewsStat(accountId, sinceDate, midDate, untilDate) {
+  const totals = await query(
+    `SELECT (posted_at >= ?) AS cur, SUM(COALESCE(views_count, 0)) AS n
+       FROM post_pool
+      WHERE account_id = ? AND status = 'posted' AND posted_at IS NOT NULL AND posted_at >= ?
+      GROUP BY (posted_at >= ?)`,
+    [midDate, accountId, sinceDate, midDate],
+  );
+  let cur = 0;
+  let prev = 0;
+  for (const r of totals) {
+    if (Number(r.cur)) cur = Number(r.n);
+    else prev = Number(r.n);
+  }
+  const daily = await query(
+    `SELECT DATE_FORMAT(posted_at, '%Y-%m-%d') AS period, SUM(COALESCE(views_count, 0)) AS n
+       FROM post_pool
+      WHERE account_id = ? AND status = 'posted' AND posted_at IS NOT NULL AND posted_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, midDate],
+  );
+  return { total: cur, changePct: changePct(cur, prev), series: fillDailySeries(daily, midDate, untilDate), available: true };
+}
+
+const VIEWS_INFO = 'Views on the content you published in this period, from your per-post records.';
 
 // App-side Conversations metrics (our own data — always reliable, range-scoped): started,
 // new contacts, and a response-rate proxy. Each returned as its own card with a daily trend.
@@ -255,9 +292,16 @@ export async function insightsOverview({ rangeDays = 28, accountId = null, token
 
   const card = (key, title, metric, info, extra = {}) => ({ key, title, info, ...metricStat(byMetric, metric, midDate), ...extra });
 
+  // Views from our own per-post records; "Viewers" (unique reach) is gone for good —
+  // Meta retired the metric and it can't be rebuilt from per-post data, so no card.
+  const untilDate = isoDay(now);
+  const viewsStat =
+    accountId != null
+      ? await postViewsStat(accountId, sinceDate, midDate, untilDate)
+      : { total: 0, changePct: null, series: [], available: false };
+
   const metricCards = [
-    card('views', 'Views', 'page_posts_impressions', 'Times your content was on screen.'),
-    card('viewers', 'Viewers', 'page_impressions_unique', 'People who saw your content at least once.'),
+    { key: 'views', title: 'Views', info: VIEWS_INFO, ...viewsStat },
     card('interactions', 'Content interactions', 'page_post_engagements', 'Reactions, comments, shares and clicks on your content.'),
     card('visits', 'Visits', 'page_views_total', 'Times your Page profile was visited.'),
     card('follows', 'Follows', 'page_daily_follows_unique', 'New follows in this period.'),
@@ -267,7 +311,77 @@ export async function insightsOverview({ rangeDays = 28, accountId = null, token
 
   const convCards = await conversationCards(accountId, midDate, sinceDate);
 
-  return { rangeDays, pageName: profile?.name ?? null, sinceDate, untilDate: isoDay(now), cards: [...metricCards, ...convCards] };
+  return { rangeDays, pageName: profile?.name ?? null, sinceDate, untilDate, cards: [...metricCards, ...convCards] };
+}
+
+// All-pages report: one row per active connected page, using the same page-level
+// warehouse as the Performance tab. Missing metric rows are kept as null so the
+// PDF can show a dash instead of turning unavailable Meta data into a false zero.
+const ALL_PAGES_REPORT_METRICS = {
+  follows: 'page_daily_follows_unique',
+  unfollows: 'page_daily_unfollows_unique',
+  visits: 'page_views_total',
+};
+const REPORT_KEY_BY_METRIC = Object.fromEntries(Object.entries(ALL_PAGES_REPORT_METRICS).map(([key, metric]) => [metric, key]));
+
+export async function allPagesMetricsReport({ rangeDays = 28 } = {}) {
+  const now = Date.now();
+  const untilDate = isoDay(now);
+  const sinceDate = isoDay(now - Math.max(0, rangeDays - 1) * DAY_MS);
+  const pages = (await accounts.list()).filter((page) => page.is_active);
+  const pageIds = pages.map((page) => Number(page.id));
+
+  for (const page of pages) {
+    try {
+      if (!(await warehouseEmpty(page.id))) continue;
+      const dec = await accounts.getDecrypted(page.id);
+      await refreshPageInsights(Math.max(90, rangeDays), {
+        accountId: page.id,
+        token: dec.access_token,
+        fbPageId: dec.fb_page_id,
+      });
+    } catch {
+      /* one dead token should not prevent the rest of the report */
+    }
+  }
+
+  const byAccount = new Map(pageIds.map((id) => [id, { follows: null, unfollows: null, visits: null }]));
+  const metricNames = Object.values(ALL_PAGES_REPORT_METRICS);
+  if (pageIds.length) {
+    const accountPlaceholders = pageIds.map(() => '?').join(',');
+    const metricPlaceholders = metricNames.map(() => '?').join(',');
+    const rows = await query(
+      `SELECT account_id, metric, SUM(value) AS total
+         FROM page_insight_daily
+        WHERE account_id IN (${accountPlaceholders})
+          AND captured_on >= ?
+          AND captured_on <= ?
+          AND metric IN (${metricPlaceholders})
+        GROUP BY account_id, metric`,
+      [...pageIds, sinceDate, untilDate, ...metricNames],
+    );
+    for (const row of rows) {
+      const key = REPORT_KEY_BY_METRIC[row.metric];
+      const accountId = Number(row.account_id);
+      if (!key || !byAccount.has(accountId)) continue;
+      byAccount.get(accountId)[key] = Number(row.total) || 0;
+    }
+  }
+
+  const reportRows = [];
+  for (const page of pages) {
+    const stats = await accounts.getStats(page.id).catch(() => null);
+    reportRows.push({
+      accountId: Number(page.id),
+      accountName: stats?.name || page.account_name || `Page #${page.id}`,
+      follows: byAccount.get(Number(page.id))?.follows ?? null,
+      unfollows: byAccount.get(Number(page.id))?.unfollows ?? null,
+      visits: byAccount.get(Number(page.id))?.visits ?? null,
+      currentFollowers: stats?.followers ?? null,
+    });
+  }
+
+  return { rangeDays, sinceDate, untilDate, rows: reportRows };
 }
 
 // ── Messaging ("Contacts") tab ────────────────────────────────────────────────
@@ -304,10 +418,128 @@ function foldChannels(rows) {
   return { total: curTotal, changePct: changePct(curTotal, sum(prev)), channels };
 }
 
+// ── Insights "Overview" tab ───────────────────────────────────────────────────
+// A one-request digest of the deeper tabs: the headline page metrics from the
+// warehouse (as selectable tiles, each with its daily trend), the two messaging
+// headlines (app-side, same definitions as messaging()), the follower count,
+// and the top posts of the range by engagement.
+export async function highlights({ rangeDays = 28, accountId = null, token = null, fbPageId = null } = {}) {
+  const now = Date.now();
+  const curStart = isoDay(now - rangeDays * DAY_MS); // start of the current window (inclusive)
+  const prevStart = isoDay(now - 2 * rangeDays * DAY_MS); // start of the previous window
+  const untilDate = isoDay(now);
+
+  if (accountId == null) {
+    return { rangeDays, pageName: null, followers: null, sinceDate: curStart, untilDate, tiles: [], topPosts: [] };
+  }
+
+  const profile = await fb.fetchPageProfile({ token, fbPageId }).catch(() => null);
+  if (await warehouseEmpty(accountId)) await refreshPageInsights(90, { accountId, token, fbPageId });
+
+  const rows = await query(
+    `SELECT DATE_FORMAT(captured_on, '%Y-%m-%d') AS date, metric, value
+       FROM page_insight_daily WHERE account_id = ? AND captured_on >= ? ORDER BY captured_on ASC`,
+    [accountId, prevStart],
+  );
+  const byMetric = {}; // metric -> [{ period, value }]
+  for (const r of rows) (byMetric[r.metric] ||= []).push({ period: r.date, value: Number(r.value) });
+
+  const tile = (key, title, metric, info) => ({ key, title, info, ...metricStat(byMetric, metric, curStart) });
+
+  // Messaging headlines — current vs previous window totals + a current-window
+  // daily series each, so they can drive the tile chart like the page metrics.
+  const contactTotals = await query(
+    `SELECT (m.created_at >= ?) AS cur, COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ?
+      GROUP BY (m.created_at >= ?)`,
+    [curStart, accountId, prevStart, curStart],
+  );
+  const startedTotals = await query(
+    `SELECT (created_at >= ?) AS cur, COUNT(*) AS n
+       FROM conversations WHERE account_id = ? AND created_at >= ? GROUP BY (created_at >= ?)`,
+    [curStart, accountId, prevStart, curStart],
+  );
+  const split = (grouped) => {
+    let cur = 0;
+    let prev = 0;
+    for (const r of grouped) {
+      if (Number(r.cur)) cur = Number(r.n);
+      else prev = Number(r.n);
+    }
+    return { cur, prev };
+  };
+  const contactSeriesRows = await query(
+    `SELECT DATE_FORMAT(m.created_at, '%Y-%m-%d') AS period, COUNT(DISTINCT ${CONTACT_ID}) AS n
+       FROM conversations c JOIN messages m ON m.conversation_id = c.id
+      WHERE c.account_id = ? AND m.side = 'incoming' AND m.created_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, curStart],
+  );
+  const startedSeriesRows = await query(
+    `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS period, COUNT(*) AS n
+       FROM conversations WHERE account_id = ? AND created_at >= ?
+      GROUP BY period ORDER BY period ASC`,
+    [accountId, curStart],
+  );
+  const contacts = split(contactTotals);
+  const started = split(startedTotals);
+
+  // Views from our own per-post records; the retired "Viewers" tile is gone (see PAGE_METRICS).
+  const viewsStat = await postViewsStat(accountId, prevStart, curStart, untilDate);
+
+  const tiles = [
+    { key: 'views', title: 'Views', info: VIEWS_INFO, ...viewsStat },
+    tile('interactions', 'Content interactions', 'page_post_engagements', 'Reactions, comments, shares and clicks on your content.'),
+    { key: 'net_follows', title: 'Net follows', info: 'Follows minus unfollows.', ...netFollowsStat(byMetric, curStart) },
+    {
+      key: 'total_contacts',
+      title: 'Total contacts',
+      info: 'People who sent your Page a message in this period.',
+      total: contacts.cur,
+      changePct: changePct(contacts.cur, contacts.prev),
+      series: fillDailySeries(contactSeriesRows, curStart, untilDate),
+      available: true,
+    },
+    {
+      key: 'conversations_started',
+      title: 'Conversations started',
+      info: 'New message threads opened in this period.',
+      total: started.cur,
+      changePct: changePct(started.cur, started.prev),
+      series: fillDailySeries(startedSeriesRows, curStart, untilDate),
+      available: true,
+    },
+  ];
+
+  // Top posts of the range by engagement (unlike overview()'s all-time ranking).
+  const topPosts = await query(
+    `SELECT id, caption, media_type, posted_at,
+            reactions_count, comments_count, shares_count,
+            (COALESCE(reactions_count, 0) + COALESCE(comments_count, 0) + COALESCE(shares_count, 0)) AS engagement
+       FROM post_pool
+      WHERE status = 'posted' AND account_id = ? AND posted_at >= ?
+      ORDER BY engagement DESC, posted_at DESC
+      LIMIT 5`,
+    [accountId, curStart],
+  );
+
+  return {
+    rangeDays,
+    pageName: profile?.name ?? null,
+    followers: profile?.followers ?? profile?.fans ?? null,
+    sinceDate: curStart,
+    untilDate,
+    tiles,
+    topPosts,
+  };
+}
+
 export async function messaging({ rangeDays = 28, accountId = null } = {}) {
   const now = Date.now();
   const curStart = isoDay(now - rangeDays * DAY_MS); // start of the current window (inclusive)
   const prevStart = isoDay(now - 2 * rangeDays * DAY_MS); // start of the previous window
+  const untilDate = isoDay(now);
 
   const emptyMetric = { total: 0, changePct: null, channels: [] };
   if (accountId == null) {
@@ -315,11 +547,12 @@ export async function messaging({ rangeDays = 28, accountId = null } = {}) {
       rangeDays,
       pageName: null,
       sinceDate: curStart,
-      untilDate: isoDay(now),
+      untilDate,
       totalContacts: emptyMetric,
       conversationsStarted: emptyMetric,
       newContacts: emptyMetric,
       returningContacts: emptyMetric,
+      sales: { total: 0, changePct: null, revenue: 0, currency: 'PHP', byStatus: [], conversations: 0, conversionRate: null },
       series: { totalContacts: [], conversationsStarted: [] },
     };
   }
@@ -374,8 +607,37 @@ export async function messaging({ rangeDays = 28, accountId = null } = {}) {
     [accountId, curStart],
   );
 
+  // Attributed sales — orders linked back to a conversation on this page (the ones
+  // started from the inbox), current vs previous window, with a per-status breakdown
+  // and revenue. An order row only exists after the customer confirmed, so every row
+  // here is a committed sale.
+  // Wrapped so the Messaging tab still loads if the conversation_id migration
+  // hasn't been applied yet (unknown-column → empty sales, not a 500).
+  let salesRows = [];
+  let salesConvRows = [{ n: 0 }];
+  try {
+    salesRows = await query(
+      `SELECT (created_at >= ?) AS cur, status, COUNT(*) AS n, COALESCE(SUM(total), 0) AS revenue, MAX(currency) AS currency
+         FROM orders
+        WHERE account_id = ? AND conversation_id IS NOT NULL AND created_at >= ?
+        GROUP BY (created_at >= ?), status`,
+      [curStart, accountId, prevStart, curStart],
+    );
+    // Distinct conversations that produced ≥1 sale in the current window — the
+    // numerator for the conversation→sale conversion rate.
+    salesConvRows = await query(
+      `SELECT COUNT(DISTINCT conversation_id) AS n
+         FROM orders
+        WHERE account_id = ? AND conversation_id IS NOT NULL AND created_at >= ?`,
+      [accountId, curStart],
+    );
+  } catch (e) {
+    console.warn(`[analytics] attributed-sales query skipped: ${e?.message || e}`);
+  }
+
   const pageRow = await query('SELECT account_name FROM platform_accounts WHERE id = ? LIMIT 1', [accountId]);
 
+  const totalContacts = foldChannels(contactRows);
   const conversationsStarted = foldChannels(newRows);
   const retChannels = retCurRows
     .map((r) => ({ origin: r.origin, value: Number(r.n), changePct: null }))
@@ -383,19 +645,108 @@ export async function messaging({ rangeDays = 28, accountId = null } = {}) {
     .sort((a, b) => b.value - a.value);
   const retTotal = retChannels.reduce((s, ch) => s + ch.value, 0);
 
+  // Fold attributed sales into { total, changePct, revenue, currency, byStatus,
+  // conversations, conversionRate }. byStatus is what "how many completed / processing
+  // / cancelled" reads from; conversionRate = chats that sold ÷ contacts this period.
+  let salesCur = 0;
+  let salesPrev = 0;
+  let revenueCur = 0;
+  let salesCurrency = null;
+  const statusMap = new Map();
+  for (const r of salesRows) {
+    const n = Number(r.n);
+    if (Number(r.cur)) {
+      salesCur += n;
+      revenueCur += Number(r.revenue) || 0;
+      salesCurrency = salesCurrency || r.currency;
+      statusMap.set(r.status, (statusMap.get(r.status) || 0) + n);
+    } else {
+      salesPrev += n;
+    }
+  }
+  const salesConversations = Number(salesConvRows[0]?.n || 0);
+  const sales = {
+    total: salesCur,
+    changePct: changePct(salesCur, salesPrev),
+    revenue: Math.round(revenueCur * 100) / 100,
+    currency: salesCurrency || 'PHP',
+    byStatus: [...statusMap.entries()].map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count),
+    conversations: salesConversations,
+    conversionRate: totalContacts.total > 0 ? Math.round((salesConversations / totalContacts.total) * 1000) / 10 : null,
+  };
+
   return {
     rangeDays,
     pageName: pageRow[0]?.account_name ?? null,
     sinceDate: curStart,
-    untilDate: isoDay(now),
-    totalContacts: foldChannels(contactRows),
+    untilDate,
+    totalContacts,
     conversationsStarted,
     // A new thread is a first-ever contact, so new contacts mirror conversations started.
     newContacts: { ...conversationsStarted },
     returningContacts: { total: retTotal, changePct: changePct(retTotal, Number(retPrevRows[0]?.n || 0)), channels: retChannels },
+    sales,
     series: {
-      totalContacts: contactSeriesRows.map((r) => ({ period: r.period, value: Number(r.n) })),
-      conversationsStarted: startedSeriesRows.map((r) => ({ period: r.period, value: Number(r.n) })),
+      totalContacts: fillDailySeries(contactSeriesRows, curStart, untilDate),
+      conversationsStarted: fillDailySeries(startedSeriesRows, curStart, untilDate),
     },
   };
+}
+
+// ── Contents tab ──────────────────────────────────────────────────────────────
+// Every published post for the ACTIVE page within the range, with its per-post
+// engagement, for the Insights → Contents table. Purely app-side (reads the counts
+// already warehoused on post_pool by the engagement sync) — no Meta call. Follows are
+// page-level only on Facebook, so there is deliberately no per-post follows column.
+export async function contentPerformance({ rangeDays = 28, accountId = null } = {}) {
+  const now = Date.now();
+  const untilDate = isoDay(now);
+  const sinceDate = isoDay(now - rangeDays * DAY_MS);
+  if (accountId == null) return { rangeDays, pageName: null, sinceDate, untilDate, posts: [] };
+
+  const pageRow = await query('SELECT account_name FROM platform_accounts WHERE id = ? LIMIT 1', [accountId]);
+  const rows = await query(
+    `SELECT id, caption, media_type, thumbnail_s3_key, posted_at, platform_post_id,
+            COALESCE(reactions_count, 0) AS reactions_count,
+            COALESCE(comments_count, 0)  AS comments_count,
+            COALESCE(shares_count, 0)    AS shares_count,
+            COALESCE(views_count, 0)     AS views_count
+       FROM post_pool
+      WHERE account_id = ? AND status = 'posted' AND posted_at IS NOT NULL AND posted_at >= ?
+      ORDER BY posted_at DESC
+      LIMIT 200`,
+    [accountId, sinceDate],
+  );
+
+  // Presign each thumbnail once (best-effort — a broken key just yields no image).
+  const posts = await Promise.all(
+    rows.map(async (p) => {
+      let thumbnailUrl = null;
+      if (p.thumbnail_s3_key) {
+        try {
+          thumbnailUrl = await createDownloadUrl(p.thumbnail_s3_key);
+        } catch {
+          thumbnailUrl = null;
+        }
+      }
+      const reactions = Number(p.reactions_count);
+      const comments = Number(p.comments_count);
+      const shares = Number(p.shares_count);
+      return {
+        id: p.id,
+        caption: p.caption,
+        mediaType: p.media_type,
+        thumbnailUrl,
+        postedAt: p.posted_at,
+        platformPostId: p.platform_post_id,
+        views: Number(p.views_count),
+        reactions,
+        comments,
+        shares,
+        interactions: reactions + comments + shares,
+      };
+    }),
+  );
+
+  return { rangeDays, pageName: pageRow[0]?.account_name ?? null, sinceDate, untilDate, posts };
 }

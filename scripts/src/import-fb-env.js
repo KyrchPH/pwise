@@ -80,7 +80,7 @@ async function main() {
       id = existing[0].id;
       console.log(`[fb:import-env] a Facebook page already exists (id ${id}) — skipping insert.`);
     } else {
-      const [users] = await conn.execute("SELECT id FROM users ORDER BY (role='admin') DESC, id ASC LIMIT 1");
+      const [users] = await conn.execute("SELECT id FROM users ORDER BY (role='super_admin') DESC, (role='admin') DESC, id ASC LIMIT 1");
       if (!users.length) {
         console.error('[fb:import-env] no users in the database to own the page.');
         process.exit(1);

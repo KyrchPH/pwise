@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { apiError } from '../../services/api.js';
+import { isAdminRole, isSuperAdminRole } from '../../config/modules.js';
 import * as uploadService from '../../services/upload.service.js';
 import { Button, Card, Field, Modal, UserAvatar } from '../../components/ui.jsx';
 import SecurityCard from './SecurityCard.jsx';
@@ -17,6 +18,12 @@ const fmt = (value) => {
 };
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function roleLabel(role) {
+  if (isSuperAdminRole(role)) return 'Super admin';
+  if (isAdminRole(role)) return 'Admin';
+  return role ? 'User' : '-';
+}
 
 const fileBaseName = (name = 'profile-photo') =>
   String(name)
@@ -372,7 +379,7 @@ export default function ProfilePage() {
           <div className="profile-identity">
             <div className="profile-name">{user?.name || 'Account'}</div>
             <div className="profile-email">{user?.email}</div>
-            <span className="badge badge--ready profile-role">{user?.role || 'user'}</span>
+            <span className="badge badge--ready profile-role">{roleLabel(user?.role)}</span>
           </div>
         </Card>
 
@@ -409,7 +416,7 @@ export default function ProfilePage() {
           <dl className="profile-meta">
             <div>
               <dt>Role</dt>
-              <dd>{user?.role || '-'}</dd>
+              <dd>{roleLabel(user?.role)}</dd>
             </div>
             <div>
               <dt>Status</dt>

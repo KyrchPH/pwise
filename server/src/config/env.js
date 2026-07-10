@@ -112,6 +112,14 @@ export const env = {
     // Dev Wise Assistant overlay -> server -> n8n assistant webhook.
     wiseAssistantWebhookUrl: process.env.N8N_WISE_ASSISTANT_WEBHOOK_URL || '',
     wiseAssistantSecret: process.env.N8N_WISE_ASSISTANT_SECRET || '',
+    // Base URL the Wise Assistant workflow calls BACK into this API with its scoped
+    // read-only token (the agent's "fetch the user's data" tool). Defaults to
+    // PUBLIC_URL; falls back to localhost for same-machine dev setups.
+    wiseAssistantApiBase: (
+      process.env.N8N_WISE_ASSISTANT_API_BASE_URL ||
+      process.env.PUBLIC_URL ||
+      `http://localhost:${Number(process.env.PORT) || 5000}`
+    ).replace(/\/+$/, ''),
   },
 
   // At-rest encryption key for connected-page credentials (platform_accounts).

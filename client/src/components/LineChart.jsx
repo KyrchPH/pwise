@@ -7,14 +7,13 @@ import { useId, useState } from 'react';
 // fitted to the data with "nice" round gridlines, and x ticks at even time
 // intervals. Each point's x position is proportional to its actual time, so
 // gaps between snapshots show up as gaps instead of being squashed together.
-const W = 640;
-const H = 240;
+// Base viewBox is 640×240 for card-sized charts; the `wide` prop doubles the
+// internal resolution (1280×320) for full-width hero charts so the stretched SVG
+// doesn't scale its text up ~2× — same data, normal-sized labels.
 const PAD_L = 48;
 const PAD_R = 18;
 const PAD_T = 14;
 const PAD_B = 30;
-const INNER_W = W - PAD_L - PAD_R;
-const INNER_H = H - PAD_T - PAD_B;
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -67,12 +66,11 @@ function niceStep(raw) {
   return f * mag;
 }
 
-// Keep spline control points inside the plot so the curve never overshoots the
-// axis range (points can sit exactly on the bottom gridline).
-const clampY = (v) => Math.min(PAD_T + INNER_H, Math.max(PAD_T, v));
-
 // Smooth path through the points via a Catmull-Rom → cubic-bézier conversion.
-function smoothPath(pts) {
+// Control points are clamped to [yTop, yBottom] so the curve never overshoots the
+// axis range (points can sit exactly on the bottom gridline).
+function smoothPath(pts, yTop, yBottom) {
+  const clampY = (v) => Math.min(yBottom, Math.max(yTop, v));
   if (!pts.length) return '';
   if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
   let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
@@ -90,10 +88,15 @@ function smoothPath(pts) {
   return d;
 }
 
-export default function LineChart({ points = [], color = '#7c3aed', label = '' }) {
+export default function LineChart({ points = [], color = '#7c3aed', label = '', wide = false }) {
   const gradId = useId();
   const [hover, setHover] = useState(null);
   if (!points.length) return null;
+
+  const W = wide ? 1280 : 640;
+  const H = wide ? 320 : 240;
+  const INNER_W = W - PAD_L - PAD_R;
+  const INNER_H = H - PAD_T - PAD_B;
 
   const n = points.length;
 
@@ -151,7 +154,7 @@ export default function LineChart({ points = [], color = '#7c3aed', label = '' }
   if (timeMode) {
     const unit = tSpan >= 56 * DAY ? 'month' : tSpan >= 2 * DAY ? 'day' : 'hour';
     const total = Math.max(1, unitsBetween(t0, times[n - 1], unit));
-    const step = Math.max(1, Math.ceil(total / 6));
+    const step = Math.max(1, Math.ceil(total / (wide ? 10 : 6))); // the wide canvas has room for more labels
     const offsets = [];
     for (let k = 0; k <= total; k += step) offsets.push(k);
     if (offsets[offsets.length - 1] !== total) offsets.push(total); // always label the latest bucket
@@ -172,7 +175,7 @@ export default function LineChart({ points = [], color = '#7c3aed', label = '' }
   }
 
   const coords = points.map((p, i) => ({ x: x(i), y: y(p.value) }));
-  const linePath = smoothPath(coords);
+  const linePath = smoothPath(coords, PAD_T, PAD_T + INNER_H);
   const areaPath = `${linePath} L ${coords[n - 1].x.toFixed(1)} ${(PAD_T + INNER_H).toFixed(1)} L ${coords[0].x.toFixed(1)} ${(PAD_T + INNER_H).toFixed(1)} Z`;
   const startY = y(points[0].value);
 

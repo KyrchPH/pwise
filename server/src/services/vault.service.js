@@ -1,4 +1,5 @@
 import { query } from '../config/db.js';
+import { isAdminRole } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 import { createDownloadUrl, deleteObject } from './s3.service.js';
 
@@ -103,7 +104,7 @@ async function assertFolder(id) {
 // signed URL for) anything inside it. Admins see everything.
 export async function listAll(actor = {}) {
   const rows = await query('SELECT * FROM vault_items ORDER BY type DESC, name ASC, id ASC');
-  const visible = actor.role === 'admin' ? rows : await filterByAccess(rows, actor);
+  const visible = isAdminRole(actor.role) ? rows : await filterByAccess(rows, actor);
   return Promise.all(visible.map(withUrls));
 }
 
@@ -144,7 +145,7 @@ async function grantedFolderIds(userId) {
 // access. Walks the (shallow) ancestor chain. No-op for admins / items with no private
 // ancestor. Complements listAll's filtering so private contents can't be reached by id.
 async function assertCanAccess(actor = {}, id) {
-  if (actor.role === 'admin' || id == null) return;
+  if (isAdminRole(actor.role) || id == null) return;
   const privateAncestors = [];
   let cursor = id;
   const seen = new Set();
@@ -188,7 +189,7 @@ export async function createFolder(actor = {}, { parentId = null, name, visibili
     await assertCanAccess(actor, parentId); // can't create inside a private folder you can't see
   }
   // Only admins may restrict a folder; everyone else's folders are public (the default).
-  const isPrivate = actor.role === 'admin' && String(visibility) === 'private';
+  const isPrivate = isAdminRole(actor.role) && String(visibility) === 'private';
   const result = await query(
     'INSERT INTO vault_items (parent_id, type, name, visibility, user_id, uploaded_by) VALUES (?, "folder", ?, ?, ?, ?)',
     [parentId ?? null, clean, isPrivate ? 'private' : 'public', actor.id ?? null, actor.name ?? null],

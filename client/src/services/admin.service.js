@@ -25,6 +25,16 @@ export async function setActive(id, is_active) {
   return data.data;
 }
 
+export async function setRole(id, role) {
+  const { data } = await api.patch(`/admin/users/${id}/role`, { role });
+  return data.data; // { id, role }
+}
+
+export async function transferSuperAdmin(id) {
+  const { data } = await api.patch(`/admin/users/${id}/super-admin`);
+  return data.data; // { from, to }
+}
+
 export async function softDelete(id) {
   const { data } = await api.delete(`/admin/users/${id}`);
   return data.data;

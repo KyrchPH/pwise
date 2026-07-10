@@ -1,8 +1,9 @@
 import ApiError from '../utils/ApiError.js';
+import { isAdminRole } from '../config/modules.js';
 
 // Must run after requireAuth (which sets req.user with the DB role).
 export function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') return next(ApiError.forbidden('admin access required'));
+  if (!isAdminRole(req.user?.role)) return next(ApiError.forbidden('admin access required'));
   next();
 }
 

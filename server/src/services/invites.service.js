@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { query } from '../config/db.js';
 import { env } from '../config/env.js';
-import { APP_MODULES, MODULE_IDS, moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
+import { APP_MODULES, MODULE_IDS, isAdminRole, moduleAccessForUser, normalizeModuleAccess, serializeModuleAccess } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 
 function generateToken() {
@@ -20,7 +20,7 @@ export async function create(adminId, modules) {
   // Admins can grant any (non-admin-only) module regardless of their own stored
   // access list, which may predate newer modules; non-admins (who can't reach this
   // UI anyway) are still limited to what they hold.
-  const creatorAccess = new Set(creator.role === 'admin' ? MODULE_IDS : moduleAccessForUser(creator));
+  const creatorAccess = new Set(isAdminRole(creator.role) ? MODULE_IDS : moduleAccessForUser(creator));
   const invalid = requested.some((id) => !creatorAccess.has(id));
   if (invalid) throw ApiError.forbidden("you can't grant access to a module you do not have");
   // Admin-only modules (e.g. Accounts) are never grantable via a signup link.

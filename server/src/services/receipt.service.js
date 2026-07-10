@@ -1,4 +1,5 @@
 import { query } from '../config/db.js';
+import { isAdminRole } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 import * as s3 from './s3.service.js';
 
@@ -62,7 +63,7 @@ export async function list({ actor = {}, accountId, ownerId = null } = {}) {
   const acc = requireAccount(accountId);
   const where = ['account_id = ?'];
   const params = [acc];
-  if (actor.role !== 'admin') {
+  if (!isAdminRole(actor.role)) {
     where.push('created_by = ?');
     params.push(actor.id);
   } else if (ownerId != null && ownerId !== '' && ownerId !== 'all') {
@@ -77,7 +78,7 @@ async function getGuarded(id, actor) {
   const rows = await query('SELECT * FROM receipts WHERE id = ? LIMIT 1', [id]);
   const row = rows[0];
   if (!row) throw ApiError.notFound('receipt not found');
-  if (actor?.role !== 'admin' && Number(row.created_by) !== Number(actor?.id)) {
+  if (!isAdminRole(actor?.role) && Number(row.created_by) !== Number(actor?.id)) {
     throw ApiError.forbidden('this receipt belongs to another user');
   }
   return row;

@@ -1,12 +1,72 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as productsApi from '../../services/products.service.js';
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
-import { Button, Card, Field } from '../../components/ui.jsx';
+import { Button, Field, Modal } from '../../components/ui.jsx';
 import { generateCombinations, comboKey, variantLabel } from '../../config/variants.js';
 
 const MAX_AXES = 4;
+
+function PlusIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+function ImageIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="m21 15-5-5L5 21" />
+    </svg>
+  );
+}
 
 // Build the form state from an existing product (edit) or blank (add). Variants are
 // kept as a map keyed by comboKey so a price/photo survives when OTHER axes change.
@@ -53,6 +113,34 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
 
   const combinations = useMemo(() => generateCombinations(form.options), [form.options]);
   const hasAxes = combinations.length > 0;
+
+  // When "Add option" appends an axis, the new card lands below the fold of the
+  // dialog's scrolling body — scroll it into view and put the cursor in its name
+  // input. Everything runs synchronously in the effect (the DOM is committed by
+  // then), and focus comes FIRST: Chromium cancels an in-flight smooth scroll
+  // when focus() runs later, even with preventScroll.
+  const variantEditorRef = useRef(null);
+  const prevAxisCount = useRef(form.options.length);
+  useEffect(() => {
+    const count = form.options.length;
+    const grew = count > prevAxisCount.current;
+    prevAxisCount.current = count;
+    if (!grew) return;
+    const cards = variantEditorRef.current?.querySelectorAll('.variant-axis');
+    const added = cards?.[cards.length - 1];
+    if (!added) return;
+    added.querySelector('input')?.focus({ preventScroll: true });
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    const modalBody = added.closest('.modal')?.querySelector('.card--pad');
+    if (modalBody) {
+      // Land the new card just under the body's top edge so the space below it
+      // (where its values and the combination table grow) stays in view.
+      const top = modalBody.scrollTop + added.getBoundingClientRect().top - modalBody.getBoundingClientRect().top - 12;
+      modalBody.scrollTo({ top: Math.max(0, top), behavior });
+    } else {
+      added.scrollIntoView({ behavior, block: 'nearest' });
+    }
+  }, [form.options.length]);
 
   // ── Axis editing ──────────────────────────────────────────────────────────────
   const addAxis = () =>
@@ -154,12 +242,36 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
   };
 
   return (
-    <Card className="card--pad product-form">
-      <div className="ct-form">
+    <>
+      <Modal
+        open
+        onClose={onClose}
+        closeOnBackdrop={false}
+        className="modal--product-form"
+        title={
+          <div className="product-form__heading">
+            <span>{product?.id ? 'Edit product' : 'Add product'}</span>
+            <span className="product-form__subtitle">
+              {product?.id
+                ? 'Update the details, photo, or variants.'
+                : 'Add the details, a photo, and optional variants.'}
+            </span>
+          </div>
+        }
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button className="btn--flat product-form__submit" onClick={submit} disabled={busy}>
+              {busy ? 'Saving…' : product?.id ? 'Save changes' : 'Add product'}
+            </Button>
+          </>
+        }
+      >
+      <div className="ct-form product-form">
         <Field label="Name">
           <input className="input" value={form.name} onChange={setField('name')} placeholder="e.g. 5L Regular Dishwashing Liquid" />
         </Field>
-        <div className="row gap-sm" style={{ flexWrap: 'wrap' }}>
+        <div className="product-form__grid">
           {!hasAxes && (
             <Field label="Base price">
               <input className="input" type="number" min="0" step="0.01" value={form.base_price} onChange={setField('base_price')} placeholder="0.00" />
@@ -175,28 +287,37 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
         <Field label="Tags" hint="comma-separated">
           <input className="input" value={form.tags} onChange={setField('tags')} placeholder="e.g. bestseller, bulk" />
         </Field>
-        <Field label="Photo" hint="picked from the Vault">
+        <Field label="Photo">
           <div className="product-photo-field">
             {form.photoPreview ? (
               <img className="product-photo-field__preview" src={form.photoPreview} alt="" />
             ) : (
               <div className="product-photo-field__empty">No photo</div>
             )}
-            <div className="row gap-sm">
-              <Button type="button" variant="subtle" size="sm" onClick={() => setPickerTarget('product')}>
-                {form.photoPreview ? 'Change photo' : 'Pick from Vault'}
-              </Button>
-              {form.photoPreview && (
-                <Button type="button" variant="ghost" size="sm" onClick={() => setForm((f) => ({ ...f, photoPreview: '', photoVaultItemId: undefined, photoRemoved: true }))}>
-                  Remove
+            <div className="product-photo-field__body">
+              <span className="product-photo-field__hint">Picked from the Vault. Shown on the product tile and in chats.</span>
+              <div className="row gap-sm">
+                <Button type="button" variant="subtle" size="sm" onClick={() => setPickerTarget('product')}>
+                  {form.photoPreview ? 'Change photo' : 'Pick from Vault'}
                 </Button>
-              )}
+                {form.photoPreview && (
+                  <button
+                    type="button"
+                    className="pf-iconbtn pf-iconbtn--danger"
+                    onClick={() => setForm((f) => ({ ...f, photoPreview: '', photoVaultItemId: undefined, photoRemoved: true }))}
+                    title="Remove photo"
+                    aria-label="Remove photo"
+                  >
+                    <TrashIcon />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </Field>
 
         {/* Variants (option matrix) */}
-        <div className="variant-editor">
+        <div className="variant-editor" ref={variantEditorRef}>
           <div className="variant-editor__head">
             <div>
               <span className="field__label">Variants</span>
@@ -204,46 +325,70 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
                 Add option axes (e.g. Size, Scent) to sell this in priced variants. Leave empty for a single base price.
               </p>
             </div>
-            <Button type="button" variant="subtle" size="sm" onClick={addAxis} disabled={form.options.length >= MAX_AXES}>
-              Add option
+            <Button type="button" size="sm" className="btn--flat variant-editor__add" onClick={addAxis} disabled={form.options.length >= MAX_AXES}>
+              <PlusIcon /> Add variant
             </Button>
           </div>
 
           {form.options.map((axis, i) => (
             // eslint-disable-next-line react/no-array-index-key
             <div className="variant-axis" key={i}>
-              <div className="variant-axis__row">
-                <input className="input" placeholder="Option name (e.g. Size)" value={axis.name} onChange={(e) => setAxisName(i, e.target.value)} />
-                <Button type="button" variant="ghost" size="sm" onClick={() => removeAxis(i)}>Remove</Button>
+              <div className="variant-axis__head">
+                <span className="variant-axis__tag">Option {i + 1}</span>
+                <button
+                  type="button"
+                  className="variant-axis__remove"
+                  onClick={() => removeAxis(i)}
+                  title="Remove option"
+                  aria-label={`Remove option ${axis.name || i + 1}`}
+                >
+                  <TrashIcon />
+                </button>
               </div>
-              <div className="variant-axis__values">
-                {axis.values.map((val) => (
-                  <span className="tag-chip" key={val}>
-                    {val}
-                    <button type="button" onClick={() => removeValue(i, val)} aria-label={`Remove ${val}`}>×</button>
-                  </span>
-                ))}
-                <input
-                  className="input variant-axis__add"
-                  placeholder="Add value, press Enter"
-                  value={valueDraft[i] || ''}
-                  onChange={(e) => setValueDraft((d) => ({ ...d, [i]: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ',') {
-                      e.preventDefault();
-                      addValue(i, valueDraft[i]);
-                    }
-                  }}
-                  onBlur={() => addValue(i, valueDraft[i])}
-                />
+              <label className="variant-axis__field">
+                <span className="variant-axis__label">Name</span>
+                <input className="input" placeholder="e.g. Size, Color, Scent" value={axis.name} onChange={(e) => setAxisName(i, e.target.value)} />
+              </label>
+              <div className="variant-axis__field">
+                <span className="variant-axis__label">Values</span>
+                {/* Tag-input: chips live inside one input-styled well; clicking anywhere
+                    in it puts the cursor in the bare input at the end. */}
+                <div
+                  className="variant-axis__well"
+                  onClick={(e) => e.currentTarget.querySelector('.variant-axis__add')?.focus()}
+                >
+                  {axis.values.map((val) => (
+                    <span className="tag-chip" key={val}>
+                      {val}
+                      <button type="button" onClick={() => removeValue(i, val)} aria-label={`Remove ${val}`}>×</button>
+                    </span>
+                  ))}
+                  <input
+                    className="variant-axis__add"
+                    placeholder={axis.values.length ? 'Add another…' : 'Type a value, e.g. 1L'}
+                    value={valueDraft[i] || ''}
+                    onChange={(e) => setValueDraft((d) => ({ ...d, [i]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault();
+                        addValue(i, valueDraft[i]);
+                      }
+                    }}
+                    onBlur={() => addValue(i, valueDraft[i])}
+                  />
+                </div>
+                <span className="variant-axis__hint">Each value becomes a variant — press Enter or comma to add it.</span>
               </div>
             </div>
           ))}
 
           {hasAxes && (
             <div className="variant-table">
-              <div className="variant-table__caption">
-                {combinations.length} combination{combinations.length === 1 ? '' : 's'}
+              <div className="variant-table__head">
+                <div className="variant-table__caption">
+                  {combinations.length} combination{combinations.length === 1 ? '' : 's'}
+                </div>
+                <p className="variant-table__hint">Set a price for each — leave it empty to show “Quote”.</p>
               </div>
               {combinations.map((optionValues) => {
                 const key = comboKey(optionValues, form.options);
@@ -253,13 +398,25 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
                     <div className="variant-row__label">{variantLabel(optionValues, form.options)}</div>
                     <div className="variant-row__photo">
                       {v.photoPreview ? <img src={v.photoPreview} alt="" /> : <span className="variant-row__noimg">No photo</span>}
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setPickerTarget(key)}>
-                        {v.photoPreview ? 'Change' : 'Photo'}
-                      </Button>
+                      <button
+                        type="button"
+                        className="pf-iconbtn"
+                        onClick={() => setPickerTarget(key)}
+                        title={v.photoPreview ? 'Change photo' : 'Choose photo from Vault'}
+                        aria-label={`${v.photoPreview ? 'Change' : 'Choose'} photo for ${variantLabel(optionValues, form.options)}`}
+                      >
+                        <ImageIcon />
+                      </button>
                       {v.photoPreview && (
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setVariant(key, { photoPreview: '', photoVaultItemId: undefined, photoRemoved: true })}>
-                          Remove
-                        </Button>
+                        <button
+                          type="button"
+                          className="pf-iconbtn pf-iconbtn--danger"
+                          onClick={() => setVariant(key, { photoPreview: '', photoVaultItemId: undefined, photoRemoved: true })}
+                          title="Remove photo"
+                          aria-label={`Remove photo for ${variantLabel(optionValues, form.options)}`}
+                        >
+                          <TrashIcon />
+                        </button>
                       )}
                     </div>
                     <input
@@ -282,13 +439,8 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
           )}
         </div>
 
-        <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button size="sm" onClick={submit} disabled={busy}>
-            {busy ? 'Saving…' : product?.id ? 'Save' : 'Add product'}
-          </Button>
-        </div>
       </div>
+      </Modal>
 
       <VaultPickerModal
         open={pickerTarget !== null}
@@ -296,6 +448,6 @@ export default function ProductForm({ product, accountId, vaultFolderId, onClose
         onAttach={onPick}
         initialFolderId={vaultFolderId ?? null}
       />
-    </Card>
+    </>
   );
 }

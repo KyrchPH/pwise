@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Card, EmptyState, Modal } from '../../components/ui.jsx';
+import { Button, Card, EmptyState, Modal, Spinner } from '../../components/ui.jsx';
 import { AvatarWithPresence } from '../../components/PresenceBadge.jsx';
 import TemplateDrawer from '../../components/TemplateDrawer.jsx';
 import ProductsDrawer from '../../components/ProductsDrawer.jsx';
 import { formatPrice } from '../../config/currency.js';
+import { isAdminRole } from '../../config/modules.js';
 import { isVariable, priceRangeLabel } from '../../config/variants.js';
 import VaultPickerModal from '../../components/VaultPickerModal.jsx';
 import { VaultThumb } from '../../components/VaultThumb.jsx';
@@ -12,8 +13,10 @@ import { usePages } from '../../context/PageContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import * as messaging from '../../services/messaging.service.js';
+import * as surveys from '../../services/surveys.service.js';
 import * as productsApi from '../../services/products.service.js';
 import * as templatesApi from '../../services/message_templates.service.js';
+import { useCachedResource } from '../../hooks/useCachedResource.js';
 import { buildPageCards, conversationPreview, messagePreview, resolveSelectedPageId } from './messagingData.js';
 import AgentChat from './AgentChat.jsx';
 import MediaLightbox from './MediaLightbox.jsx';
@@ -52,6 +55,568 @@ function NotesIcon() {
       <path d="M4 4h16v11l-5 5H4z" />
       <path d="M15 20v-5h5" />
     </svg>
+  );
+}
+function CopyIcon({ size = 16 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+function CheckIcon({ size = 16 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+function DownloadIcon({ size = 16 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+function compactDateTime(value) {
+  if (!value) return '';
+  const source = typeof value === 'string' ? value.replace(' ', 'T') : value;
+  const date = new Date(source);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (part) => String(part).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join('');
+}
+function conversationCid(conversation) {
+  const id = conversation?.id == null ? '' : String(conversation.id);
+  const datetime = compactDateTime(conversation?.createdAt);
+  return `CID${datetime}${id}`;
+}
+function StarIcon({ className = '' }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" width="10" height="10" aria-hidden="true">
+      <path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.4l-5.8 3.1L7.3 14 2.6 9.4l6.5-.9L12 2.6Z" />
+    </svg>
+  );
+}
+function SurveyStar({ fill }) {
+  return (
+    <span className="msg-survey-star">
+      <span className="msg-survey-star__icon">
+        <StarIcon className="msg-survey-star__empty" />
+        <span className="msg-survey-star__fill" style={{ width: `${fill}%` }}>
+          <StarIcon />
+        </span>
+      </span>
+    </span>
+  );
+}
+function formatNpsValue(value) {
+  return value == null || Number.isNaN(Number(value)) ? '-' : String(Math.round(Number(value)));
+}
+function npsFeedbackMeta(value) {
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 9) return { type: 'promoter', label: 'Promoter', emoji: '😄' };
+  if (Number.isFinite(n) && n >= 7) return { type: 'neutral', label: 'Neutral', emoji: '😐' };
+  return { type: 'detractor', label: 'Detractor', emoji: '😟' };
+}
+function npsFeedbackView(comment = {}) {
+  const meta = npsFeedbackMeta(comment.nps);
+  const rawConversationId = comment.conversationId ?? comment.conversation_id ?? null;
+  const cid = comment.conversationCid
+    || (rawConversationId
+      ? conversationCid({ id: rawConversationId, createdAt: comment.conversationCreatedAt ?? comment.conversation_created_at })
+      : '');
+  const fallbackCid = rawConversationId ? `CID${rawConversationId}` : '';
+  const displayCid = cid && cid !== 'CID' ? cid : fallbackCid;
+  return { meta, rawConversationId, displayCid };
+}
+function reportFilePart(value) {
+  return String(value || 'page')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'page';
+}
+const NPS_RANGE_OPTIONS = [
+  { key: 'day', label: 'Day', days: 1, phrase: 'last day' },
+  { key: 'week', label: 'Week', days: 7, phrase: 'last week' },
+  { key: 'month', label: 'Month', days: 30, phrase: 'last month' },
+];
+const NPS_GAUGE = { min: -100, max: 100, startAngle: 150, endAngle: 390, cx: 160, cy: 158, radius: 130 };
+const NPS_GAUGE_SEGMENTS = [
+  { from: -100, to: -75, status: 'very-low', className: 'nps-gauge__arc--very-low' },
+  { from: -75, to: -50, status: 'low', className: 'nps-gauge__arc--low' },
+  { from: -50, to: -25, status: 'mid-low', className: 'nps-gauge__arc--mid-low' },
+  { from: -25, to: 0, status: 'neutral-low', className: 'nps-gauge__arc--neutral-low' },
+  { from: 0, to: 25, status: 'neutral-high', className: 'nps-gauge__arc--neutral-high' },
+  { from: 25, to: 50, status: 'mid-high', className: 'nps-gauge__arc--mid-high' },
+  { from: 50, to: 75, status: 'high', className: 'nps-gauge__arc--high' },
+  { from: 75, to: 100, status: 'very-high', className: 'nps-gauge__arc--very-high' },
+];
+const NPS_GAUGE_LABELS = [-100, -75, -50, -25, 0, 25, 50, 75, 100];
+function clampNpsScore(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(NPS_GAUGE.min, Math.min(NPS_GAUGE.max, n));
+}
+function npsGaugeSegment(value) {
+  const clamped = clampNpsScore(value);
+  return NPS_GAUGE_SEGMENTS.find((segment, index) => {
+    const isLast = index === NPS_GAUGE_SEGMENTS.length - 1;
+    return clamped >= segment.from && (isLast ? clamped <= segment.to : clamped < segment.to);
+  });
+}
+function npsGaugeValueClass(value) {
+  const segment = npsGaugeSegment(value);
+  return segment ? ` nps-gauge__value--${segment.status}` : '';
+}
+function npsGaugeAngle(value) {
+  const clamped = clampNpsScore(value);
+  const pct = (clamped - NPS_GAUGE.min) / (NPS_GAUGE.max - NPS_GAUGE.min);
+  return NPS_GAUGE.startAngle + pct * (NPS_GAUGE.endAngle - NPS_GAUGE.startAngle);
+}
+function npsGaugePoint(angle, radius = NPS_GAUGE.radius) {
+  const radians = (angle * Math.PI) / 180;
+  return {
+    x: NPS_GAUGE.cx + radius * Math.cos(radians),
+    y: NPS_GAUGE.cy + radius * Math.sin(radians),
+  };
+}
+function npsGaugeArc(from, to) {
+  const startAngle = npsGaugeAngle(from);
+  const endAngle = npsGaugeAngle(to);
+  const start = npsGaugePoint(startAngle);
+  const end = npsGaugePoint(endAngle);
+  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${NPS_GAUGE.radius} ${NPS_GAUGE.radius} 0 ${largeArc} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
+function npsGaugePointer(value) {
+  const angle = npsGaugeAngle(value);
+  const radians = (angle * Math.PI) / 180;
+  const dir = { x: Math.cos(radians), y: Math.sin(radians) };
+  const perp = { x: -dir.y, y: dir.x };
+  const tip = npsGaugePoint(angle, NPS_GAUGE.radius + 5);
+  const base = npsGaugePoint(angle, NPS_GAUGE.radius + 30);
+  const half = 11;
+  return [
+    `${tip.x.toFixed(2)},${tip.y.toFixed(2)}`,
+    `${(base.x + perp.x * half).toFixed(2)},${(base.y + perp.y * half).toFixed(2)}`,
+    `${(base.x - perp.x * half).toFixed(2)},${(base.y - perp.y * half).toFixed(2)}`,
+  ].join(' ');
+}
+function NpsScoreGauge({ score, sample }) {
+  const hasScore = score != null && Number.isFinite(Number(score));
+  const responseLabel = `${sample} response${sample === 1 ? '' : 's'}`;
+  const valueClassName = hasScore
+    ? `nps-gauge__value${npsGaugeValueClass(score)}`
+    : 'nps-gauge__value is-empty';
+  return (
+    <div className="nps-gauge-card" role="img" aria-label={hasScore ? `NPS score ${formatNpsValue(score)} from ${responseLabel}` : `NPS score unavailable from ${responseLabel}`}>
+      <div className="nps-gauge-card__title">NPS score</div>
+      <svg className="nps-gauge" viewBox="0 0 320 238" aria-hidden="true">
+        {NPS_GAUGE_SEGMENTS.map((segment) => (
+          <path
+            key={segment.from}
+            className={`nps-gauge__arc ${segment.className}`}
+            d={npsGaugeArc(segment.from + 1, segment.to - 1)}
+          />
+        ))}
+        {NPS_GAUGE_LABELS.map((value) => {
+          const point = npsGaugePoint(npsGaugeAngle(value), 97);
+          return (
+            <text key={value} className="nps-gauge__label" x={point.x.toFixed(2)} y={point.y.toFixed(2)}>
+              {value}
+            </text>
+          );
+        })}
+        {hasScore && <polygon className="nps-gauge__pointer" points={npsGaugePointer(score)} />}
+        <text className={valueClassName} x="160" y="122">
+          {formatNpsValue(score)}
+        </text>
+        <text className="nps-gauge__unit" x="160" y="160">NPS</text>
+        <text className="nps-gauge__responses" x="160" y="184">{responseLabel}</text>
+      </svg>
+    </div>
+  );
+}
+function NpsMetricsSection({ pageKey, pageName }) {
+  const toast = useToast();
+  const { user } = useAuth();
+  const [rangeKey, setRangeKey] = useState('month');
+  const [selectedFeedback, setSelectedFeedback] = useState(null);
+  const [barTip, setBarTip] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const activeRange = NPS_RANGE_OPTIONS.find((option) => option.key === rangeKey) || NPS_RANGE_OPTIONS[2];
+  const { data, loading } = useCachedResource(
+    pageKey ? `nps-metrics:${pageKey}:${activeRange.days}` : null,
+    () => surveys.summary(activeRange.days, pageKey),
+  );
+  const nps = data?.nps || { score: null, promoters: 0, passives: 0, detractors: 0, sample: 0 };
+  const sample = Number(nps.sample) || 0;
+  const promoters = Number(nps.promoters) || 0;
+  const passives = Number(nps.passives) || 0;
+  const detractors = Number(nps.detractors) || 0;
+  const score = nps.score == null ? null : Number(nps.score);
+  const pct = (count) => (sample > 0 ? Math.max(4, (count / sample) * 100) : 0);
+  const responsePct = (count) => (sample > 0 ? Math.round((count / sample) * 100) : 0);
+  const showBarTip = (name, count) => (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const responses = `${count} response${count === 1 ? '' : 's'}`;
+    setBarTip({
+      name,
+      detail: `${responses} · ${responsePct(count)}% of NPS responses`,
+      x: rect.left + rect.width / 2,
+      y: rect.top - 10,
+    });
+  };
+  const hideBarTip = () => setBarTip(null);
+  const reportComments = (data?.comments || []).filter((comment) => comment.nps != null);
+  const comments = reportComments.slice(0, 5);
+  const selectedFeedbackView = selectedFeedback ? npsFeedbackView(selectedFeedback) : null;
+  const downloadReport = async () => {
+    if (!data || downloading) return;
+    setDownloading(true);
+    try {
+      const { buildNpsMetricsPdf, loadLogo } = await import('../../utils/reportPdf.js');
+      const logo = await loadLogo();
+      const enrichedComments = reportComments.map((comment) => {
+        const view = npsFeedbackView(comment);
+        return {
+          ...comment,
+          status: view.meta.label,
+          conversationCid: view.displayCid,
+          agentOwnerName: comment.agentOwnerName || comment.agentName || '',
+        };
+      });
+      const doc = buildNpsMetricsPdf({
+        metrics: data,
+        comments: enrichedComments,
+        pageName: pageName || 'Selected page',
+        reportOwnerName: user?.name || user?.fullName || user?.email || '',
+        rangeDays: activeRange.days,
+        rangeLabel: activeRange.label,
+        rangePhrase: activeRange.phrase,
+        logo,
+      });
+      const stamp = new Date().toISOString().slice(0, 10);
+      doc.save(`nps-metrics-${reportFilePart(pageName)}-${activeRange.key}-${stamp}.pdf`);
+    } catch {
+      toast.error('Could not generate the NPS metrics report.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <>
+      <Card className="nps-section">
+        <div className="nps-section__head">
+          <div>
+            <div className="nps-section__eyebrow">NPS Survey</div>
+            <h2 className="nps-section__title">User NPS Metrics</h2>
+            <p className="nps-section__sub">
+              {pageName || 'Selected page'} survey recommendation scores from the {activeRange.phrase}.
+            </p>
+          </div>
+          <div className="nps-section__actions">
+            <Button type="button" variant="subtle" size="sm" className="nps-download" onClick={downloadReport} disabled={!data || downloading}>
+              <DownloadIcon size={15} />
+              {downloading ? 'Preparing...' : 'Download report'}
+            </Button>
+            <div className="seg nps-range" role="tablist" aria-label="NPS survey range">
+              {NPS_RANGE_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={rangeKey === option.key}
+                  className={`seg__btn${rangeKey === option.key ? ' is-active' : ''}`}
+                  onClick={() => setRangeKey(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {loading && !data ? (
+          <Spinner label="Loading NPS metrics..." />
+        ) : (
+          <>
+            <div className="nps-overview">
+              <div className="nps-meter-row">
+                <div className="nps-meter-stack">
+                  <NpsScoreGauge score={score} sample={sample} />
+                  <div className="nps-bars" aria-label="NPS response mix">
+                    <div className="nps-bars__track">
+                      {detractors > 0 && (
+                        <span
+                          className="nps-bars__seg nps-bars__seg--detractor"
+                          style={{ width: `${pct(detractors)}%` }}
+                          role="img"
+                          tabIndex={0}
+                          aria-label={`Detractors: ${detractors} responses, ${responsePct(detractors)} percent`}
+                          onMouseEnter={showBarTip('Detractors', detractors)}
+                          onMouseLeave={hideBarTip}
+                          onFocus={showBarTip('Detractors', detractors)}
+                          onBlur={hideBarTip}
+                        />
+                      )}
+                      {passives > 0 && (
+                        <span
+                          className="nps-bars__seg nps-bars__seg--passive"
+                          style={{ width: `${pct(passives)}%` }}
+                          role="img"
+                          tabIndex={0}
+                          aria-label={`Passives: ${passives} responses, ${responsePct(passives)} percent`}
+                          onMouseEnter={showBarTip('Passives', passives)}
+                          onMouseLeave={hideBarTip}
+                          onFocus={showBarTip('Passives', passives)}
+                          onBlur={hideBarTip}
+                        />
+                      )}
+                      {promoters > 0 && (
+                        <span
+                          className="nps-bars__seg nps-bars__seg--promoter"
+                          style={{ width: `${pct(promoters)}%` }}
+                          role="img"
+                          tabIndex={0}
+                          aria-label={`Promoters: ${promoters} responses, ${responsePct(promoters)} percent`}
+                          onMouseEnter={showBarTip('Promoters', promoters)}
+                          onMouseLeave={hideBarTip}
+                          onFocus={showBarTip('Promoters', promoters)}
+                          onBlur={hideBarTip}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="nps-breakdown" aria-label="NPS legend">
+                  <div className="nps-breakdown__item">
+                    <span className="nps-breakdown__dot nps-breakdown__dot--detractor" />
+                    <span>Detractors</span>
+                    <strong>{detractors}</strong>
+                  </div>
+                  <div className="nps-breakdown__item">
+                    <span className="nps-breakdown__dot nps-breakdown__dot--passive" />
+                    <span>Passives</span>
+                    <strong>{passives}</strong>
+                  </div>
+                  <div className="nps-breakdown__item">
+                    <span className="nps-breakdown__dot nps-breakdown__dot--promoter" />
+                    <span>Promoters</span>
+                    <strong>{promoters}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {comments.length > 0 ? (
+              <div className="nps-feedback">
+                <h3 className="nps-feedback__title">Latest NPS feedback</h3>
+                {comments.map((comment, index) => {
+                  const { meta, rawConversationId, displayCid } = npsFeedbackView(comment);
+                  return (
+                    <button
+                      type="button"
+                      className={`nps-feedback__item nps-feedback__item--${meta.type}`}
+                      key={`${comment.day}-${rawConversationId || index}-${index}`}
+                      onClick={() => setSelectedFeedback(comment)}
+                      aria-label={`View ${meta.label.toLowerCase()} NPS feedback ${displayCid ? `for conversation ${displayCid}` : ''}`}
+                    >
+                      <span className="nps-feedback__emoji" title={meta.label} aria-label={meta.label}>{meta.emoji}</span>
+                      <span className="nps-feedback__score">NPS {comment.nps}/10</span>
+                      {displayCid && (
+                        <span className="nps-feedback__cid" title={`Conversation ID ${displayCid}`}>
+                          <span className="nps-feedback__cid-label">Conversation</span>
+                          {displayCid}
+                        </span>
+                      )}
+                      <span className="nps-feedback__day">{comment.day}</span>
+                      <span className="nps-feedback__comment">{comment.comment}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="nps-empty">No NPS feedback has been submitted in this period.</div>
+            )}
+          </>
+        )}
+      </Card>
+      {barTip && (
+        <div className="msg-metric-tip msg-metric-tip--above" style={{ left: `${barTip.x}px`, top: `${barTip.y}px` }} role="tooltip">
+          <div className="msg-metric-tip__name">{barTip.name}</div>
+          <div className="msg-metric-tip__detail">{barTip.detail}</div>
+        </div>
+      )}
+      <Modal
+        open={!!selectedFeedback}
+        title="NPS feedback"
+        onClose={() => setSelectedFeedback(null)}
+        className="modal--nps-feedback"
+      >
+        {selectedFeedback && (
+          <div className={`nps-feedback-view nps-feedback-view--${selectedFeedbackView.meta.type}`}>
+            <div className="nps-feedback-view__hero">
+              <span className="nps-feedback-view__emoji" aria-hidden="true">{selectedFeedbackView.meta.emoji}</span>
+              <div className="nps-feedback-view__hero-main">
+                <span className="nps-feedback-view__status">{selectedFeedbackView.meta.label}</span>
+                <div className="nps-feedback-view__score">
+                  <span className="nps-feedback-view__score-num">{formatNpsValue(selectedFeedback.nps)}</span>
+                  <span className="nps-feedback-view__score-den">/ 10</span>
+                </div>
+                <span className="nps-feedback-view__score-label">Likelihood to recommend</span>
+              </div>
+            </div>
+
+            {/* 0–10 scale — shows where this score lands across the NPS bands */}
+            <div className="nps-feedback-view__scale">
+              <div className="nps-feedback-view__scale-track" aria-hidden="true">
+                <span className="nps-feedback-view__scale-zone nps-feedback-view__scale-zone--detractor" />
+                <span className="nps-feedback-view__scale-zone nps-feedback-view__scale-zone--passive" />
+                <span className="nps-feedback-view__scale-zone nps-feedback-view__scale-zone--promoter" />
+                <span
+                  className="nps-feedback-view__scale-marker"
+                  style={{ left: `clamp(16px, ${(Math.max(0, Math.min(10, Number(selectedFeedback.nps) || 0)) / 10) * 100}%, calc(100% - 16px))` }}
+                >
+                  {formatNpsValue(selectedFeedback.nps)}
+                </span>
+              </div>
+              <div className="nps-feedback-view__scale-legend">
+                <span>Detractors · 0–6</span>
+                <span>Passives · 7–8</span>
+                <span>Promoters · 9–10</span>
+              </div>
+            </div>
+
+            <div className="nps-feedback-view__meta">
+              {selectedFeedbackView.displayCid && (
+                <div className="nps-feedback-view__meta-cell">
+                  <span className="nps-feedback-view__meta-label">Conversation</span>
+                  <strong className="nps-feedback-view__meta-val nps-feedback-view__meta-val--mono">{selectedFeedbackView.displayCid}</strong>
+                </div>
+              )}
+              <div className="nps-feedback-view__meta-cell">
+                <span className="nps-feedback-view__meta-label">Survey date</span>
+                <strong className="nps-feedback-view__meta-val">{selectedFeedback.day || '—'}</strong>
+              </div>
+              <div className="nps-feedback-view__meta-cell">
+                <span className="nps-feedback-view__meta-label">Satisfaction</span>
+                {selectedFeedback.satisfaction != null ? (
+                  <span
+                    className="nps-feedback-view__stars"
+                    title={`${selectedFeedback.satisfaction} out of 5`}
+                    aria-label={`CSAT ${selectedFeedback.satisfaction} out of 5`}
+                  >
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <span key={i} className={`nps-feedback-view__star${i <= Math.round(Number(selectedFeedback.satisfaction)) ? ' is-on' : ''}`} aria-hidden="true">★</span>
+                    ))}
+                  </span>
+                ) : (
+                  <strong className="nps-feedback-view__meta-val">—</strong>
+                )}
+              </div>
+            </div>
+
+            <figure className="nps-feedback-view__quote">
+              <span className="nps-feedback-view__quote-label">Feedback</span>
+              <blockquote className={selectedFeedback.comment ? '' : 'is-empty'}>
+                {selectedFeedback.comment || 'No written feedback was left.'}
+              </blockquote>
+            </figure>
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+function SurveyStandingRail({ pageKey, active = false, onOpen }) {
+  const [tip, setTip] = useState(null);
+  const { data } = useCachedResource(
+    pageKey ? `survey-standing:${pageKey}` : null,
+    () => surveys.summary(28, pageKey),
+  );
+  const nps = data?.nps || { score: null, promoters: 0, passives: 0, detractors: 0, sample: 0 };
+  const npsSample = Number(nps.sample) || 0;
+  const npsScore = nps.score == null ? null : Number(nps.score);
+  const rating = npsSample > 0 && Number.isFinite(npsScore) ? Math.max(0, Math.min(5, (npsScore + 100) / 40)) : 2.5;
+  const label = npsSample > 0
+    ? `NPS standing: ${rating.toFixed(1)} out of 5 from an NPS score of ${npsScore} across ${npsSample} response${npsSample === 1 ? '' : 's'} in the last 28 days`
+    : 'NPS standing: neutral default, 2.5 out of 5; no NPS responses in the last 28 days';
+  const detail = npsSample > 0
+    ? `NPS star rating: ${rating.toFixed(1)} / 5. NPS score ${npsScore}; promoters ${nps.promoters || 0}, passives ${nps.passives || 0}, detractors ${nps.detractors || 0}.`
+    : 'NPS star rating: 2.5 / 5 neutral default. No NPS responses in the last 28 days.';
+  const npsLabel = npsSample > 0
+    ? `NPS Survey metrics: ${npsScore} from ${npsSample} response${npsSample === 1 ? '' : 's'}`
+    : 'NPS Survey metrics: no responses in the last 28 days';
+  const npsDetail = npsSample > 0
+    ? `NPS score ${npsScore}. Promoters ${nps.promoters || 0}, passives ${nps.passives || 0}, detractors ${nps.detractors || 0}.`
+    : 'NPS score is not available yet. No survey responses in the last 28 days.';
+  const showTip = (name, detailText) => (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTip({ name, detail: detailText, x: rect.right + 10, y: rect.top + rect.height / 2 });
+  };
+  const hideTip = () => setTip(null);
+
+  return (
+    <div className="msg-survey-rail">
+      <button
+        type="button"
+        className={`msg-mode-card msg-nps-btn${active ? ' is-active' : ''}`}
+        onClick={onOpen}
+        aria-pressed={active}
+        title={npsLabel}
+        aria-label={npsLabel}
+        onMouseEnter={showTip('NPS Survey metrics', npsDetail)}
+        onMouseLeave={hideTip}
+        onFocus={showTip('NPS Survey metrics', npsDetail)}
+        onBlur={hideTip}
+      >
+        <span className="msg-mode-card__avatar msg-mode-card__avatar--nps" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14a8 8 0 0 1 16 0" />
+            <path d="M12 14l4-5" />
+            <path d="M7 17h10" />
+            <path d="M9 21h6" />
+          </svg>
+        </span>
+      </button>
+      <div
+        className={`msg-survey-standing${npsSample > 0 ? ' has-rating' : ''}`}
+        title={label}
+        aria-label={label}
+        tabIndex={0}
+        onMouseEnter={showTip('NPS standing', detail)}
+        onMouseLeave={hideTip}
+        onFocus={showTip('NPS standing', detail)}
+        onBlur={hideTip}
+      >
+        <div className="msg-survey-standing__stars" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((index) => (
+            <SurveyStar key={index} fill={Math.max(0, Math.min(1, rating - index)) * 100} />
+          ))}
+        </div>
+      </div>
+      {tip && (
+        <div className="msg-metric-tip" style={{ left: `${tip.x}px`, top: `${tip.y}px` }} role="tooltip">
+          <div className="msg-metric-tip__name">{tip.name}</div>
+          <div className="msg-metric-tip__detail">{tip.detail}</div>
+        </div>
+      )}
+    </div>
   );
 }
 function InboxIcon() {
@@ -199,6 +764,7 @@ export default function MessagingPage() {
   const preferredPageId = activePage?.id != null ? String(activePage.id) : null;
   const filterRef = useRef(null);
   const copyTimerRef = useRef(null);
+  const conversationCopyTimerRef = useRef(null);
   const composerInputRef = useRef(null);
   const messagesRef = useRef(null); // scroll container for the open thread
   const inboxRefreshSeqRef = useRef(0);
@@ -227,9 +793,11 @@ export default function MessagingPage() {
   const [messageMode, setMessageMode] = useState('customer'); // customer = current inbox, agent = unfiltered team view
   const [pendingAgentPeer, setPendingAgentPeer] = useState(null); // user id to DM when entering A2A (from a note)
   const [templatesView, setTemplatesView] = useState(false); // templates browse section in the content view (mode rail toggle)
+  const [npsView, setNpsView] = useState(false); // NPS survey metrics section in the content view
   const [agentView, setAgentView] = useState(storedAgentView); // 'ai' = AI Agent · 'foryou' = live-agent queue
   const [filterOpen, setFilterOpen] = useState(false); // page-filter dropdown
   const [copiedId, setCopiedId] = useState(null); // message whose copy just succeeded
+  const [copiedConversationId, setCopiedConversationId] = useState(null); // public conversation id whose copy just succeeded
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -481,9 +1049,10 @@ export default function MessagingPage() {
     visibleConversations.find((conversation) => conversation.id === selectedConversationId) ||
     visibleConversations[0] ||
     null;
+  const activeConversationCid = activeConversation ? conversationCid(activeConversation) : '';
   const composerPageId = activeConversation?.pageId || selectedPageId || preferredPageId;
 
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isAdminRole(user?.role);
 
   // Notes for the open thread. activeIdRef lets the (stable) SSE subscription check
   // whether a note:new / note:deleted event belongs to the conversation on screen
@@ -1023,19 +1592,38 @@ export default function MessagingPage() {
       .catch(() => {});
   };
 
-  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
+  const handleCopyConversationId = () => {
+    if (!activeConversationCid || !navigator.clipboard) return;
+    navigator.clipboard
+      .writeText(activeConversationCid)
+      .then(() => {
+        setCopiedConversationId(activeConversationCid);
+        clearTimeout(conversationCopyTimerRef.current);
+        conversationCopyTimerRef.current = setTimeout(() => setCopiedConversationId(null), 1500);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(
+    () => () => {
+      clearTimeout(copyTimerRef.current);
+      clearTimeout(conversationCopyTimerRef.current);
+    },
+    [],
+  );
 
   return (
     <div className={`messaging-page${templateOpen || productsOpen ? ' is-template-open' : ''}`}>
       <aside className="msg-mode-rail" aria-label="Messaging mode">
         <button
           type="button"
-          className={`msg-mode-card${messageMode === 'agent' && !templatesView ? ' is-active' : ''}`}
+          className={`msg-mode-card${messageMode === 'agent' && !templatesView && !npsView ? ' is-active' : ''}`}
           onClick={() => {
             setMessageMode('agent');
             setTemplatesView(false);
+            setNpsView(false);
           }}
-          aria-pressed={messageMode === 'agent' && !templatesView}
+          aria-pressed={messageMode === 'agent' && !templatesView && !npsView}
           aria-label="Agent to Agent"
           title="Agent to Agent"
         >
@@ -1050,12 +1638,13 @@ export default function MessagingPage() {
         </button>
         <button
           type="button"
-          className={`msg-mode-card${messageMode === 'customer' && !templatesView ? ' is-active' : ''}`}
+          className={`msg-mode-card${messageMode === 'customer' && !templatesView && !npsView ? ' is-active' : ''}`}
           onClick={() => {
             setMessageMode('customer');
             setTemplatesView(false);
+            setNpsView(false);
           }}
-          aria-pressed={messageMode === 'customer' && !templatesView}
+          aria-pressed={messageMode === 'customer' && !templatesView && !npsView}
           aria-label="Agent to Customer"
           title="Agent to Customer"
         >
@@ -1072,7 +1661,10 @@ export default function MessagingPage() {
         <button
           type="button"
           className={`msg-mode-card${templatesView ? ' is-active' : ''}`}
-          onClick={() => setTemplatesView(true)}
+          onClick={() => {
+            setTemplatesView(true);
+            setNpsView(false);
+          }}
           aria-pressed={templatesView}
           aria-label="Templates"
           title="Templates"
@@ -1086,10 +1678,20 @@ export default function MessagingPage() {
             </svg>
           </span>
         </button>
+        <SurveyStandingRail
+          pageKey={selectedPageId || preferredPageId}
+          active={npsView}
+          onOpen={() => {
+            setTemplatesView(false);
+            setNpsView(true);
+          }}
+        />
       </aside>
       <section className="msg-workspace">
         {templatesView ? (
           <TemplatesSection accountId={selectedPageId || preferredPageId} />
+        ) : npsView ? (
+          <NpsMetricsSection pageKey={selectedPageId || preferredPageId} pageName={filterLabel} />
         ) : isAgentToAgent ? (
           <AgentChat openWithUserId={pendingAgentPeer} onOpened={() => setPendingAgentPeer(null)} />
         ) : (
@@ -1318,6 +1920,19 @@ export default function MessagingPage() {
                   </div>
                 </div>
                 <div className="msg-thread__meta">
+                  <span className="msg-thread-id" title={`Conversation ID ${activeConversationCid}`}>
+                    <span className="msg-thread-id__label">ID</span>
+                    <span className="msg-thread-id__value">{activeConversationCid}</span>
+                    <button
+                      type="button"
+                      className={`msg-thread-id__copy${copiedConversationId === activeConversationCid ? ' is-copied' : ''}`}
+                      onClick={handleCopyConversationId}
+                      title={copiedConversationId === activeConversationCid ? 'Copied' : 'Copy conversation ID'}
+                      aria-label={copiedConversationId === activeConversationCid ? 'Copied conversation ID' : 'Copy conversation ID'}
+                    >
+                      {copiedConversationId === activeConversationCid ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                    </button>
+                  </span>
                   <button
                     type="button"
                     className="msg-notes-btn"
@@ -1427,14 +2042,9 @@ export default function MessagingPage() {
                                   title={copiedId === message.id ? 'Copied' : 'Copy message'}
                                 >
                                   {copiedId === message.id ? (
-                                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                      <polyline points="20 6 9 17 4 12" />
-                                    </svg>
+                                    <CheckIcon size={13} />
                                   ) : (
-                                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                                    </svg>
+                                    <CopyIcon size={13} />
                                   )}
                                 </button>
                               )}

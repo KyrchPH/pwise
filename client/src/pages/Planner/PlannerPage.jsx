@@ -234,7 +234,7 @@ export default function PlannerPage() {
         {/* Plan hero — overall progress toward completing every goal. */}
         <div className="plan-hero">
           <div className="plan-hero__main">
-            <div className="plan-hero__title">Your goals</div>
+            <div className="plan-hero__title">Our Goals</div>
             <p className="plan-hero__sub">Track progress toward every target you’ve set for your pages.</p>
             <div className="plan-hero__headline">{headline}</div>
             <div

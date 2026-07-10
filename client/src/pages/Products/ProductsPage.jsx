@@ -375,7 +375,7 @@ export default function ProductsPage() {
             <span>Cart</span>
             {cartCount > 0 && <span className="cart-button__count">{cartCount}</span>}
           </button>
-          {isAdmin && !formOpen && activeId != null && (
+          {isAdmin && activeId != null && (
             <Button size="sm" onClick={startAdd}>
               Add product
             </Button>
@@ -389,17 +389,6 @@ export default function ProductsPage() {
             {isAdmin ? 'Select a page from the sidebar to manage its products.' : 'Select a page from the sidebar to view its products.'}
           </p>
         </Card>
-      ) : formOpen ? (
-        <ProductForm
-          product={editProduct}
-          accountId={activeId}
-          vaultFolderId={activePage?.vault_folder_id ?? null}
-          onClose={() => {
-            setFormOpen(false);
-            setEditProduct(null);
-          }}
-          onSaved={onSaved}
-        />
       ) : loading ? (
         <Spinner label="Loading products…" />
       ) : products.length === 0 ? (
@@ -445,6 +434,19 @@ export default function ProductsPage() {
             );
           })}
         </div>
+      )}
+
+      {formOpen && activeId != null && (
+        <ProductForm
+          product={editProduct}
+          accountId={activeId}
+          vaultFolderId={activePage?.vault_folder_id ?? null}
+          onClose={() => {
+            setFormOpen(false);
+            setEditProduct(null);
+          }}
+          onSaved={onSaved}
+        />
       )}
 
       <Modal

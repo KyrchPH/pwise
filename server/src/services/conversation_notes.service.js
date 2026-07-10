@@ -1,6 +1,7 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { emitMessagingEvent } from './messaging.events.js';
+import { maybeSendForConversation } from './surveys.service.js';
 
 // Per-conversation notes — short, immutable, author-stamped context cards shown on
 // the conversation view (a floating sticky + a side drawer). Plain text; links are
@@ -66,6 +67,10 @@ export async function create(conversationId, actor = {}, data = {}) {
   const rows = await query('SELECT * FROM conversation_notes WHERE id = ?', [result.insertId]);
   const note = toSafe(rows[0]);
   emitMessagingEvent({ type: 'note:new', conversationId: String(cid), note }, await audienceForConversation(cid));
+  // A note marks the conversation completed → maybe survey the customer. Deliberately
+  // fire-and-forget and SILENT: nothing about the roll or the send reaches the response
+  // or the SSE stream, so the agent can never tell whether this customer was surveyed.
+  maybeSendForConversation(cid, actor).catch((err) => console.warn('[surveys] send check failed:', err.message));
   return note;
 }
 

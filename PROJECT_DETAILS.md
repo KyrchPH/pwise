@@ -34,10 +34,10 @@ The system is split into a **management app** and an **automation engine**:
 ### 1. Accounts & Access Control (invite-only)
 - **No open signup** — registration is invite-only.
 - **Admins generate single-use invite links** (unique token, optional expiry); new users join via a `/signup?token=…` link that validates and consumes the invite.
-- **Roles:** `admin` and `user`.
+- **Roles:** `super_admin`, `admin`, and `user`.
 - **Admin "Accounts" panel:** create/list invites, list users, activate/deactivate accounts, and soft-delete users. (Admins can't act on their own account.)
 - **JWT authentication** with the user re-validated against the database on every request — so deactivating or deleting an account takes effect instantly.
-- **First admin** is bootstrapped via a one-off CLI command (since signup is invite-only).
+- **First super admin** is bootstrapped via a one-off CLI command (since signup is invite-only).
 - Login-only sign-in page with password show/hide.
 
 ### 2. Content Pool (uploading & managing posts)

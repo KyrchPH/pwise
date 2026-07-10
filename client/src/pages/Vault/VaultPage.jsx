@@ -6,6 +6,7 @@ import { downloadVaultItem, formatBytes, getVaultMediaType, useVault } from '../
 import { apiError } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { isAdminRole } from '../../config/modules.js';
 import * as connectionsApi from '../../services/connections.service.js';
 
 function DownloadIcon() {
@@ -457,7 +458,7 @@ export default function VaultPage() {
   const toast = useToast();
   const { childrenOf, pathTo, createFolder, uploadFiles, moveItem, deleteItem, getItem, loading, setItemAiHidden, setItemMeta, setFolderAccess, getFolderAccess } = useVault();
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isAdminRole(user?.role);
   const [folderId, setFolderId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);

@@ -26,6 +26,19 @@ export function verifyToken(token) {
   return jwt.verify(token, jwtSecret);
 }
 
+// A short-lived READ-ONLY token the Wise Assistant n8n workflow uses to fetch the
+// asking user's data back through the normal REST API. It rides the caller's own
+// session (sid) — so it dies with a logout — and carries scope:'wise_assistant',
+// which requireAuth rejects on any non-GET request. The user's real login token is
+// never forwarded to n8n.
+export function signAssistantToken(user, sessionId) {
+  return jwt.sign(
+    { sub: user.id, email: user.email, sid: Number(sessionId), scope: 'wise_assistant' },
+    jwtSecret,
+    { expiresIn: '10m' },
+  );
+}
+
 // ── Brute-force lockout + device trust ───────────────────────────────────────
 const LOCK_MAX_ATTEMPTS = 5; // wrong passwords before the account locks
 const LOCK_MINUTES = 30; // how long it stays locked (lazy auto-unlock)
@@ -395,8 +408,10 @@ export async function createSession(userId, { ip, userAgent } = {}) {
 // Verify a bearer token AND its session: the token's session (sid) must still exist and
 // not be revoked — this is what makes "log out of this / other devices" take effect.
 // Throws on a malformed/expired token (verifyToken); returns null otherwise (no user or
-// session, or revoked). On success returns { user, sessionId }. Bumps last_seen_at at
-// most once a minute so it's not a write per request. Shared by requireAuth + SSE.
+// session, or revoked). On success returns { user, sessionId, scope } (scope is null for
+// normal login tokens, 'wise_assistant' for the assistant's read-only token). Bumps
+// last_seen_at at most once a minute so it's not a write per request. Shared by
+// requireAuth + SSE.
 export async function resolveSession(token) {
   const payload = verifyToken(token);
   const user = await findActiveById(payload.sub);
@@ -412,7 +427,7 @@ export async function resolveSession(token) {
   if (!s.last_seen_at || Date.now() - new Date(s.last_seen_at).getTime() > 60_000) {
     await query('UPDATE login_history SET last_seen_at = NOW() WHERE id = ?', [sid]).catch(() => {});
   }
-  return { user, sessionId: sid };
+  return { user, sessionId: sid, scope: payload.scope || null };
 }
 
 // Revoke ONE session (log out a specific device). Scoped to the owner.

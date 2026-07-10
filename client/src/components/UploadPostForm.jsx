@@ -7,13 +7,40 @@ import { apiError } from '../services/api.js';
 import env from '../config/env.js';
 import { invalidateCache, useCachedResource } from '../hooks/useCachedResource.js';
 import { useToast } from '../context/ToastContext.jsx';
-import { Card, Button, Field, Modal, Toggle, TimeSelect, ProgressBar, Dropdown, Spinner } from './ui.jsx';
+import { Button, Field, Modal, Toggle, TimeSelect, ProgressBar, Dropdown, Spinner } from './ui.jsx';
 import MediaDropzone from './MediaDropzone.jsx';
 import { useActiveRender } from '../context/ActiveRenderContext.jsx';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 const dateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const todayStr = () => dateStr(new Date());
+
+const PreviewIcon = ({ video = false }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width="42"
+    height="42"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.7"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {video ? (
+      <>
+        <rect x="3" y="5" width="14" height="14" rx="2" />
+        <path d="m17 9 4-2.5v11L17 15" />
+      </>
+    ) : (
+      <>
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <circle cx="8.5" cy="9" r="1.5" />
+        <path d="m21 15-4.5-4.5L5 20" />
+      </>
+    )}
+  </svg>
+);
 
 // Default schedule: today + the next :00/:30 slot after now (rounds the current
 // time up to the next half-hour; rolls to tomorrow if it's past 23:30).
@@ -325,22 +352,26 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   const renderBusy = activeStatus === 'uploading' || activeStatus === 'rendering';
 
   const fieldsEl = (
-    <>
+    <div className="upload-fields">
       {env.templatesEnabled && (
-        <div className="field">
-          <div className="row row--between" style={{ gap: 12 }}>
-            <div>
-              <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
-                Use template
-              </span>
-              <span className="text-sm text-muted">
-                Build this post from a saved Creatomate template instead of uploading media.
-              </span>
-            </div>
-            <Toggle checked={useTemplate} onChange={setUseTemplate} />
+        <div className="upload-option-row">
+          <div className="upload-option-row__copy">
+            <span className="upload-option-row__title">Use template</span>
+            <span className="upload-option-row__text">Create from a saved Creatomate template.</span>
           </div>
+          <Toggle checked={useTemplate} onChange={setUseTemplate} />
         </div>
       )}
+
+      <section className="upload-section">
+        <div className="upload-section__head">
+          <div>
+            <h2 className="upload-section__title">{useTemplate ? 'Template media' : 'Media'}</h2>
+            <p className="upload-section__sub">
+              {useTemplate ? 'Generate a finished video before adding the post.' : 'Upload media, or leave this empty for a text post.'}
+            </p>
+          </div>
+        </div>
 
       {useTemplate ? (
         <>
@@ -363,7 +394,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
                 onChange={onSelectTemplate}
               />
             )}
-            <span className="field__hint">Managed in Settings → Creatomate templates.</span>
+            <span className="field__hint">Managed in Settings.</span>
           </div>
 
           {templateId && (
@@ -374,7 +405,7 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
                 </span>
                 <MediaDropzone accept="video/*" file={templateVideo} onFile={handleTemplateVideo} />
                 <span className="field__hint">
-                  Uploaded only when you generate, then fed into the template’s video slot.
+                  Uploaded only when you generate.
                 </span>
               </div>
 
@@ -388,39 +419,33 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
                     setGeneratedVideoUrl(null); // changing inputs makes a prior render stale
                     activeRender.clear();
                   }}
-                  placeholder="Text to show in the video (optional)"
+                  placeholder="Optional template text"
                 />
-                <span className="field__hint">Injected into the template’s text element.</span>
+                <span className="field__hint">Injected into the template text element.</span>
               </div>
 
               <div className="field">
                 <span className="field__label">In-video image</span>
                 <MediaDropzone accept="image/*" file={templateImage} onFile={handleTemplateImage} />
-                <span className="field__hint">Optional — injected into the template’s image element.</span>
+                <span className="field__hint">Optional image overlay for this template.</span>
               </div>
 
               {generatedVideoUrl ? (
-                <div className="field">
-                  <div className="row row--between" style={{ gap: 12 }}>
-                    <span className="text-sm" style={{ color: '#1f8f43', fontWeight: 600 }}>
-                      ✓ Generated video selected
-                    </span>
-                    <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={generating || renderBusy}>
-                      Regenerate
-                    </Button>
-                  </div>
+                <div className="upload-status-row">
+                  <span className="upload-status-row__ok">Generated video selected</span>
+                  <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={generating || renderBusy}>
+                    Regenerate
+                  </Button>
                 </div>
               ) : (
-                <div className="field">
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Button type="button" variant="accent" onClick={generate} disabled={generating || renderBusy || !templateVideo}>
-                      {generating && genPhase === 'uploading'
-                        ? `Uploading… ${genProgress}%`
-                        : generating || renderBusy
-                          ? 'Generating…'
-                          : 'Generate with Template'}
-                    </Button>
-                  </div>
+                <div className="upload-action-row">
+                  <Button type="button" variant="accent" onClick={generate} disabled={generating || renderBusy || !templateVideo}>
+                    {generating && genPhase === 'uploading'
+                      ? `Uploading… ${genProgress}%`
+                      : generating || renderBusy
+                        ? 'Generating…'
+                        : 'Generate with Template'}
+                  </Button>
                   {/* Progress shows in the floating top-right indicator (RenderIndicator),
                       so it stays visible while you keep working or switch sections. */}
                 </div>
@@ -430,13 +455,23 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
         </>
       ) : (
         <div className="field">
-          <span className="field__label">Media (image or video)</span>
+          <span className="field__label">Media file</span>
           <MediaDropzone file={file} onFile={handleFile} />
-          <span className="field__hint">Optional — text-only posts are allowed</span>
+          <span className="field__hint">Optional. Text-only posts are allowed.</span>
         </div>
       )}
 
-      <Field label="Caption" hint="Optional — a caption or media is required">
+      </section>
+
+      <section className="upload-section">
+        <div className="upload-section__head">
+          <div>
+            <h2 className="upload-section__title">Caption</h2>
+            <p className="upload-section__sub">Write the message that appears with this post.</p>
+          </div>
+        </div>
+
+      <Field hint="A caption or media is required.">
         <textarea
           className="textarea"
           value={caption}
@@ -444,37 +479,34 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
           placeholder="Write your caption…"
         />
       </Field>
+      </section>
 
-      <div className="field">
-        <div className="row row--between" style={{ gap: 12 }}>
-          <div>
-            <span className="field__label" style={{ display: 'block', marginBottom: 2 }}>
-              Scheduled posting
-            </span>
-            <span className="text-sm text-muted">
-              {scheduled ? 'Publishes at the date & time you set.' : 'Publishes right away on the next posting run.'}
+      <section className="upload-section">
+        <div className="upload-option-row upload-option-row--in-section">
+          <div className="upload-option-row__copy">
+            <span className="upload-option-row__title">Scheduled posting</span>
+            <span className="upload-option-row__text">
+              {scheduled ? 'Publishes at the selected slot.' : 'Publishes on the next posting run.'}
             </span>
           </div>
           <Toggle checked={scheduled} onChange={setScheduled} />
         </div>
-      </div>
 
       {scheduled && (
-        <div className="field">
+        <div className="field upload-schedule-field">
           <span className="field__label">
             Schedule <span className="field__req">*</span>
           </span>
-          <div className="grid-2">
+          <div className="upload-schedule-grid">
             <input className="input" type="date" min={todayStr()} value={schedule.date} onChange={setSched('date')} required />
             <TimeSelect value={schedule.time} onChange={setSched('time')} date={schedule.date} />
           </div>
-          <span className="field__hint">
-            Posts at this exact date and time (one post per slot). Times snap to :00 / :30.
-          </span>
+          <span className="field__hint">One post per slot. Times snap to :00 / :30.</span>
         </div>
       )}
+      </section>
 
-    </>
+    </div>
   );
 
   const submitBtnEl = (
@@ -503,9 +535,9 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
   // Page layout keeps the button inline; the modal (embedded) splits the form
   // into a scrolling body + a fixed footer so the header/footer stay put.
   const formEl = (
-    <form onSubmit={submit}>
+    <form className="upload-form" onSubmit={submit}>
       {fieldsEl}
-      {submitBtnEl}
+      <div className="upload-form__actions">{submitBtnEl}</div>
     </form>
   );
 
@@ -516,20 +548,22 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     </form>
   );
 
+  const previewReady = useTemplate ? !!generatedVideoUrl : !!preview;
+
   const previewEl = useTemplate ? (
     generatedVideoUrl ? (
       <>
-        <video src={generatedVideoUrl} controls style={{ width: '100%', borderRadius: 'var(--r-sm)' }} />
-        <p className="text-sm text-muted mt-lg">
+        <video className="upload-preview__asset" src={generatedVideoUrl} controls />
+        <p className="upload-preview__meta">
           Generated video{selectedTemplate ? ` from “${selectedTemplate.name}”` : ''}
         </p>
       </>
     ) : (
       <>
-        <div className="thumb" style={{ height: 220, borderRadius: 'var(--r-sm)' }}>
-          <span className="thumb__placeholder">🎬</span>
+        <div className="upload-preview__empty">
+          <PreviewIcon video />
         </div>
-        <p className="text-sm text-muted mt-lg">
+        <p className="upload-preview__meta">
           {selectedTemplate ? `Template: ${selectedTemplate.name}` : 'No template selected.'}
         </p>
       </>
@@ -538,16 +572,16 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
     <>
       {preview ? (
         isVideo ? (
-          <video src={preview} controls style={{ width: '100%', borderRadius: 'var(--r-sm)' }} />
+          <video className="upload-preview__asset" src={preview} controls />
         ) : (
-          <img src={preview} alt="preview" style={{ width: '100%', borderRadius: 'var(--r-sm)' }} />
+          <img className="upload-preview__asset" src={preview} alt="preview" />
         )
       ) : (
-        <div className="thumb" style={{ height: 220, borderRadius: 'var(--r-sm)' }}>
-          <span className="thumb__placeholder">🖼️</span>
+        <div className="upload-preview__empty">
+          <PreviewIcon />
         </div>
       )}
-      <p className="text-sm text-muted mt-lg">
+      <p className="upload-preview__meta">
         {file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB` : 'No file selected.'}
       </p>
     </>
@@ -558,12 +592,29 @@ export default function UploadPostForm({ defaultDate = null, showPreview = false
       {embedded ? (
         embeddedFormEl
       ) : showPreview ? (
-        <div className="grid-2">
-          <Card className="card--pad">{formEl}</Card>
-          <Card className="card--pad">
-            <div className="field__label">Preview</div>
-            {previewEl}
-          </Card>
+        <div className="upload-composer">
+          <div className="upload-composer__main">
+            <div className="upload-panel">
+              <div className="upload-panel__head">
+                <div>
+                  <h2 className="upload-panel__title">Post details</h2>
+                  <p className="upload-panel__sub">Add media, caption, and posting time in one place.</p>
+                </div>
+              </div>
+              {formEl}
+            </div>
+          </div>
+          <aside className="upload-composer__side">
+            <div className="upload-preview">
+              <div className="upload-preview__head">
+                <span className="upload-preview__title">Preview</span>
+                <span className={`upload-preview__state${previewReady ? ' is-ready' : ''}`}>
+                  {previewReady ? 'Ready' : 'Waiting'}
+                </span>
+              </div>
+              <div className="upload-preview__body">{previewEl}</div>
+            </div>
+          </aside>
         </div>
       ) : (
         formEl

@@ -52,6 +52,16 @@ export const setModuleAccess = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+export const setRole = asyncHandler(async (req, res) => {
+  const result = await admin.setRole(req.user, req.params.id, req.body?.role);
+  sendSuccess(res, result);
+});
+
+export const transferSuperAdmin = asyncHandler(async (req, res) => {
+  const result = await admin.transferSuperAdmin(req.user, req.params.id);
+  sendSuccess(res, result);
+});
+
 // Global automation pause switches (app-wide) -------------------------------
 export const getPause = asyncHandler(async (req, res) => {
   sendSuccess(res, await appSettings.getPauseState());

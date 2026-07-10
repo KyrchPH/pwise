@@ -5,11 +5,12 @@ import { usePages } from '../context/PageContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import env from '../config/env.js';
-import { canAccessModule } from '../config/modules.js';
+import { canAccessModule, isAdminRole } from '../config/modules.js';
 import * as pagesService from '../services/pages.service.js';
 import * as connections from '../services/connections.service.js';
 import { subscribe } from '../services/messaging.service.js';
 import usePresenceHeartbeat from '../hooks/usePresenceHeartbeat.js';
+import { subscribeWiseUi } from '../utils/wiseUiBus.js';
 import useTabTitleNotifier from '../hooks/useTabTitleNotifier.js';
 import { PresenceProvider } from '../context/PresenceContext.jsx';
 import { Modal, PageAvatar, UserAvatar } from './ui.jsx';
@@ -117,10 +118,10 @@ const PRIMARY_NAV = [
   {
     to: '/insights',
     label: 'Insights',
-    moduleId: 'analytics',
+    moduleId: 'insights',
     children: [
-      { to: '/insights?view=overview', label: 'Overview', view: 'overview' },
-      { to: '/insights', label: 'Performance', view: 'performance' },
+      { to: '/insights', label: 'Overview', view: 'overview' },
+      { to: '/insights?view=performance', label: 'Performance', view: 'performance' },
       { to: '/insights?view=messaging', label: 'Messaging', view: 'messaging' },
       { to: '/insights?view=contents', label: 'Contents', view: 'contents' },
     ],
@@ -136,6 +137,7 @@ const PRIMARY_NAV = [
     moduleId: 'post-pool',
     children: [
       { to: '/post-pool', label: 'Posts & reels', postPoolView: 'contents' },
+      { to: '/post-pool?view=stories', label: 'Stories', postPoolView: 'stories' },
       { to: '/post-pool?view=comments', label: 'Comments', postPoolView: 'comments' },
     ],
     icon: (
@@ -340,7 +342,7 @@ export default function AppLayout() {
   const { pathname, search, hash } = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isAdminRole(user?.role);
   const canConn = canAccessModule(user, 'connections');
   const canMsg = canAccessModule(user, 'messages');
   const isMessagingPage = pathname === '/messages';
@@ -352,6 +354,7 @@ export default function AppLayout() {
   const isLogsPage = pathname === '/logs';
   const isAccountsPage = pathname === '/accounts';
   const isPostPoolPage = pathname === '/post-pool';
+  const isInsightsPage = pathname === '/insights';
   // The Comments sub-view (/post-pool?view=comments) is a full-height inbox like Messaging.
   const isCommentsView = isPostPoolPage && new URLSearchParams(search).get('view') === 'comments';
   const isSettingsPage = pathname === '/settings';
@@ -404,6 +407,22 @@ export default function AppLayout() {
   }, [pinned]);
   const togglePin = (to) =>
     setPinned((prev) => (prev.includes(to) ? prev.filter((t) => t !== to) : [...prev, to]));
+
+  // Let the Wise Assistant drive the sidebar: collapse/expand and pin/unpin nav items.
+  // The assistant emits an op; we resolve it against the live state here.
+  useEffect(() =>
+    subscribeWiseUi((event) => {
+      if (event.kind === 'sidebar') {
+        setCollapsed((c) => (event.op === 'collapse' ? true : event.op === 'expand' ? false : !c));
+      } else if (event.kind === 'pin') {
+        setPinned((prev) => {
+          const has = prev.includes(event.path);
+          if (event.op === 'pin') return has ? prev : [...prev, event.path];
+          if (event.op === 'unpin') return has ? prev.filter((p) => p !== event.path) : prev;
+          return has ? prev.filter((p) => p !== event.path) : [...prev, event.path]; // toggle
+        });
+      }
+    }), []);
 
   // Collapsible nav sections (Quick Access / Workspace / General). Stored as the list
   // of collapsed section ids so the choice persists across reloads.
@@ -525,7 +544,7 @@ export default function AppLayout() {
     const className = ['nav__link', n.extraClass, locked && 'is-locked'].filter(Boolean).join(' ');
     const isPinned = pinnedSet.has(n.to);
     const query = new URLSearchParams(search);
-    const insightsView = pathname === '/insights' ? query.get('view') || 'performance' : '';
+    const insightsView = pathname === '/insights' ? query.get('view') || 'overview' : '';
     const postPoolView = pathname === '/post-pool' ? query.get('view') || 'contents' : '';
     const settingsSection = pathname === '/settings' ? (hash === '#facebook-pages' ? 'pages' : query.get('section') || 'posting') : '';
     const children = (n.children || []).filter((child) => child.enabled !== false && !(child.admin && !isAdmin));
@@ -733,7 +752,7 @@ export default function AppLayout() {
               </button>
             </div>
           ) : (
-            user?.role === 'admin' && (
+            isAdmin && (
               <Link to="/settings" className="sidebar__footlink">
                 + Connect a page
               </Link>
@@ -867,7 +886,7 @@ export default function AppLayout() {
           {/* Keyed on the active page: switching pages remounts the routed screen
               so it reloads its data for the newly-selected page. */}
           <div
-            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage || isSettingsPage ? ' content__inner--fill' : ''}${isCommentsView ? ' content__inner--comments' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage || isPostPoolPage || isSettingsPage ? ' content__inner--wide' : ''}`}
+            className={`content__inner${isMessagingPage ? ' content__inner--messages' : ''}${isVaultPage || isConnectionsPage || isCalendarPage || isSettingsPage ? ' content__inner--fill' : ''}${isCommentsView ? ' content__inner--comments' : ''}${isProductsPage || isActivityPage || isLogsPage || isAccountsPage || isPostPoolPage || isSettingsPage || isInsightsPage ? ' content__inner--wide' : ''}`}
             key={activeId ?? 'no-page'}
           >
             {gated ? (
@@ -898,31 +917,45 @@ export default function AppLayout() {
         }
         footer={
           isAdmin ? (
-            <Link to="/settings#facebook-pages" className="btn btn--primary" onClick={() => setPickerOpen(false)}>
+            <Link to="/settings#facebook-pages" className="btn btn--primary btn--flat" onClick={() => setPickerOpen(false)}>
               + Add page
             </Link>
           ) : null
         }
       >
-        <ul className="page-picker">
+        <div className="page-picker">
+          <div className="page-picker__summary">
+            <div className="page-picker__summary-copy">
+              <span className="page-picker__eyebrow">Current page</span>
+              <strong>{activePage?.account_name || 'No page selected'}</strong>
+              {activeFollowers != null && <span>{formatCount(activeFollowers)} followers</span>}
+            </div>
+            {activePage && <PageAvatar page={activePage} className="page-picker__summary-avatar" />}
+          </div>
+
+          <ul className="page-picker__list" aria-label="Connected pages">
           {pages
             .filter((p) => p.is_active)
             .map((p) => {
               const expired = expiredIds.has(p.id) || brokenPageIds.has(p.id);
+              const active = p.id === activeId;
               return (
                 <li key={p.id} className="page-picker__row">
                   <button
                     type="button"
-                    className={`page-picker__item${p.id === activeId ? ' is-active' : ''}${expired ? ' is-expired' : ''}`}
+                    className={`page-picker__item${active ? ' is-active' : ''}${expired ? ' is-expired' : ''}`}
                     onClick={() => {
                       switchPage(p.id);
                       setPickerOpen(false);
                     }}
                   >
                     <PageAvatar page={p} className="page-picker__photo" />
-                    <span className="page-picker__name">{p.account_name}</span>
+                    <span className="page-picker__copy">
+                      <span className="page-picker__name">{p.account_name}</span>
+                      <span className="page-picker__meta">{active ? 'Selected page' : 'Available workspace'}</span>
+                    </span>
                     {expired && <span className="badge badge--expired page-picker__badge">Expired</span>}
-                    {p.id === activeId && !expired && (
+                    {active && !expired && (
                       <span className="page-picker__check" aria-hidden="true">
                         ✓
                       </span>
@@ -936,7 +969,8 @@ export default function AppLayout() {
                 </li>
               );
             })}
-        </ul>
+          </ul>
+        </div>
       </Modal>
     </div>
     </PresenceProvider>

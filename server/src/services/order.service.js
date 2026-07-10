@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query, getConnection } from '../config/db.js';
+import { isAdminRole } from '../config/modules.js';
 import ApiError from '../utils/ApiError.js';
 import { env } from '../config/env.js';
 import * as pageDiscounts from './page_discounts.service.js';
@@ -140,9 +141,19 @@ async function findById(id) {
 
 // ---- Create -----------------------------------------------------------------
 
-export async function createAgreement({ actor = {}, accountId, currency, items, selectedDiscountIds = [], language, delivery = {} } = {}) {
+export async function createAgreement({ actor = {}, accountId, currency, items, selectedDiscountIds = [], language, delivery = {}, conversationId = null } = {}) {
   const acc = requireAccount(accountId);
   const normItems = normalizeItems(items);
+
+  // Optional attribution: when checkout is started from the inbox, bind the sale to
+  // that conversation. Best-effort — only kept if the id is a real thread on THIS
+  // page, so a stale/foreign id silently drops to NULL rather than blocking checkout.
+  let convId = null;
+  const cid = Number(conversationId);
+  if (Number.isInteger(cid) && cid > 0) {
+    const cRows = await query('SELECT id FROM conversations WHERE id = ? AND account_id = ? LIMIT 1', [cid, acc]);
+    if (cRows.length) convId = cid;
+  }
 
   const customerName = cleanText(delivery.customerName, 255, { required: true, label: 'full name' });
   const deliveryAddress = cleanText(delivery.deliveryAddress, 2000, { required: true, label: 'delivery address' });
@@ -171,12 +182,12 @@ export async function createAgreement({ actor = {}, accountId, currency, items, 
 
   const res = await query(
     `INSERT INTO order_agreements
-       (token, account_id, created_by, created_by_name, currency, customer_name, delivery_address,
+       (token, account_id, conversation_id, created_by, created_by_name, currency, customer_name, delivery_address,
         contact_number, email, notes, language, items, discounts, subtotal, total_discount, total,
         terms, status, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
     [
-      token, acc, actor.id ?? null, actor.name ?? null, cur, customerName, deliveryAddress,
+      token, acc, convId, actor.id ?? null, actor.name ?? null, cur, customerName, deliveryAddress,
       contactNumber, email, notes, lang, JSON.stringify(normItems), JSON.stringify(result.applied),
       result.subtotal, result.totalDiscount, result.total, terms, expiresAt,
     ],
@@ -189,7 +200,7 @@ export async function createAgreement({ actor = {}, accountId, currency, items, 
 
 function assertOwner(row, actor) {
   if (!row) throw ApiError.notFound('agreement not found');
-  if (actor?.role !== 'admin' && Number(row.created_by) !== Number(actor?.id)) {
+  if (!isAdminRole(actor?.role) && Number(row.created_by) !== Number(actor?.id)) {
     throw ApiError.forbidden('this agreement belongs to another user');
   }
 }
@@ -259,11 +270,11 @@ export async function confirmAgreement(token) {
     const now = new Date();
     const [orderRes] = await conn.query(
       `INSERT INTO orders
-         (agreement_id, account_id, created_by, created_by_name, currency, customer_name, delivery_address,
+         (agreement_id, account_id, conversation_id, created_by, created_by_name, currency, customer_name, delivery_address,
           contact_number, email, notes, subtotal, total_discount, total, status, confirmed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       [
-        row.id, row.account_id, row.created_by, row.created_by_name, row.currency, row.customer_name,
+        row.id, row.account_id, row.conversation_id ?? null, row.created_by, row.created_by_name, row.currency, row.customer_name,
         row.delivery_address, row.contact_number, row.email, row.notes, row.subtotal, row.total_discount,
         row.total, now,
       ],
@@ -348,7 +359,7 @@ export async function listOrders({ actor = {}, accountId, status = null, ownerId
   const where = ['o.account_id = ?'];
   const params = [acc];
   // Owner scope: non-admins only ever see their own; admins may filter by a specific owner.
-  if (actor.role !== 'admin') {
+  if (!isAdminRole(actor.role)) {
     where.push('o.created_by = ?');
     params.push(actor.id);
   } else if (ownerId != null && ownerId !== '' && ownerId !== 'all') {
@@ -374,7 +385,7 @@ async function getOrderRowGuarded(id, actor) {
   const rows = await query('SELECT * FROM orders WHERE id = ? LIMIT 1', [id]);
   const row = rows[0];
   if (!row) throw ApiError.notFound('order not found');
-  if (actor?.role !== 'admin' && Number(row.created_by) !== Number(actor?.id)) {
+  if (!isAdminRole(actor?.role) && Number(row.created_by) !== Number(actor?.id)) {
     throw ApiError.forbidden('this order belongs to another user');
   }
   return row;

@@ -8,6 +8,7 @@ import { createFolder } from './vault.service.js';
 import { env } from '../config/env.js';
 import { composeAgentSystemMessages, DEFAULT_AGENT_PROMPTS, AGENT_ROLES } from './ai_prompt.service.js';
 import { resolveConfig as resolveAnalyticsConfig } from './messaging_analytics.service.js';
+import { resolveSurveyConfig } from './surveys.service.js';
 import { normalizeBusinessProfile, parseBusinessProfile } from '../utils/business_profile.util.js';
 
 // Connected Facebook pages. The list is shared/global (like the post pool); user_id
@@ -40,6 +41,8 @@ function toSafe(r) {
     vault_folder_id: r.vault_folder_id != null ? Number(r.vault_folder_id) : null,
     // Messaging-analytics thresholds (resolved with defaults) for the live-agent metrics.
     analytics_config: resolveAnalyticsConfig(r.analytics_config),
+    // Customer-survey settings (resolved with defaults) — enabled / chance % / cooldown.
+    survey_config: resolveSurveyConfig(r.survey_config),
     // Display currency (ISO 4217) for product prices; defaults to Peso.
     currency: r.currency || 'PHP',
     // Admin-filled business profile (contact / location / hours) the AI agent reads
@@ -407,6 +410,11 @@ export async function update(id, data = {}) {
   // Messaging-analytics thresholds — stored resolved/clamped (blanks → defaults).
   if (data.analytics_config !== undefined) {
     set('analytics_config', JSON.stringify(resolveAnalyticsConfig(data.analytics_config)));
+  }
+
+  // Customer-survey settings — stored resolved/clamped like the analytics config.
+  if (data.survey_config !== undefined) {
+    set('survey_config', JSON.stringify(resolveSurveyConfig(data.survey_config)));
   }
 
   // Default first message for messaging a commenter (Comment → DM). Empty → NULL (blank composer).

@@ -15,7 +15,7 @@ const DEMO_DEFAULTS = {
   name: 'Demo Admin',
   email: 'demo@example.com',
   passwordHash: '$2a$10$x17y.GCSS07n/xwK6AhLzug5CkHpbAGw1ZU85OBAVyf8QJwbXQWzG',
-  role: 'admin',
+  role: 'super_admin',
 };
 
 const TABLES_TO_TRUNCATE = [

@@ -31,6 +31,7 @@ import VaultPage from './pages/Vault/VaultPage.jsx';
 import ProfilePage from './pages/Profile/ProfilePage.jsx';
 import CheckoutPage from './pages/Checkout/CheckoutPage.jsx';
 import AgreementViewer from './pages/Agreement/AgreementViewer.jsx';
+import SurveyPage from './pages/Survey/SurveyPage.jsx';
 import PostInsightsPage from './pages/PostInsights/PostInsightsPage.jsx';
 
 export default function App() {
@@ -51,6 +52,9 @@ export default function App() {
       {/* Public customer-facing order agreement — opened by the customer via a shared
           token link, so it lives outside the auth gate (the token is the capability). */}
       <Route path="/agreement/:token" element={<AgreementViewer />} />
+      {/* Public customer satisfaction survey — opened from the emailed token link,
+          so it also lives outside the auth gate (the token is the capability). */}
+      <Route path="/survey/:token" element={<SurveyPage />} />
       {/* Per-post insights — opened in a NEW TAB from the post viewer's Insights button.
           Authed (JWT) but shell-less, so it's a focused, standalone metrics page. */}
       <Route path="/post/:id/insights" element={<ProtectedRoute><PostInsightsPage /></ProtectedRoute>} />
@@ -67,7 +71,7 @@ export default function App() {
         <Route path="/content-calendar" element={<ModuleRoute moduleId="content-calendar"><ContentCalendarPage /></ModuleRoute>} />
         <Route path="/planner" element={<ModuleRoute moduleId="planner"><PlannerPage /></ModuleRoute>} />
         <Route path="/analytics" element={<ModuleRoute moduleId="analytics"><AnalyticsPage /></ModuleRoute>} />
-        <Route path="/insights" element={<ModuleRoute moduleId="analytics"><InsightsPage /></ModuleRoute>} />
+        <Route path="/insights" element={<ModuleRoute moduleId="insights"><InsightsPage /></ModuleRoute>} />
         <Route path="/post-pool" element={<ModuleRoute moduleId="post-pool"><ContentsView /></ModuleRoute>} />
         <Route path="/upload" element={<ModuleRoute moduleId="upload"><UploadPostPage /></ModuleRoute>} />
         <Route path="/shop" element={<ModuleRoute moduleId="products"><ShopLayout /></ModuleRoute>}>

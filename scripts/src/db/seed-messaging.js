@@ -104,7 +104,7 @@ async function main() {
     .query('SELECT id, name, email, role, module_access FROM users WHERE is_active = 1 AND deleted_at IS NULL ORDER BY id ASC')
     .then(([rows]) => rows);
   const canMessage = (u) => {
-    if (String(u.role || '').toLowerCase() === 'admin') return true;
+    if (['admin', 'super_admin'].includes(String(u.role || '').toLowerCase())) return true;
     let mods = u.module_access;
     if (typeof mods === 'string') {
       try {

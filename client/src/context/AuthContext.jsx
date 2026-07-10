@@ -2,6 +2,7 @@ import { createContext, useContext, useCallback, useEffect, useState } from 'rea
 import * as authService from '../services/auth.service.js';
 import { isServerError } from '../services/api.js';
 import { invalidateCache } from '../hooks/useCachedResource.js';
+import { isAdminRole } from '../config/modules.js';
 
 const AuthContext = createContext(null);
 
@@ -137,8 +138,9 @@ export function AuthProvider({ children }) {
     startEmailChange,
     verifyEmailChange,
     updateAvatar,
+    refreshUser: restoreSession,
     isAuthenticated: !!user,
-    isAdmin: user?.role === 'admin',
+    isAdmin: isAdminRole(user?.role),
   };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

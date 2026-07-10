@@ -1,7 +1,7 @@
 import { query } from '../config/db.js';
 import ApiError from '../utils/ApiError.js';
 import { emitMessagingEvent } from './messaging.events.js';
-import { moduleAccessForUser } from '../config/modules.js';
+import { canUseModule } from '../config/modules.js';
 import * as connections from './connections.service.js';
 
 /**
@@ -12,7 +12,7 @@ import * as connections from './connections.service.js';
  */
 
 function hasMessagingAccess(user) {
-  return user?.role === 'admin' || moduleAccessForUser(user).includes('messages');
+  return canUseModule(user, 'messages');
 }
 
 function parseJson(value, fallback) {

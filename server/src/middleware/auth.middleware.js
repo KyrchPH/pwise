@@ -12,8 +12,14 @@ export function requireAuth(req, res, next) {
   resolveSession(token)
     .then((result) => {
       if (!result) return next(ApiError.unauthorized('your session is no longer valid — please log in again'));
+      // Wise Assistant tokens are strictly read-only: the assistant may look up the
+      // user's data through the API, but can never mutate anything with it.
+      if (result.scope === 'wise_assistant' && req.method !== 'GET' && req.method !== 'HEAD') {
+        return next(ApiError.forbidden('the Wise Assistant token is read-only'));
+      }
       req.user = result.user;
       req.sessionId = result.sessionId;
+      req.authScope = result.scope;
       next();
     })
     .catch((err) => {

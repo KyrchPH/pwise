@@ -84,6 +84,11 @@ const ChartIcon = () => (
     <rect x="16" y="4" width="3" height="14" rx="1" />
   </svg>
 );
+const StarIcon = () => (
+  <svg {...iconProps}>
+    <path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z" />
+  </svg>
+);
 
 // Small brand marks for the platforms a page is connected to.
 function FacebookLogo({ title = 'Facebook' }) {
@@ -192,6 +197,11 @@ const BLANK = {
   an_crrHours: 12,
   an_frtMin: 5,
   an_artMin: 5,
+  // Customer satisfaction surveys (CSAT + NPS) — emailed after a conversation is
+  // completed (note added), at this chance. Sends are silent; stats are day-lagged.
+  sv_enabled: false,
+  sv_chancePct: 25,
+  sv_cooldownDays: 30,
   currency: 'PHP',
 };
 
@@ -380,6 +390,9 @@ export default function FacebookPages({ embedded = false }) {
       an_crrHours: p.analytics_config?.crrWindowHours ?? 12,
       an_frtMin: Math.round((p.analytics_config?.frtTargetSeconds ?? 300) / 60),
       an_artMin: Math.round((p.analytics_config?.artTargetSeconds ?? 300) / 60),
+      sv_enabled: !!p.survey_config?.enabled,
+      sv_chancePct: p.survey_config?.chancePct ?? 25,
+      sv_cooldownDays: p.survey_config?.cooldownDays ?? 30,
       currency: p.currency || 'PHP',
       comment_dm_default_message: p.comment_dm_default_message || '',
       live_agent_transfer_message: p.live_agent_transfer_message || '',
@@ -540,6 +553,12 @@ export default function FacebookPages({ embedded = false }) {
           crrWindowHours: Number(editing.an_crrHours) || 12,
           frtTargetSeconds: Math.round((Number(editing.an_frtMin) || 5) * 60),
           artTargetSeconds: Math.round((Number(editing.an_artMin) || 5) * 60),
+        };
+        // Customer surveys — the server clamps (chance 0-100, cooldown 1-365).
+        payload.survey_config = {
+          enabled: !!editing.sv_enabled,
+          chancePct: Number(editing.sv_chancePct),
+          cooldownDays: Number(editing.sv_cooldownDays),
         };
         payload.currency = editing.currency || 'PHP';
       }
@@ -1015,6 +1034,44 @@ export default function FacebookPages({ embedded = false }) {
                       </Field>
                       <Field label="ART target (minutes)">
                         <input className="input" type="number" min="1" max="1440" value={editing.an_artMin} onChange={setAiField('an_artMin')} />
+                      </Field>
+                    </div>
+                  </div>
+                </details>
+              )}
+
+              {/* Customer satisfaction surveys — existing pages only. */}
+              {editing.id && (
+                <details className="set-acc">
+                  <summary className="set-acc__head">
+                    <span className="set-acc__icon set-acc__icon--mono"><StarIcon /></span>
+                    <span className="set-acc__title"><span className="set-acc__label">Customer surveys</span></span>
+                    <span className="set-acc__status">{editing.sv_enabled ? `on · ${Number(editing.sv_chancePct) || 0}%` : 'off'}</span>
+                  </summary>
+                  <div className="set-acc__body">
+                    <div className="text-sm text-muted" style={{ margin: '0 0 10px' }}>
+                      When an agent completes a conversation (adds a note), the system may email the customer a short
+                      survey — satisfaction with how the chat was handled (1–5) and whether they&rsquo;d recommend you
+                      (0–10). The email comes from the order form linked to the chat. Sends are silent: agents are never
+                      told who was surveyed, and totals only appear in Insights the day after.
+                    </div>
+                    <label className="agreement-view__check" style={{ marginBottom: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!editing.sv_enabled}
+                        onChange={(e) => {
+                          const v = e.target.checked;
+                          setEditing((ed) => ({ ...ed, sv_enabled: v }));
+                        }}
+                      />
+                      <span>Send customer satisfaction surveys for this page</span>
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <Field label="Send chance (%)" hint="of completed chats with an email">
+                        <input className="input" type="number" min="0" max="100" value={editing.sv_chancePct} onChange={setAiField('sv_chancePct')} disabled={!editing.sv_enabled} />
+                      </Field>
+                      <Field label="Cooldown (days)" hint="min gap per customer / chat">
+                        <input className="input" type="number" min="1" max="365" value={editing.sv_cooldownDays} onChange={setAiField('sv_cooldownDays')} disabled={!editing.sv_enabled} />
                       </Field>
                     </div>
                   </div>
